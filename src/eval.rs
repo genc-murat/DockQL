@@ -5,9 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::{Number, Value as JsonValue};
 use thiserror::Error;
 
-use crate::ast::{
-    BinOp, Expression, Operator, SetValue, Value,
-};
+use crate::ast::{BinOp, Expression, Operator, SetValue, Value};
 
 #[derive(Debug, Error)]
 pub enum EvalError {
@@ -29,8 +27,7 @@ pub fn eval_expr(
     expression: &Expression,
 ) -> Result<JsonValue, EvalError> {
     match expression {
-        Expression::Field(field) => resolve_field(fields, field)
-            .map(|cow| cow.into_owned()),
+        Expression::Field(field) => resolve_field(fields, field).map(|cow| cow.into_owned()),
 
         Expression::Literal(value) => Ok(value_to_json(value)),
 
@@ -40,7 +37,11 @@ pub fn eval_expr(
             apply_arithmetic(&l, op, &r)
         }
 
-        Expression::Comparison { left, operator, right } => {
+        Expression::Comparison {
+            left,
+            operator,
+            right,
+        } => {
             let result = eval_bool_expr(fields, left, operator, right)?;
             Ok(JsonValue::Bool(result))
         }
@@ -91,20 +92,25 @@ pub fn eval_expr(
         }
 
         Expression::FnCall { name, args } => {
-            let evaluated: Result<Vec<JsonValue>, _> = args.iter().map(|a| eval_expr(fields, a)).collect();
+            let evaluated: Result<Vec<JsonValue>, _> =
+                args.iter().map(|a| eval_expr(fields, a)).collect();
             apply_function(name, &evaluated?)
         }
 
         Expression::And(left, right) => {
             let l = eval_bool(fields, left)?;
-            if !l { return Ok(JsonValue::Bool(false)); }
+            if !l {
+                return Ok(JsonValue::Bool(false));
+            }
             let r = eval_bool(fields, right)?;
             Ok(JsonValue::Bool(r))
         }
 
         Expression::Or(left, right) => {
             let l = eval_bool(fields, left)?;
-            if l { return Ok(JsonValue::Bool(true)); }
+            if l {
+                return Ok(JsonValue::Bool(true));
+            }
             let r = eval_bool(fields, right)?;
             Ok(JsonValue::Bool(r))
         }
@@ -125,18 +131,20 @@ fn eval_expr_opt(
         Expression::Field(field) => fields.get(field).cloned().or_else(|| {
             // Also try label.xxx access
             if let Some(label_key) = field.strip_prefix("label.")
-                && let Some(JsonValue::Array(items)) = fields.get("labels") {
-                    for item in items {
-                        if let JsonValue::String(entry) = item
-                            && let Some(eq_pos) = entry.find('=') {
-                                let key = &entry[..eq_pos];
-                                let val = &entry[eq_pos + 1..];
-                                if key == label_key {
-                                    return Some(JsonValue::String(val.to_owned()));
-                                }
-                            }
+                && let Some(JsonValue::Array(items)) = fields.get("labels")
+            {
+                for item in items {
+                    if let JsonValue::String(entry) = item
+                        && let Some(eq_pos) = entry.find('=')
+                    {
+                        let key = &entry[..eq_pos];
+                        let val = &entry[eq_pos + 1..];
+                        if key == label_key {
+                            return Some(JsonValue::String(val.to_owned()));
+                        }
                     }
                 }
+            }
             None
         }),
         Expression::Literal(value) => Some(value_to_json(value)),
@@ -184,17 +192,21 @@ fn eval_bool_expr(
     match operator {
         Operator::Eq => Ok(json_eq(&l, &r)),
         Operator::NotEq => Ok(!json_eq(&l, &r)),
-        Operator::Contains => json_contains_val(&l, &r).ok_or_else(|| EvalError::InvalidComparison {
-            field: format!("{l:?}"),
-            operator: "Contains".to_owned(),
-        }),
+        Operator::Contains => {
+            json_contains_val(&l, &r).ok_or_else(|| EvalError::InvalidComparison {
+                field: format!("{l:?}"),
+                operator: "Contains".to_owned(),
+            })
+        }
         Operator::Matches => {
             let pattern = match &r {
                 JsonValue::String(s) => s.clone(),
-                _ => return Err(EvalError::InvalidComparison {
-                    field: format!("{l:?}"),
-                    operator: "Matches".to_owned(),
-                }),
+                _ => {
+                    return Err(EvalError::InvalidComparison {
+                        field: format!("{l:?}"),
+                        operator: "Matches".to_owned(),
+                    });
+                }
             };
             let re = regex::Regex::new(&pattern).map_err(|_| EvalError::InvalidComparison {
                 field: format!("{l:?}"),
@@ -232,9 +244,15 @@ fn eval_bool_expr(
     }
 }
 
-fn apply_arithmetic(left: &JsonValue, op: &BinOp, right: &JsonValue) -> Result<JsonValue, EvalError> {
-    let l = json_as_f64(left).ok_or_else(|| EvalError::Arithmetic(format!("left operand is not numeric: {left:?}")))?;
-    let r = json_as_f64(right).ok_or_else(|| EvalError::Arithmetic(format!("right operand is not numeric: {right:?}")))?;
+fn apply_arithmetic(
+    left: &JsonValue,
+    op: &BinOp,
+    right: &JsonValue,
+) -> Result<JsonValue, EvalError> {
+    let l = json_as_f64(left)
+        .ok_or_else(|| EvalError::Arithmetic(format!("left operand is not numeric: {left:?}")))?;
+    let r = json_as_f64(right)
+        .ok_or_else(|| EvalError::Arithmetic(format!("right operand is not numeric: {right:?}")))?;
     let result = match op {
         BinOp::Add => l + r,
         BinOp::Sub => l - r,
@@ -260,23 +278,35 @@ fn apply_arithmetic(left: &JsonValue, op: &BinOp, right: &JsonValue) -> Result<J
 fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError> {
     match name {
         "upper" => {
-            let s = args.first().and_then(|v| v.as_str())
-                .ok_or_else(|| EvalError::InvalidArguments { name: name.to_owned() })?;
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
+            })?;
             Ok(JsonValue::String(s.to_uppercase()))
         }
         "lower" => {
-            let s = args.first().and_then(|v| v.as_str())
-                .ok_or_else(|| EvalError::InvalidArguments { name: name.to_owned() })?;
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
+            })?;
             Ok(JsonValue::String(s.to_lowercase()))
         }
         "length" => {
-            let s = args.first().and_then(|v| v.as_str())
-                .ok_or_else(|| EvalError::InvalidArguments { name: name.to_owned() })?;
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
+            })?;
             Ok(JsonValue::Number(Number::from(s.len() as u64)))
         }
         "trim" => {
-            let s = args.first().and_then(|v| v.as_str())
-                .ok_or_else(|| EvalError::InvalidArguments { name: name.to_owned() })?;
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
+            })?;
             Ok(JsonValue::String(s.trim().to_owned()))
         }
         "concat" => {
@@ -284,23 +314,38 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             Ok(JsonValue::String(result))
         }
         "substring" => {
-            let s = args.first().and_then(|v| v.as_str())
-                .ok_or_else(|| EvalError::InvalidArguments { name: name.to_owned() })?;
-            let start = args.get(1).and_then(json_as_f64).map(|f| f as usize).unwrap_or(0);
-            let len = args.get(2).and_then(json_as_f64).map(|f| f as usize).unwrap_or(s.len());
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
+            })?;
+            let start = args
+                .get(1)
+                .and_then(json_as_f64)
+                .map(|f| f as usize)
+                .unwrap_or(0);
+            let len = args
+                .get(2)
+                .and_then(json_as_f64)
+                .map(|f| f as usize)
+                .unwrap_or(s.len());
             let end = (start + len).min(s.len());
             let sub = if start < s.len() { &s[start..end] } else { "" };
             Ok(JsonValue::String(sub.to_owned()))
         }
         "coalesce" => {
             for arg in args {
-                if !(matches!(arg, JsonValue::Null) || arg.is_string() && arg.as_str().unwrap_or("").is_empty()) {
+                if !(matches!(arg, JsonValue::Null)
+                    || arg.is_string() && arg.as_str().unwrap_or("").is_empty())
+                {
                     return Ok(arg.clone());
                 }
             }
             Ok(JsonValue::Null)
         }
-        _ => Err(EvalError::UnknownFunction { name: name.to_owned() }),
+        _ => Err(EvalError::UnknownFunction {
+            name: name.to_owned(),
+        }),
     }
 }
 
@@ -313,21 +358,24 @@ fn resolve_field<'a>(
     }
 
     if let Some(label_key) = field.strip_prefix("label.") {
-        let labels = fields.get("labels").ok_or_else(|| EvalError::UnsupportedField {
-            field: field.to_owned(),
-        })?;
+        let labels = fields
+            .get("labels")
+            .ok_or_else(|| EvalError::UnsupportedField {
+                field: field.to_owned(),
+            })?;
 
         match labels {
             JsonValue::Array(items) => {
                 for item in items {
                     if let JsonValue::String(entry) = item
-                        && let Some(eq_pos) = entry.find('=') {
-                            let key = &entry[..eq_pos];
-                            let val = &entry[eq_pos + 1..];
-                            if key == label_key {
-                                return Ok(Cow::Owned(JsonValue::String(val.to_owned())));
-                            }
+                        && let Some(eq_pos) = entry.find('=')
+                    {
+                        let key = &entry[..eq_pos];
+                        let val = &entry[eq_pos + 1..];
+                        if key == label_key {
+                            return Ok(Cow::Owned(JsonValue::String(val.to_owned())));
                         }
+                    }
                 }
             }
             JsonValue::String(s) => {
@@ -350,9 +398,12 @@ fn resolve_field<'a>(
         });
     }
 
-    fields.get(field).ok_or_else(|| EvalError::UnsupportedField {
-        field: field.to_owned(),
-    }).map(Cow::Borrowed)
+    fields
+        .get(field)
+        .ok_or_else(|| EvalError::UnsupportedField {
+            field: field.to_owned(),
+        })
+        .map(Cow::Borrowed)
 }
 
 pub fn evaluate_set_value(
@@ -398,9 +449,9 @@ pub fn value_to_json(value: &Value) -> JsonValue {
         Value::String(s) => JsonValue::String(s.clone()),
         Value::Identifier(s) => JsonValue::String(s.clone()),
         Value::Integer(n) => JsonValue::Number(Number::from(*n)),
-        Value::Float(f) | Value::Percentage(f) => {
-            Number::from_f64(*f).map(JsonValue::Number).unwrap_or(JsonValue::Null)
-        }
+        Value::Float(f) | Value::Percentage(f) => Number::from_f64(*f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
         Value::Boolean(b) => JsonValue::Bool(*b),
     }
 }
@@ -494,8 +545,6 @@ pub fn render_json_cell(value: &JsonValue) -> String {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     fn cmp_expr(field: &str, op: Operator, val: Value) -> Expression {
@@ -541,8 +590,16 @@ mod tests {
         let f = fields(&[("a", "1"), ("b", "2")]);
         let left = cmp_expr("a", Operator::Eq, Value::String("1".into()));
         let right = cmp_expr("b", Operator::Eq, Value::String("9".into()));
-        assert!(evaluate_expression(&f, &Expression::Or(Box::new(left.clone()), Box::new(right.clone()))).unwrap());
-        assert!(!evaluate_expression(&f, &Expression::And(Box::new(left), Box::new(right))).unwrap());
+        assert!(
+            evaluate_expression(
+                &f,
+                &Expression::Or(Box::new(left.clone()), Box::new(right.clone()))
+            )
+            .unwrap()
+        );
+        assert!(
+            !evaluate_expression(&f, &Expression::And(Box::new(left), Box::new(right))).unwrap()
+        );
     }
 
     #[test]
@@ -551,8 +608,14 @@ mod tests {
         f.insert("cpu".into(), serde_json::json!(87.5));
         let sv = SetValue::Case {
             when_clauses: vec![
-                (cmp_expr("cpu", Operator::Gt, Value::Percentage(80.0)), Value::String("critical".into())),
-                (cmp_expr("cpu", Operator::Gt, Value::Percentage(50.0)), Value::String("warning".into())),
+                (
+                    cmp_expr("cpu", Operator::Gt, Value::Percentage(80.0)),
+                    Value::String("critical".into()),
+                ),
+                (
+                    cmp_expr("cpu", Operator::Gt, Value::Percentage(50.0)),
+                    Value::String("warning".into()),
+                ),
             ],
             else_value: Some(Value::String("ok".into())),
         };
@@ -565,9 +628,10 @@ mod tests {
         let mut f = BTreeMap::new();
         f.insert("cpu".into(), serde_json::json!(30.0));
         let sv = SetValue::Case {
-            when_clauses: vec![
-                (cmp_expr("cpu", Operator::Gt, Value::Percentage(80.0)), Value::String("critical".into())),
-            ],
+            when_clauses: vec![(
+                cmp_expr("cpu", Operator::Gt, Value::Percentage(80.0)),
+                Value::String("critical".into()),
+            )],
             else_value: Some(Value::String("ok".into())),
         };
         let result = evaluate_set_value(&f, &sv).unwrap();
@@ -589,34 +653,48 @@ mod tests {
     #[test]
     fn evaluates_matches_regex() {
         let f = fields(&[("name", "api-service-v2")]);
-        let expr = cmp_expr("name", Operator::Matches, Value::String("^api-.*\\d+$".into()));
+        let expr = cmp_expr(
+            "name",
+            Operator::Matches,
+            Value::String("^api-.*\\d+$".into()),
+        );
         assert!(evaluate_expression(&f, &expr).unwrap());
     }
 
     #[test]
     fn evaluates_matches_regex_no_match() {
         let f = fields(&[("name", "api-service")]);
-        let expr = cmp_expr("name", Operator::Matches, Value::String("^api-.*\\d+$".into()));
+        let expr = cmp_expr(
+            "name",
+            Operator::Matches,
+            Value::String("^api-.*\\d+$".into()),
+        );
         assert!(!evaluate_expression(&f, &expr).unwrap());
     }
 
     #[test]
     fn evaluates_in_operator() {
         let f = fields(&[("state", "running")]);
-        let expr = in_expr("state", vec![
-            Value::String("running".into()),
-            Value::String("restarting".into()),
-        ]);
+        let expr = in_expr(
+            "state",
+            vec![
+                Value::String("running".into()),
+                Value::String("restarting".into()),
+            ],
+        );
         assert!(evaluate_expression(&f, &expr).unwrap());
     }
 
     #[test]
     fn evaluates_in_operator_no_match() {
         let f = fields(&[("state", "exited")]);
-        let expr = in_expr("state", vec![
-            Value::String("running".into()),
-            Value::String("restarting".into()),
-        ]);
+        let expr = in_expr(
+            "state",
+            vec![
+                Value::String("running".into()),
+                Value::String("restarting".into()),
+            ],
+        );
         assert!(!evaluate_expression(&f, &expr).unwrap());
     }
 
@@ -711,19 +789,28 @@ mod tests {
             name: "upper".to_owned(),
             args: vec![Expression::Field("name".to_owned())],
         };
-        assert_eq!(eval_expr(&f, &upper).unwrap(), JsonValue::String("API-SERVICE".to_owned()));
+        assert_eq!(
+            eval_expr(&f, &upper).unwrap(),
+            JsonValue::String("API-SERVICE".to_owned())
+        );
 
         let lower = Expression::FnCall {
             name: "lower".to_owned(),
             args: vec![Expression::Field("name".to_owned())],
         };
-        assert_eq!(eval_expr(&f, &lower).unwrap(), JsonValue::String("api-service".to_owned()));
+        assert_eq!(
+            eval_expr(&f, &lower).unwrap(),
+            JsonValue::String("api-service".to_owned())
+        );
 
         let len = Expression::FnCall {
             name: "length".to_owned(),
             args: vec![Expression::Field("name".to_owned())],
         };
-        assert_eq!(eval_expr(&f, &len).unwrap(), JsonValue::Number(Number::from(11)));
+        assert_eq!(
+            eval_expr(&f, &len).unwrap(),
+            JsonValue::Number(Number::from(11))
+        );
 
         let concat = Expression::FnCall {
             name: "concat".to_owned(),
@@ -732,7 +819,10 @@ mod tests {
                 Expression::Literal(Value::String(":v1".to_owned())),
             ],
         };
-        assert_eq!(eval_expr(&f, &concat).unwrap(), JsonValue::String("Api-Service:v1".to_owned()));
+        assert_eq!(
+            eval_expr(&f, &concat).unwrap(),
+            JsonValue::String("Api-Service:v1".to_owned())
+        );
     }
 
     #[test]

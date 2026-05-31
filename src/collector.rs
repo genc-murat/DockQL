@@ -58,8 +58,9 @@ where
     tokio::spawn(async move {
         let mut metrics_interval =
             tokio::time::interval(std::time::Duration::from_secs(config.metrics_interval_secs));
-        let mut snapshot_interval =
-            tokio::time::interval(std::time::Duration::from_secs(config.snapshot_interval_secs));
+        let mut snapshot_interval = tokio::time::interval(std::time::Duration::from_secs(
+            config.snapshot_interval_secs,
+        ));
 
         // Tick immediately on start for the first collection.
         metrics_interval.tick().await;
@@ -125,18 +126,17 @@ where
     };
 
     if let Ok(mut store) = store.lock()
-        && let Err(e) = store.write_snapshot(snapshot) {
-            eprintln!("[collector] snapshot write error: {e}");
-        }
+        && let Err(e) = store.write_snapshot(snapshot)
+    {
+        eprintln!("[collector] snapshot write error: {e}");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        docker::MockDockerClient,
-        metrics::MockMetricsCollector,
-        storage::InMemoryTelemetryStore,
+        docker::MockDockerClient, metrics::MockMetricsCollector, storage::InMemoryTelemetryStore,
     };
 
     #[tokio::test]
@@ -179,13 +179,8 @@ mod tests {
             metrics_interval_secs: 1,
         };
 
-        let handle = spawn_metrics_collector(
-            Arc::clone(&store),
-            docker,
-            metrics,
-            config,
-            shutdown_rx,
-        );
+        let handle =
+            spawn_metrics_collector(Arc::clone(&store), docker, metrics, config, shutdown_rx);
 
         // Wait a bit for collector to run.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;

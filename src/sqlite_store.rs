@@ -22,9 +22,9 @@ pub struct RetentionPolicy {
 impl Default for RetentionPolicy {
     fn default() -> Self {
         Self {
-            metric_max_age_secs: 7 * 24 * 3600,   // 7 days
+            metric_max_age_secs: 7 * 24 * 3600,    // 7 days
             event_max_age_secs: 30 * 24 * 3600,    // 30 days
-            snapshot_max_age_secs: 30 * 24 * 3600,  // 30 days
+            snapshot_max_age_secs: 30 * 24 * 3600, // 30 days
         }
     }
 }
@@ -76,8 +76,8 @@ impl SqliteTelemetryStore {
     /// Apply the retention policy, deleting records older than the configured thresholds.
     pub fn apply_retention(&mut self) -> Result<RetentionStats, TelemetryError> {
         let now = chrono::Utc::now();
-        let metric_cutoff = now
-            - chrono::Duration::seconds(self.retention.metric_max_age_secs as i64);
+        let metric_cutoff =
+            now - chrono::Duration::seconds(self.retention.metric_max_age_secs as i64);
         let event_cutoff =
             now - chrono::Duration::seconds(self.retention.event_max_age_secs as i64);
         let snapshot_cutoff =
@@ -89,12 +89,18 @@ impl SqliteTelemetryStore {
 
         let metrics_deleted = self
             .conn
-            .execute("DELETE FROM metrics WHERE timestamp < ?1", params![metric_cutoff_str])
+            .execute(
+                "DELETE FROM metrics WHERE timestamp < ?1",
+                params![metric_cutoff_str],
+            )
             .map_err(|e| TelemetryError::Storage(e.to_string()))?;
 
         let events_deleted = self
             .conn
-            .execute("DELETE FROM events WHERE time < ?1", params![event_cutoff_str])
+            .execute(
+                "DELETE FROM events WHERE time < ?1",
+                params![event_cutoff_str],
+            )
             .map_err(|e| TelemetryError::Storage(e.to_string()))?;
 
         let snapshots_deleted = self
@@ -382,7 +388,10 @@ impl TelemetryStore for SqliteTelemetryStore {
         }
     }
 
-    fn write_alert_event(&mut self, event: crate::storage::AlertHistoryEvent) -> Result<(), TelemetryError> {
+    fn write_alert_event(
+        &mut self,
+        event: crate::storage::AlertHistoryEvent,
+    ) -> Result<(), TelemetryError> {
         self.conn
             .execute(
                 "INSERT INTO alert_history (timestamp, container_id, container_name, rule_condition, action_type, action_detail, success)
@@ -476,14 +485,22 @@ mod tests {
     fn sqlite_stores_and_reads_metrics() {
         let mut store = SqliteTelemetryStore::in_memory().unwrap();
 
-        store.write_metric(sample("abc", "api", "2026-01-01T12:00:00Z", 85.0)).unwrap();
-        store.write_metric(sample("abc", "api", "2026-01-01T12:01:00Z", 90.0)).unwrap();
-        store.write_metric(sample("def", "worker", "2026-01-01T12:00:00Z", 20.0)).unwrap();
+        store
+            .write_metric(sample("abc", "api", "2026-01-01T12:00:00Z", 85.0))
+            .unwrap();
+        store
+            .write_metric(sample("abc", "api", "2026-01-01T12:01:00Z", 90.0))
+            .unwrap();
+        store
+            .write_metric(sample("def", "worker", "2026-01-01T12:00:00Z", 20.0))
+            .unwrap();
 
         let latest = store.latest_metrics().unwrap();
         assert_eq!(latest.len(), 2);
 
-        let between = store.metrics_between("2026-01-01T12:00:00Z", "2026-01-01T12:00:30Z").unwrap();
+        let between = store
+            .metrics_between("2026-01-01T12:00:00Z", "2026-01-01T12:00:30Z")
+            .unwrap();
         assert_eq!(between.len(), 2); // api@12:00 and worker@12:00
     }
 
@@ -491,11 +508,19 @@ mod tests {
     fn sqlite_stores_and_reads_events() {
         let mut store = SqliteTelemetryStore::in_memory().unwrap();
 
-        store.write_event(event("2026-01-01T12:00:00Z", "start")).unwrap();
-        store.write_event(event("2026-01-01T12:05:00Z", "die")).unwrap();
-        store.write_event(event("2026-01-01T13:00:00Z", "restart")).unwrap();
+        store
+            .write_event(event("2026-01-01T12:00:00Z", "start"))
+            .unwrap();
+        store
+            .write_event(event("2026-01-01T12:05:00Z", "die"))
+            .unwrap();
+        store
+            .write_event(event("2026-01-01T13:00:00Z", "restart"))
+            .unwrap();
 
-        let events = store.events_between("2026-01-01T12:00:00Z", "2026-01-01T12:59:59Z").unwrap();
+        let events = store
+            .events_between("2026-01-01T12:00:00Z", "2026-01-01T12:59:59Z")
+            .unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].action, "start");
         assert_eq!(events[1].action, "die");
@@ -505,19 +530,32 @@ mod tests {
     fn sqlite_stores_and_reads_snapshots() {
         let mut store = SqliteTelemetryStore::in_memory().unwrap();
 
-        store.write_snapshot(snapshot("2026-01-01 11:59:00", "old-image")).unwrap();
-        store.write_snapshot(snapshot("2026-01-01 12:00:00", "new-image")).unwrap();
+        store
+            .write_snapshot(snapshot("2026-01-01 11:59:00", "old-image"))
+            .unwrap();
+        store
+            .write_snapshot(snapshot("2026-01-01 12:00:00", "new-image"))
+            .unwrap();
 
         // Query at exact match
-        let snap = store.snapshot_at_or_before("2026-01-01 12:00:00").unwrap().unwrap();
+        let snap = store
+            .snapshot_at_or_before("2026-01-01 12:00:00")
+            .unwrap()
+            .unwrap();
         assert_eq!(snap.containers[0].image, "new-image");
 
         // Query after both → gets latest
-        let snap = store.snapshot_at_or_before("2026-01-01 12:00:30").unwrap().unwrap();
+        let snap = store
+            .snapshot_at_or_before("2026-01-01 12:00:30")
+            .unwrap()
+            .unwrap();
         assert_eq!(snap.containers[0].image, "new-image");
 
         // Query between → gets earlier
-        let snap = store.snapshot_at_or_before("2026-01-01 11:59:30").unwrap().unwrap();
+        let snap = store
+            .snapshot_at_or_before("2026-01-01 11:59:30")
+            .unwrap()
+            .unwrap();
         assert_eq!(snap.containers[0].image, "old-image");
 
         // Query before all → none
@@ -529,7 +567,9 @@ mod tests {
     fn sqlite_inspect_at_works() {
         let mut store = SqliteTelemetryStore::in_memory().unwrap();
 
-        store.write_snapshot(snapshot("2026-01-01 12:00:00", "api:v2")).unwrap();
+        store
+            .write_snapshot(snapshot("2026-01-01 12:00:00", "api:v2"))
+            .unwrap();
 
         let query = crate::ast::InspectQuery {
             target: crate::ast::SingularTarget {
@@ -551,8 +591,12 @@ mod tests {
     fn sqlite_historical_events_works() {
         let mut store = SqliteTelemetryStore::in_memory().unwrap();
 
-        store.write_event(event("2026-01-01T12:00:00Z", "start")).unwrap();
-        store.write_event(event("2026-01-01T12:05:00Z", "die")).unwrap();
+        store
+            .write_event(event("2026-01-01T12:00:00Z", "start"))
+            .unwrap();
+        store
+            .write_event(event("2026-01-01T12:05:00Z", "die"))
+            .unwrap();
 
         let query = crate::ast::EventsQuery {
             target: crate::ast::CollectionTarget::Containers,
@@ -563,7 +607,9 @@ mod tests {
             filter: Some(crate::ast::Expression::Comparison {
                 left: Box::new(crate::ast::Expression::Field("action".to_owned())),
                 operator: crate::ast::Operator::Eq,
-                right: Box::new(crate::ast::Expression::Literal(crate::ast::Value::String("die".to_owned()))),
+                right: Box::new(crate::ast::Expression::Literal(crate::ast::Value::String(
+                    "die".to_owned(),
+                ))),
             }),
             pipeline: vec![],
         };
@@ -585,9 +631,15 @@ mod tests {
             snapshot_max_age_secs: 0,
         });
 
-        store.write_metric(sample("abc", "api", "2020-01-01T00:00:00Z", 50.0)).unwrap();
-        store.write_event(event("2020-01-01T00:00:00Z", "start")).unwrap();
-        store.write_snapshot(snapshot("2020-01-01 00:00:00", "old")).unwrap();
+        store
+            .write_metric(sample("abc", "api", "2020-01-01T00:00:00Z", 50.0))
+            .unwrap();
+        store
+            .write_event(event("2020-01-01T00:00:00Z", "start"))
+            .unwrap();
+        store
+            .write_snapshot(snapshot("2020-01-01 00:00:00", "old"))
+            .unwrap();
 
         let stats_before = store.stats().unwrap();
         assert_eq!(stats_before.metric_count, 1);
@@ -609,9 +661,15 @@ mod tests {
     fn sqlite_store_stats() {
         let mut store = SqliteTelemetryStore::in_memory().unwrap();
 
-        store.write_metric(sample("abc", "api", "2026-01-01T12:00:00Z", 50.0)).unwrap();
-        store.write_metric(sample("def", "worker", "2026-01-01T12:00:00Z", 30.0)).unwrap();
-        store.write_event(event("2026-01-01T12:00:00Z", "start")).unwrap();
+        store
+            .write_metric(sample("abc", "api", "2026-01-01T12:00:00Z", 50.0))
+            .unwrap();
+        store
+            .write_metric(sample("def", "worker", "2026-01-01T12:00:00Z", 30.0))
+            .unwrap();
+        store
+            .write_event(event("2026-01-01T12:00:00Z", "start"))
+            .unwrap();
 
         let stats = store.stats().unwrap();
         assert_eq!(stats.metric_count, 2);
@@ -637,10 +695,15 @@ mod tests {
         };
         store.write_event(ev).unwrap();
 
-        let events = store.events_between("2026-01-01T00:00:00Z", "2026-01-01T23:59:59Z").unwrap();
+        let events = store
+            .events_between("2026-01-01T00:00:00Z", "2026-01-01T23:59:59Z")
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].attributes.len(), 2);
-        assert_eq!(events[0].attributes[0], ("name".to_owned(), "api".to_owned()));
+        assert_eq!(
+            events[0].attributes[0],
+            ("name".to_owned(), "api".to_owned())
+        );
     }
 
     fn sample(id: &str, name: &str, ts: &str, cpu: f64) -> MetricSample {

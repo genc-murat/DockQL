@@ -159,12 +159,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     if let Some(ref host) = cli.host {
         // SAFETY: setting DOCKER_HOST from user-provided --host flag
-        unsafe { std::env::set_var("DOCKER_HOST", host); }
+        unsafe {
+            std::env::set_var("DOCKER_HOST", host);
+        }
     }
 
     // Handle --store-stats mode.
     if cli.store_stats {
-        let store_path = cli.store.as_deref().or(config.store.as_deref()).ok_or_else(|| anyhow::anyhow!("--store-stats requires --store <path>"))?;
+        let store_path = cli
+            .store
+            .as_deref()
+            .or(config.store.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("--store-stats requires --store <path>"))?;
         let store = SqliteTelemetryStore::open(store_path)?;
         let stats = store.stats()?;
         println!("Telemetry Store Statistics:");
@@ -176,7 +182,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // Handle --apply-retention mode.
     if cli.apply_retention {
-        let store_path = cli.store.as_deref().or(config.store.as_deref()).ok_or_else(|| anyhow::anyhow!("--apply-retention requires --store <path>"))?;
+        let store_path = cli
+            .store
+            .as_deref()
+            .or(config.store.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("--apply-retention requires --store <path>"))?;
         let mut store = SqliteTelemetryStore::open(store_path)?;
         let stats = store.apply_retention()?;
         println!("Retention cleanup complete:");
@@ -188,7 +198,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // Handle --collect mode.
     if cli.collect {
-        let store_path = cli.store.as_deref().or(config.store.as_deref()).ok_or_else(|| anyhow::anyhow!("--collect requires --store <path>"))?;
+        let store_path = cli
+            .store
+            .as_deref()
+            .or(config.store.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("--collect requires --store <path>"))?;
         let store = SqliteTelemetryStore::open(store_path)?;
         let store = Arc::new(Mutex::new(store));
         let docker = DockerCliClient::default();
@@ -240,8 +254,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let parsed = parser::parse(query)?;
 
     if cli.explain {
-        let plan = planner::plan(&parsed.query)
-            .map_err(|e| anyhow::anyhow!("plan error: {e}"))?;
+        let plan = planner::plan(&parsed.query).map_err(|e| anyhow::anyhow!("plan error: {e}"))?;
         println!("{plan}");
         return Ok(());
     }
@@ -397,39 +410,40 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         return events::stream_events(events_query, &source, |row| {
             if let Some(ref store) = store
                 && let Ok(mut s) = store.lock()
-                    && let (Some(time), Some(action)) = (
-                        row.fields.get("time").and_then(|v| v.as_str()),
-                        row.fields.get("action").and_then(|v| v.as_str()),
-                    ) {
-                        let event = crate::docker::DockerEvent {
-                            time: time.to_owned(),
-                            event_type: row
-                                .fields
-                                .get("type")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("container")
-                                .to_owned(),
-                            action: action.to_owned(),
-                            actor_id: row
-                                .fields
-                                .get("actor_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_owned(),
-                            container: row
-                                .fields
-                                .get("container")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_owned),
-                            image: row
-                                .fields
-                                .get("image")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_owned),
-                            attributes: Vec::new(),
-                        };
-                        let _ = s.write_event(event);
-                    }
+                && let (Some(time), Some(action)) = (
+                    row.fields.get("time").and_then(|v| v.as_str()),
+                    row.fields.get("action").and_then(|v| v.as_str()),
+                )
+            {
+                let event = crate::docker::DockerEvent {
+                    time: time.to_owned(),
+                    event_type: row
+                        .fields
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("container")
+                        .to_owned(),
+                    action: action.to_owned(),
+                    actor_id: row
+                        .fields
+                        .get("actor_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                    container: row
+                        .fields
+                        .get("container")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned),
+                    image: row
+                        .fields
+                        .get("image")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned),
+                    attributes: Vec::new(),
+                };
+                let _ = s.write_event(event);
+            }
 
             let result = executor::ExecutionResult { rows: vec![row] };
             match output_format {
@@ -437,18 +451,33 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     println!("{}", render_table(&result));
                 }
                 OutputFormat::Json => {
-                    println!("{}", serde_json::to_string(&result.rows[0]).map_err(events::EventsError::Json)?);
+                    println!(
+                        "{}",
+                        serde_json::to_string(&result.rows[0])
+                            .map_err(events::EventsError::Json)?
+                    );
                 }
                 OutputFormat::Csv => {
                     let mut columns: Vec<String> = result.rows[0].fields.keys().cloned().collect();
                     columns.sort();
-                    let vals: Vec<String> = columns.iter()
-                        .map(|c| result.rows[0].fields.get(c).map(crate::eval::render_json_cell).unwrap_or_default())
+                    let vals: Vec<String> = columns
+                        .iter()
+                        .map(|c| {
+                            result.rows[0]
+                                .fields
+                                .get(c)
+                                .map(crate::eval::render_json_cell)
+                                .unwrap_or_default()
+                        })
                         .collect();
                     println!("{}", vals.join(","));
                 }
                 OutputFormat::Jsonl => {
-                    println!("{}", serde_json::to_string(&result.rows[0]).map_err(events::EventsError::Json)?);
+                    println!(
+                        "{}",
+                        serde_json::to_string(&result.rows[0])
+                            .map_err(events::EventsError::Json)?
+                    );
                 }
             }
             Ok(())
@@ -485,9 +514,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let result = executor::execute_with_metrics(&parsed.query, &docker, &metrics)?;
 
     if cli.diff {
-        let store_path = cli.store.as_deref().or(config.store.as_deref()).ok_or_else(|| {
-            anyhow::anyhow!("--diff requires --store <path>")
-        })?;
+        let store_path = cli
+            .store
+            .as_deref()
+            .or(config.store.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("--diff requires --store <path>"))?;
         let store = SqliteTelemetryStore::open(store_path)?;
         let diff_output = executor::render_diff(&result, &store)?;
         println!("{diff_output}");
@@ -503,15 +534,24 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 /// Push query results to configured external export targets.
 async fn run_exports(cli: &Cli, result: &executor::ExecutionResult) -> anyhow::Result<()> {
     if let Some(ref url) = cli.export_influx {
-        eprintln!("Pushing {} rows to InfluxDB at {url} ...", result.rows.len());
+        eprintln!(
+            "Pushing {} rows to InfluxDB at {url} ...",
+            result.rows.len()
+        );
         export::push_to_influxdb(url, result).await?;
     }
     if let Some(ref url) = cli.export_grafana_loki {
-        eprintln!("Pushing {} rows to Grafana Loki at {url} ...", result.rows.len());
+        eprintln!(
+            "Pushing {} rows to Grafana Loki at {url} ...",
+            result.rows.len()
+        );
         export::push_to_loki(url, result).await?;
     }
     if let Some(ref url) = cli.export_prometheus {
-        eprintln!("Pushing {} rows to Prometheus Pushgateway at {url} ...", result.rows.len());
+        eprintln!(
+            "Pushing {} rows to Prometheus Pushgateway at {url} ...",
+            result.rows.len()
+        );
         export::push_to_prometheus(url, result).await?;
     }
     Ok(())

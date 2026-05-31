@@ -48,11 +48,8 @@ pub trait TelemetryStore {
         timestamp: &str,
     ) -> Result<Option<TelemetrySnapshot>, TelemetryError>;
     fn write_alert_event(&mut self, event: AlertHistoryEvent) -> Result<(), TelemetryError>;
-    fn alert_history(
-        &self,
-        from: &str,
-        to: &str,
-    ) -> Result<Vec<AlertHistoryEvent>, TelemetryError>;
+    fn alert_history(&self, from: &str, to: &str)
+    -> Result<Vec<AlertHistoryEvent>, TelemetryError>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,7 +105,8 @@ impl TelemetryStore for InMemoryTelemetryStore {
 
     fn write_snapshot(&mut self, snapshot: TelemetrySnapshot) -> Result<(), TelemetryError> {
         self.snapshots.push(snapshot);
-        self.snapshots.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+        self.snapshots
+            .sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
         Ok(())
     }
 
@@ -139,26 +137,24 @@ impl TelemetryStore for InMemoryTelemetryStore {
     }
 }
 
-pub fn inspect_at<S>(
-    query: &InspectQuery,
-    store: &S,
-) -> Result<ExecutionResult, TelemetryError>
+pub fn inspect_at<S>(query: &InspectQuery, store: &S) -> Result<ExecutionResult, TelemetryError>
 where
     S: TelemetryStore + ?Sized,
 {
     let timestamp = query.at.as_deref().ok_or(TelemetryError::MissingStore)?;
-    let snapshot =
-        store
-            .snapshot_at_or_before(timestamp)?
-            .ok_or_else(|| TelemetryError::SnapshotNotFound {
-                timestamp: timestamp.to_owned(),
-            })?;
+    let snapshot = store.snapshot_at_or_before(timestamp)?.ok_or_else(|| {
+        TelemetryError::SnapshotNotFound {
+            timestamp: timestamp.to_owned(),
+        }
+    })?;
 
     let row = match query.target.kind {
         SingularTargetKind::Container => snapshot
             .containers
             .into_iter()
-            .find(|container| container.id == query.target.value || container.name == query.target.value)
+            .find(|container| {
+                container.id == query.target.value || container.name == query.target.value
+            })
             .map(|container| container_snapshot_row(timestamp, container)),
         SingularTargetKind::Image => snapshot
             .images
@@ -222,7 +218,10 @@ fn container_snapshot_row(timestamp: &str, container: Container) -> Row {
             ("state".to_owned(), json_string(container.state)),
             (
                 "restart_count".to_owned(),
-                container.restart_count.map(json_u64).unwrap_or(JsonValue::Null),
+                container
+                    .restart_count
+                    .map(json_u64)
+                    .unwrap_or(JsonValue::Null),
             ),
         ]),
     }
@@ -263,7 +262,10 @@ fn volume_snapshot_row(timestamp: &str, volume: Volume) -> Row {
             ("driver".to_owned(), json_string(volume.driver)),
             (
                 "mountpoint".to_owned(),
-                volume.mountpoint.map(JsonValue::String).unwrap_or(JsonValue::Null),
+                volume
+                    .mountpoint
+                    .map(JsonValue::String)
+                    .unwrap_or(JsonValue::Null),
             ),
         ]),
     }
@@ -286,9 +288,15 @@ mod tests {
     #[test]
     fn stores_and_reads_events_by_range() {
         let mut store = InMemoryTelemetryStore::default();
-        store.write_event(event("2026-01-01T12:00:00Z", "start")).unwrap();
-        store.write_event(event("2026-01-01T12:05:00Z", "die")).unwrap();
-        store.write_event(event("2026-01-01T13:00:00Z", "restart")).unwrap();
+        store
+            .write_event(event("2026-01-01T12:00:00Z", "start"))
+            .unwrap();
+        store
+            .write_event(event("2026-01-01T12:05:00Z", "die"))
+            .unwrap();
+        store
+            .write_event(event("2026-01-01T13:00:00Z", "restart"))
+            .unwrap();
 
         let events = store
             .events_between("2026-01-01T12:00:00Z", "2026-01-01T12:59:59Z")
@@ -300,8 +308,12 @@ mod tests {
     #[test]
     fn inspects_container_at_historical_snapshot() {
         let mut store = InMemoryTelemetryStore::default();
-        store.write_snapshot(snapshot("2026-01-01 11:59:00", "old-image")).unwrap();
-        store.write_snapshot(snapshot("2026-01-01 12:00:00", "new-image")).unwrap();
+        store
+            .write_snapshot(snapshot("2026-01-01 11:59:00", "old-image"))
+            .unwrap();
+        store
+            .write_snapshot(snapshot("2026-01-01 12:00:00", "new-image"))
+            .unwrap();
         let Query::Inspect(query) =
             parser::parse("inspect container api at \"2026-01-01 12:00:30\"")
                 .unwrap()
@@ -313,7 +325,10 @@ mod tests {
         let result = inspect_at(&query, &store).unwrap();
 
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].fields["image"], JsonValue::String("new-image".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["image"],
+            JsonValue::String("new-image".to_owned())
+        );
         assert_eq!(
             result.rows[0].fields["snapshot_at"],
             JsonValue::String("2026-01-01 12:00:30".to_owned())
@@ -323,8 +338,12 @@ mod tests {
     #[test]
     fn replays_historical_events_through_event_pipeline() {
         let mut store = InMemoryTelemetryStore::default();
-        store.write_event(event("2026-01-01T12:00:00Z", "start")).unwrap();
-        store.write_event(event("2026-01-01T12:05:00Z", "die")).unwrap();
+        store
+            .write_event(event("2026-01-01T12:00:00Z", "start"))
+            .unwrap();
+        store
+            .write_event(event("2026-01-01T12:05:00Z", "die"))
+            .unwrap();
         let Query::Events(query) = parser::parse(
             "events containers from \"2026-01-01T12:00:00Z\" to \"2026-01-01T12:10:00Z\" where action = \"die\" | select time, action",
         )
@@ -337,7 +356,10 @@ mod tests {
         let result = historical_events(&query, &store).unwrap();
 
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].fields["action"], JsonValue::String("die".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["action"],
+            JsonValue::String("die".to_owned())
+        );
     }
 
     fn snapshot(timestamp: &str, image: &str) -> TelemetrySnapshot {

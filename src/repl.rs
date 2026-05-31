@@ -40,17 +40,58 @@ impl Completer for DolHelper {
         _ctx: &rustyline::Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
         let keywords = [
-            "observe", "events", "inspect", "analyze", "alert", "fields",
-            "containers", "images", "networks", "volumes",
-            "container", "image", "network", "volume",
-            "where", "select", "sort", "by", "limit", "group", "set",
-            "if", "then", "else", "case", "when", "end",
-            "and", "or", "not", "in", "matches", "contains",
-            "last", "at", "from", "to",
-            "asc", "desc",
-            ".help", ".exit", ".watch", ".export", ".output", ".history",
-            "find", "anomalies", "correlate", "explain",
-            "print", "webhook", "restart",
+            "observe",
+            "events",
+            "inspect",
+            "analyze",
+            "alert",
+            "fields",
+            "containers",
+            "images",
+            "networks",
+            "volumes",
+            "container",
+            "image",
+            "network",
+            "volume",
+            "where",
+            "select",
+            "sort",
+            "by",
+            "limit",
+            "group",
+            "set",
+            "if",
+            "then",
+            "else",
+            "case",
+            "when",
+            "end",
+            "and",
+            "or",
+            "not",
+            "in",
+            "matches",
+            "contains",
+            "last",
+            "at",
+            "from",
+            "to",
+            "asc",
+            "desc",
+            ".help",
+            ".exit",
+            ".watch",
+            ".export",
+            ".output",
+            ".history",
+            "find",
+            "anomalies",
+            "correlate",
+            "explain",
+            "print",
+            "webhook",
+            "restart",
         ];
 
         let line_before = &line[..pos];
@@ -86,8 +127,7 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
     let mut rl = Editor::<DolHelper, DefaultHistory>::with_config(h)?;
     rl.set_helper(Some(DolHelper));
 
-    let history_file = dirs::data_dir()
-        .map(|d| d.join("dol").join("repl_history.txt"));
+    let history_file = dirs::data_dir().map(|d| d.join("dol").join("repl_history.txt"));
 
     if let Some(ref path) = history_file {
         if let Some(parent) = path.parent() {
@@ -199,8 +239,9 @@ async fn execute_dol_query(query: &str, config: &DolConfig) -> anyhow::Result<()
     };
 
     if needs_store {
-        let store_path = config.store.as_deref()
-            .ok_or_else(|| anyhow::anyhow!("this query requires historical data; set store in config"))?;
+        let store_path = config.store.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("this query requires historical data; set store in config")
+        })?;
         let store = SqliteTelemetryStore::open(store_path)?;
         let result = executor::execute_with_store(&parsed.query, &store)?;
         println!("{}", render_table(&result));

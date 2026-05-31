@@ -19,5 +19,5 @@ pub mod sqlite_store;
 pub mod storage;
 
 pub use cli::Cli;
-pub use export::ExportFormat;
 pub use cli::OutputFormat;
+pub use export::ExportFormat;

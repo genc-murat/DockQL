@@ -318,7 +318,10 @@ mod tests {
         assert_eq!(sample.network_tx_bytes, Some(2_000));
         assert_eq!(sample.disk_read_bytes, Some(4_194_304));
         assert_eq!(sample.disk_write_bytes, Some(8_388_608));
-        assert!(!sample.timestamp.is_empty(), "timestamp should have a fallback value when Docker stats omits it");
+        assert!(
+            !sample.timestamp.is_empty(),
+            "timestamp should have a fallback value when Docker stats omits it"
+        );
     }
 
     #[test]

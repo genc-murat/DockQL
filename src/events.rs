@@ -159,9 +159,10 @@ where
         let mut row = Some(event_row(event?));
 
         if let Some(filter) = &query.filter
-            && !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)? {
-                continue;
-            }
+            && !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)?
+        {
+            continue;
+        }
 
         let mut keep = true;
         for node in &query.pipeline {
@@ -200,9 +201,16 @@ where
 {
     ensure_supported_target(query.target)?;
 
-    let has_group_by = query.pipeline.iter().any(|n| matches!(n, PipelineNode::GroupBy { .. }));
+    let has_group_by = query
+        .pipeline
+        .iter()
+        .any(|n| matches!(n, PipelineNode::GroupBy { .. }));
     let group_fields: Option<Vec<String>> = query.pipeline.iter().find_map(|n| {
-        if let PipelineNode::GroupBy { fields, .. } = n { Some(fields.clone()) } else { None }
+        if let PipelineNode::GroupBy { fields, .. } = n {
+            Some(fields.clone())
+        } else {
+            None
+        }
     });
 
     let mut emitted = 0_u64;
@@ -211,17 +219,20 @@ where
         _ => None,
     });
 
-    let mut group_counts: std::collections::BTreeMap<Vec<String>, u64> = std::collections::BTreeMap::new();
-    let mut group_rows: std::collections::BTreeMap<Vec<String>, Row> = std::collections::BTreeMap::new();
+    let mut group_counts: std::collections::BTreeMap<Vec<String>, u64> =
+        std::collections::BTreeMap::new();
+    let mut group_rows: std::collections::BTreeMap<Vec<String>, Row> =
+        std::collections::BTreeMap::new();
     let mut rows_since_flush = 0_u64;
 
     for event in source.events()? {
         let mut row = Some(event_row(event?));
 
         if let Some(filter) = &query.filter
-            && !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)? {
-                continue;
-            }
+            && !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)?
+        {
+            continue;
+        }
 
         let mut keep = true;
         for node in &query.pipeline {
@@ -229,9 +240,16 @@ where
 
             if has_group_by {
                 match node {
-        PipelineNode::GroupBy { fields, .. } => {
-                        let key: Vec<String> = fields.iter()
-                            .map(|f| current.fields.get(f).map(eval::render_json_cell).unwrap_or_default())
+                    PipelineNode::GroupBy { fields, .. } => {
+                        let key: Vec<String> = fields
+                            .iter()
+                            .map(|f| {
+                                current
+                                    .fields
+                                    .get(f)
+                                    .map(eval::render_json_cell)
+                                    .unwrap_or_default()
+                            })
                             .collect();
 
                         let count = group_counts.entry(key.clone()).or_insert(0);
@@ -252,7 +270,14 @@ where
                         rows_since_flush += 1;
 
                         if rows_since_flush >= 50 {
-                            flush_grouped(group_fields.as_ref(), &mut group_counts, &mut group_rows, &mut on_row, &mut emitted, limit)?;
+                            flush_grouped(
+                                group_fields.as_ref(),
+                                &mut group_counts,
+                                &mut group_rows,
+                                &mut on_row,
+                                &mut emitted,
+                                limit,
+                            )?;
                             rows_since_flush = 0;
                             if limit.is_some_and(|l| emitted >= l) {
                                 return Ok(());
@@ -263,9 +288,19 @@ where
                     _ => {
                         row = match apply_pipeline_node(current, node)? {
                             PipelineOutcome::Row(next_row) => Some(next_row),
-                            PipelineOutcome::Drop => { keep = false; break; }
+                            PipelineOutcome::Drop => {
+                                keep = false;
+                                break;
+                            }
                             PipelineOutcome::LimitReached => {
-                                flush_grouped(group_fields.as_ref(), &mut group_counts, &mut group_rows, &mut on_row, &mut emitted, limit)?;
+                                flush_grouped(
+                                    group_fields.as_ref(),
+                                    &mut group_counts,
+                                    &mut group_rows,
+                                    &mut on_row,
+                                    &mut emitted,
+                                    limit,
+                                )?;
                                 return Ok(());
                             }
                         };
@@ -293,7 +328,14 @@ where
     }
 
     if has_group_by {
-        flush_grouped(group_fields.as_ref(), &mut group_counts, &mut group_rows, &mut on_row, &mut emitted, limit)?;
+        flush_grouped(
+            group_fields.as_ref(),
+            &mut group_counts,
+            &mut group_rows,
+            &mut on_row,
+            &mut emitted,
+            limit,
+        )?;
     }
 
     Ok(())
@@ -313,14 +355,16 @@ where
     let keys: Vec<Vec<String>> = group_counts.keys().cloned().collect();
     for key in keys {
         if let Some(count) = group_counts.remove(&key)
-            && let Some(mut row) = group_rows.remove(&key) {
-                row.fields.insert("count".to_owned(), serde_json::json!(count));
-                on_row(row)?;
-                *emitted += 1;
-                if limit.is_some_and(|l| *emitted >= l) {
-                    break;
-                }
+            && let Some(mut row) = group_rows.remove(&key)
+        {
+            row.fields
+                .insert("count".to_owned(), serde_json::json!(count));
+            on_row(row)?;
+            *emitted += 1;
+            if limit.is_some_and(|l| *emitted >= l) {
+                break;
             }
+        }
     }
     Ok(())
 }
@@ -418,8 +462,7 @@ fn apply_pipeline_node(row: Row, node: &PipelineNode) -> Result<PipelineOutcome,
         PipelineNode::Alert(message) => {
             eprintln!(
                 "[ALERT] {message}: {}",
-                row
-                    .fields
+                row.fields
                     .iter()
                     .map(|(k, v)| format!("{k}={}", eval::render_json_cell(v)))
                     .collect::<Vec<_>>()
@@ -602,8 +645,9 @@ mod tests {
 
     #[test]
     fn supports_non_container_event_targets() {
-        let Query::Events(query) =
-            parser::parse("events images where action = \"pull\"").expect("query should parse").query
+        let Query::Events(query) = parser::parse("events images where action = \"pull\"")
+            .expect("query should parse")
+            .query
         else {
             panic!("expected events query");
         };

@@ -1,7 +1,5 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-};
 use serde_json::{Number, Value as JsonValue};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
 
 use crate::{
@@ -91,8 +89,9 @@ where
         Query::Observe(query) => execute_observe(query, docker, metrics),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
-        Query::Analyze(query) => analyze::execute_analyze(query, docker, metrics)
-            .map_err(ExecutorError::Analyze),
+        Query::Analyze(query) => {
+            analyze::execute_analyze(query, docker, metrics).map_err(ExecutorError::Analyze)
+        }
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
         Query::Fields(target) => execute_fields(*target),
     }
@@ -104,15 +103,16 @@ where
 {
     crate::semantic::validate_semantics(query)?;
     match query {
-        Query::Inspect(query) if query.at.is_some() => storage::inspect_at(query, store).map_err(Into::into),
+        Query::Inspect(query) if query.at.is_some() => {
+            storage::inspect_at(query, store).map_err(Into::into)
+        }
         Query::Events(query) if query.time.is_some() => {
             storage::historical_events(query, store).map_err(Into::into)
         }
-        Query::Observe(query) if query.time.is_some() => {
-            historical_observe(query, store)
+        Query::Observe(query) if query.time.is_some() => historical_observe(query, store),
+        Query::Analyze(query) => {
+            analyze::execute_analyze_with_store(query, store).map_err(ExecutorError::Analyze)
         }
-        Query::Analyze(query) => analyze::execute_analyze_with_store(query, store)
-            .map_err(ExecutorError::Analyze),
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Observe(_) => Err(ExecutorError::UnsupportedQuery("observe historical")),
@@ -142,54 +142,78 @@ where
         None => return Err(ExecutorError::UnsupportedQuery("observe historical")),
     };
 
-    let snapshot = store.snapshot_at_or_before(&timestamp)
+    let snapshot = store
+        .snapshot_at_or_before(&timestamp)
         .map_err(ExecutorError::Telemetry)?
         .ok_or(ExecutorError::SnapshotNotFound("historical_observe"))?;
 
     let mut rows: Vec<Row> = match query.target {
-        CollectionTarget::Containers => {
-            snapshot.containers.into_iter().map(|c| {
+        CollectionTarget::Containers => snapshot
+            .containers
+            .into_iter()
+            .map(|c| {
                 let mut fields = BTreeMap::new();
-                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert(
+                    "snapshot_at".into(),
+                    JsonValue::String(snapshot.timestamp.clone()),
+                );
                 fields.insert("id".into(), json_string(c.id));
                 fields.insert("name".into(), json_string(c.name));
                 fields.insert("image".into(), json_string(c.image));
                 fields.insert("status".into(), json_string(c.status));
                 fields.insert("state".into(), json_string(c.state));
-                fields.insert("restart_count".into(), c.restart_count.map(json_u64).unwrap_or(JsonValue::Null));
+                fields.insert(
+                    "restart_count".into(),
+                    c.restart_count.map(json_u64).unwrap_or(JsonValue::Null),
+                );
                 Row { fields }
-            }).collect()
-        }
-        CollectionTarget::Images => {
-            snapshot.images.into_iter().map(|img| {
+            })
+            .collect(),
+        CollectionTarget::Images => snapshot
+            .images
+            .into_iter()
+            .map(|img| {
                 let mut fields = BTreeMap::new();
-                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert(
+                    "snapshot_at".into(),
+                    JsonValue::String(snapshot.timestamp.clone()),
+                );
                 fields.insert("id".into(), json_string(img.id));
                 fields.insert("repository".into(), json_string(img.repository));
                 fields.insert("tag".into(), json_string(img.tag));
                 fields.insert("size".into(), json_string(img.size));
                 Row { fields }
-            }).collect()
-        }
-        CollectionTarget::Networks => {
-            snapshot.networks.into_iter().map(|n| {
+            })
+            .collect(),
+        CollectionTarget::Networks => snapshot
+            .networks
+            .into_iter()
+            .map(|n| {
                 let mut fields = BTreeMap::new();
-                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert(
+                    "snapshot_at".into(),
+                    JsonValue::String(snapshot.timestamp.clone()),
+                );
                 fields.insert("id".into(), json_string(n.id));
                 fields.insert("name".into(), json_string(n.name));
                 fields.insert("driver".into(), json_string(n.driver));
                 Row { fields }
-            }).collect()
-        }
-        CollectionTarget::Volumes => {
-            snapshot.volumes.into_iter().map(|v| {
+            })
+            .collect(),
+        CollectionTarget::Volumes => snapshot
+            .volumes
+            .into_iter()
+            .map(|v| {
                 let mut fields = BTreeMap::new();
-                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert(
+                    "snapshot_at".into(),
+                    JsonValue::String(snapshot.timestamp.clone()),
+                );
                 fields.insert("name".into(), json_string(v.name));
                 fields.insert("driver".into(), json_string(v.driver));
                 Row { fields }
-            }).collect()
-        }
+            })
+            .collect(),
     };
 
     if let Some(filter) = &query.filter {
@@ -460,14 +484,15 @@ fn select_fields(row: Row, fields: &[String]) -> Result<Row, ExecutorError> {
             if let Some(JsonValue::Array(items)) = row.fields.get("labels") {
                 for item in items {
                     if let JsonValue::String(entry) = item
-                        && let Some(eq_pos) = entry.find('=') {
-                            let key = &entry[..eq_pos];
-                            let val = &entry[eq_pos + 1..];
-                            if key == label_key {
-                                selected.insert(field.clone(), JsonValue::String(val.to_owned()));
-                                break;
-                            }
+                        && let Some(eq_pos) = entry.find('=')
+                    {
+                        let key = &entry[..eq_pos];
+                        let val = &entry[eq_pos + 1..];
+                        if key == label_key {
+                            selected.insert(field.clone(), JsonValue::String(val.to_owned()));
+                            break;
                         }
+                    }
                 }
             }
         } else {
@@ -487,24 +512,29 @@ fn sort_rows(rows: &mut [Row], fields: &[(String, SortDirection)]) -> Result<(),
             return Some(v.clone());
         }
         if let Some(label_key) = field.strip_prefix("label.")
-            && let Some(JsonValue::Array(items)) = row.fields.get("labels") {
-                for item in items {
-                    if let JsonValue::String(entry) = item
-                        && let Some(eq_pos) = entry.find('=') {
-                            let key = &entry[..eq_pos];
-                            let val = &entry[eq_pos + 1..];
-                            if key == label_key {
-                                return Some(JsonValue::String(val.to_owned()));
-                            }
-                        }
+            && let Some(JsonValue::Array(items)) = row.fields.get("labels")
+        {
+            for item in items {
+                if let JsonValue::String(entry) = item
+                    && let Some(eq_pos) = entry.find('=')
+                {
+                    let key = &entry[..eq_pos];
+                    let val = &entry[eq_pos + 1..];
+                    if key == label_key {
+                        return Some(JsonValue::String(val.to_owned()));
+                    }
                 }
             }
+        }
         None
     }
 
     // Validate all sort fields exist
     for (field, _) in fields {
-        if rows.iter().any(|row| resolve_sort_value(row, field).is_none()) {
+        if rows
+            .iter()
+            .any(|row| resolve_sort_value(row, field).is_none())
+        {
             return Err(EvalError::UnsupportedField {
                 field: field.to_owned(),
             }
@@ -535,15 +565,14 @@ fn container_row(container: Container, samples: &HashMap<String, MetricSample>) 
         .get(&container.id)
         .or_else(|| samples.get(&container.name));
 
-    let compose_project = container.labels.iter()
-        .find_map(|label| {
-            let parts: Vec<&str> = label.splitn(2, '=').collect();
-            if parts.len() == 2 && parts[0] == "com.docker.compose.project" {
-                Some(parts[1].to_owned())
-            } else {
-                None
-            }
-        });
+    let compose_project = container.labels.iter().find_map(|label| {
+        let parts: Vec<&str> = label.splitn(2, '=').collect();
+        if parts.len() == 2 && parts[0] == "com.docker.compose.project" {
+            Some(parts[1].to_owned())
+        } else {
+            None
+        }
+    });
 
     Row::from_fields([
         ("id", json_string(container.id)),
@@ -553,7 +582,12 @@ fn container_row(container: Container, samples: &HashMap<String, MetricSample>) 
         ("state", json_string(container.state)),
         ("ports", json_string_array(container.ports)),
         ("labels", json_string_array(container.labels)),
-        ("compose_project", compose_project.map(JsonValue::String).unwrap_or(JsonValue::Null)),
+        (
+            "compose_project",
+            compose_project
+                .map(JsonValue::String)
+                .unwrap_or(JsonValue::Null),
+        ),
         ("created_at", json_option_string(container.created_at)),
         ("started_at", json_option_string(container.started_at)),
         ("finished_at", json_option_string(container.finished_at)),
@@ -772,10 +806,13 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
     );
 
     for row in &rendered_rows {
-        let color = row.iter().find_map(|v| {
-            let c = ansi_color(v);
-            if c != "\x1b[0m" { Some(c) } else { None }
-        }).unwrap_or("\x1b[0m");
+        let color = row
+            .iter()
+            .find_map(|v| {
+                let c = ansi_color(v);
+                if c != "\x1b[0m" { Some(c) } else { None }
+            })
+            .unwrap_or("\x1b[0m");
 
         let line = render_table_line(row, &widths);
         lines.push(format!("{color}{line}{ANSI_RESET}"));
@@ -789,12 +826,15 @@ where
     S: crate::storage::TelemetryStore + ?Sized,
 {
     let now = chrono::Utc::now().to_rfc3339();
-    let snapshot = store.snapshot_at_or_before(&now)
+    let snapshot = store
+        .snapshot_at_or_before(&now)
         .map_err(ExecutorError::Telemetry)?
         .ok_or(ExecutorError::SnapshotNotFound("diff"))?;
 
     let prev_ids: HashSet<&str> = snapshot.containers.iter().map(|c| c.id.as_str()).collect();
-    let curr_ids: HashSet<&str> = current.rows.iter()
+    let curr_ids: HashSet<&str> = current
+        .rows
+        .iter()
         .filter_map(|r| r.fields.get("id").and_then(|v| v.as_str()))
         .collect();
 
@@ -805,17 +845,31 @@ where
     let mut lines = Vec::new();
 
     if !added.is_empty() {
-        lines.push(format!("\x1b[32mAdded containers ({}):\x1b[0m", added.len()));
+        lines.push(format!(
+            "\x1b[32mAdded containers ({}):\x1b[0m",
+            added.len()
+        ));
         for id in &added {
-            if let Some(row) = current.rows.iter().find(|r| r.fields.get("id").and_then(|v| v.as_str()) == Some(id)) {
-                let name = row.fields.get("name").map(eval::render_json_cell).unwrap_or_default();
+            if let Some(row) = current
+                .rows
+                .iter()
+                .find(|r| r.fields.get("id").and_then(|v| v.as_str()) == Some(id))
+            {
+                let name = row
+                    .fields
+                    .get("name")
+                    .map(eval::render_json_cell)
+                    .unwrap_or_default();
                 lines.push(format!("  \x1b[32m+ {name} ({id})\x1b[0m"));
             }
         }
     }
 
     if !removed.is_empty() {
-        lines.push(format!("\x1b[31mRemoved containers ({}):\x1b[0m", removed.len()));
+        lines.push(format!(
+            "\x1b[31mRemoved containers ({}):\x1b[0m",
+            removed.len()
+        ));
         for id in &removed {
             if let Some(c) = snapshot.containers.iter().find(|c| c.id == *id) {
                 lines.push(format!("  \x1b[31m- {name} ({id})\x1b[0m", name = c.name));
@@ -826,13 +880,29 @@ where
     if !changed.is_empty() {
         lines.push(format!("Changed containers ({}):", changed.len()));
         for id in &changed {
-            if let Some(row) = current.rows.iter().find(|r| r.fields.get("id").and_then(|v| v.as_str()) == Some(id)) {
-                let name = row.fields.get("name").map(eval::render_json_cell).unwrap_or_default();
-                let state = row.fields.get("state").map(eval::render_json_cell).unwrap_or_default();
+            if let Some(row) = current
+                .rows
+                .iter()
+                .find(|r| r.fields.get("id").and_then(|v| v.as_str()) == Some(id))
+            {
+                let name = row
+                    .fields
+                    .get("name")
+                    .map(eval::render_json_cell)
+                    .unwrap_or_default();
+                let state = row
+                    .fields
+                    .get("state")
+                    .map(eval::render_json_cell)
+                    .unwrap_or_default();
                 if let Some(prev_c) = snapshot.containers.iter().find(|c| c.id == *id)
-                    && prev_c.state != state {
-                        lines.push(format!("  ~ {name}: {prev} -> {state}", prev = prev_c.state));
-                    }
+                    && prev_c.state != state
+                {
+                    lines.push(format!(
+                        "  ~ {name}: {prev} -> {state}",
+                        prev = prev_c.state
+                    ));
+                }
             }
         }
     }
@@ -1058,7 +1128,10 @@ mod tests {
 
         let error = execute(&parsed.query, &client).unwrap_err();
 
-        assert!(matches!(error, ExecutorError::Eval(eval::EvalError::UnsupportedField { .. })));
+        assert!(matches!(
+            error,
+            ExecutorError::Eval(eval::EvalError::UnsupportedField { .. })
+        ));
     }
 
     #[test]
@@ -1069,7 +1142,10 @@ mod tests {
 
         let error = execute(&parsed.query, &client).unwrap_err();
 
-        assert!(matches!(error, ExecutorError::Eval(eval::EvalError::InvalidComparison { .. })));
+        assert!(matches!(
+            error,
+            ExecutorError::Eval(eval::EvalError::InvalidComparison { .. })
+        ));
     }
 
     #[test]
@@ -1096,7 +1172,10 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(result.rows[0].fields["tier"], JsonValue::String("prod".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["tier"],
+            JsonValue::String("prod".to_owned())
+        );
     }
 
     #[test]
@@ -1109,8 +1188,14 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(result.rows[0].fields["health"], JsonValue::String("up".to_owned()));
-        assert_eq!(result.rows[1].fields["health"], JsonValue::String("down".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["health"],
+            JsonValue::String("up".to_owned())
+        );
+        assert_eq!(
+            result.rows[1].fields["health"],
+            JsonValue::String("down".to_owned())
+        );
     }
 
     #[test]
@@ -1123,8 +1208,14 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(result.rows[0].fields["status_label"], JsonValue::String("active".to_owned()));
-        assert_eq!(result.rows[1].fields["status_label"], JsonValue::String("inactive".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["status_label"],
+            JsonValue::String("active".to_owned())
+        );
+        assert_eq!(
+            result.rows[1].fields["status_label"],
+            JsonValue::String("inactive".to_owned())
+        );
     }
 
     fn mock_client() -> MockDockerClient {
@@ -1200,9 +1291,10 @@ mod tests {
     #[test]
     fn renders_jsonl() {
         let result = ExecutionResult {
-            rows: vec![Row::from_fields([
-                ("name", JsonValue::String("api".to_owned())),
-            ])],
+            rows: vec![Row::from_fields([(
+                "name",
+                JsonValue::String("api".to_owned()),
+            )])],
         };
         let jsonl = render_jsonl(&result);
         assert!(jsonl.contains("\"name\":\"api\""));
@@ -1213,17 +1305,23 @@ mod tests {
         let client = mock_client();
         let parsed = parser::parse(
             "observe containers | where label.role = \"api\" | select name, label.role",
-        ).expect("query should parse");
+        )
+        .expect("query should parse");
         let result = execute(&parsed.query, &client).expect("query should execute");
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].fields["label.role"], JsonValue::String("api".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["label.role"],
+            JsonValue::String("api".to_owned())
+        );
     }
 
     #[test]
     fn execute_fields_containers() {
         let result = execute_fields(CollectionTarget::Containers).expect("fields should execute");
         assert!(!result.rows.is_empty());
-        let field_names: Vec<&str> = result.rows.iter()
+        let field_names: Vec<&str> = result
+            .rows
+            .iter()
             .map(|r| r.fields["field"].as_str().unwrap())
             .collect();
         assert!(field_names.contains(&"name"));

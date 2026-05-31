@@ -137,7 +137,10 @@ impl DockerCliClient {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string_lossy().into_owned()).collect();
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|s| s.as_ref().to_string_lossy().into_owned())
+            .collect();
         self.run_json_lines_str(&args)
     }
 
@@ -173,7 +176,11 @@ impl DockerClient for DockerCliClient {
 
         if !containers.is_empty() {
             let ids: Vec<String> = containers.iter().map(|c| c.id.clone()).collect();
-            let mut args: Vec<String> = vec!["inspect".to_owned(), "--format".to_owned(), "{{json .}}".to_owned()];
+            let mut args: Vec<String> = vec![
+                "inspect".to_owned(),
+                "--format".to_owned(),
+                "{{json .}}".to_owned(),
+            ];
             args.extend(ids);
             if let Ok(inspect_values) = self.run_json_lines_str(&args) {
                 enrich_containers_from_inspect(&mut containers, &inspect_values);
@@ -274,16 +281,21 @@ fn enrich_containers_from_inspect(containers: &mut [Container], inspect_values: 
     let inspect_by_name: std::collections::HashMap<String, &Value> = inspect_values
         .iter()
         .map(|v| {
-            let name = v.get("Name").and_then(Value::as_str).unwrap_or("").trim_start_matches('/').to_owned();
+            let name = v
+                .get("Name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_start_matches('/')
+                .to_owned();
             (name, v)
         })
         .collect();
 
     for container in containers.iter_mut() {
-            let inspect = inspect_by_id
-                .get(&container.id[..12.min(container.id.len())])
-                .or_else(|| inspect_by_name.get(&container.name))
-                .copied();
+        let inspect = inspect_by_id
+            .get(&container.id[..12.min(container.id.len())])
+            .or_else(|| inspect_by_name.get(&container.name))
+            .copied();
 
         if let Some(inspect) = inspect {
             if container.started_at.is_none() {
@@ -301,9 +313,7 @@ fn enrich_containers_from_inspect(containers: &mut [Container], inspect_values: 
                     .map(str::to_owned);
             }
             if container.restart_count.is_none() {
-                container.restart_count = inspect
-                    .pointer("/RestartCount")
-                    .and_then(Value::as_u64);
+                container.restart_count = inspect.pointer("/RestartCount").and_then(Value::as_u64);
             }
         }
     }

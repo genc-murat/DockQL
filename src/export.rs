@@ -107,9 +107,21 @@ pub async fn push_to_prometheus(url: &str, result: &ExecutionResult) -> Result<(
 pub fn format_as_influx(result: &ExecutionResult, measurement: &str) -> String {
     let mut lines = Vec::new();
     for row in &result.rows {
-        let name = row.fields.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let image = row.fields.get("image").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let state = row.fields.get("state").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let name = row
+            .fields
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let image = row
+            .fields
+            .get("image")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let state = row
+            .fields
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
 
         let mut fields = Vec::new();
         let mut tags = vec![
@@ -160,10 +172,7 @@ pub fn format_as_loki(result: &ExecutionResult) -> Result<String, serde_json::Er
             .as_nanos()
             .to_string();
         let log_line = serde_json::to_string(&row.fields)?;
-        entries.push(vec![
-            JsonValue::String(ts),
-            JsonValue::String(log_line),
-        ]);
+        entries.push(vec![JsonValue::String(ts), JsonValue::String(log_line)]);
     }
 
     let payload = serde_json::json!({
@@ -188,9 +197,21 @@ pub fn format_as_prometheus(result: &ExecutionResult) -> String {
     lines.push("# TYPE dol_query gauge".to_owned());
 
     for row in &result.rows {
-        let name = row.fields.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let image = row.fields.get("image").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let state = row.fields.get("state").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let name = row
+            .fields
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let image = row
+            .fields
+            .get("image")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let state = row
+            .fields
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
 
         let labels = format!(
             "container=\"{}\",image=\"{}\",state=\"{}\"",
@@ -235,21 +256,45 @@ mod tests {
                 Row {
                     fields: std::collections::BTreeMap::from([
                         ("name".to_owned(), JsonValue::String("web".to_owned())),
-                        ("image".to_owned(), JsonValue::String("nginx:latest".to_owned())),
+                        (
+                            "image".to_owned(),
+                            JsonValue::String("nginx:latest".to_owned()),
+                        ),
                         ("state".to_owned(), JsonValue::String("running".to_owned())),
-                        ("cpu".to_owned(), JsonValue::Number(serde_json::Number::from_f64(12.5).unwrap())),
-                        ("memory".to_owned(), JsonValue::Number(serde_json::Number::from_f64(64_000_000.0).unwrap())),
-                        ("restart_count".to_owned(), JsonValue::Number(serde_json::Number::from(0))),
+                        (
+                            "cpu".to_owned(),
+                            JsonValue::Number(serde_json::Number::from_f64(12.5).unwrap()),
+                        ),
+                        (
+                            "memory".to_owned(),
+                            JsonValue::Number(serde_json::Number::from_f64(64_000_000.0).unwrap()),
+                        ),
+                        (
+                            "restart_count".to_owned(),
+                            JsonValue::Number(serde_json::Number::from(0)),
+                        ),
                     ]),
                 },
                 Row {
                     fields: std::collections::BTreeMap::from([
                         ("name".to_owned(), JsonValue::String("db".to_owned())),
-                        ("image".to_owned(), JsonValue::String("postgres:16".to_owned())),
+                        (
+                            "image".to_owned(),
+                            JsonValue::String("postgres:16".to_owned()),
+                        ),
                         ("state".to_owned(), JsonValue::String("exited".to_owned())),
-                        ("cpu".to_owned(), JsonValue::Number(serde_json::Number::from_f64(0.0).unwrap())),
-                        ("memory".to_owned(), JsonValue::Number(serde_json::Number::from_f64(256_000_000.0).unwrap())),
-                        ("restart_count".to_owned(), JsonValue::Number(serde_json::Number::from(3))),
+                        (
+                            "cpu".to_owned(),
+                            JsonValue::Number(serde_json::Number::from_f64(0.0).unwrap()),
+                        ),
+                        (
+                            "memory".to_owned(),
+                            JsonValue::Number(serde_json::Number::from_f64(256_000_000.0).unwrap()),
+                        ),
+                        (
+                            "restart_count".to_owned(),
+                            JsonValue::Number(serde_json::Number::from(3)),
+                        ),
                     ]),
                 },
             ],

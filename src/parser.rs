@@ -22,7 +22,10 @@ pub struct ParseError {
 
 impl ParseError {
     pub fn new(column: usize, message: impl Into<String>) -> Self {
-        Self { column, message: message.into() }
+        Self {
+            column,
+            message: message.into(),
+        }
     }
 }
 
@@ -83,7 +86,11 @@ struct Parser {
 
 impl Parser {
     fn new(tokens: Vec<Token>, eof_column: usize) -> Self {
-        Self { tokens, cursor: 0, eof_column }
+        Self {
+            tokens,
+            cursor: 0,
+            eof_column,
+        }
     }
 
     // ── Query dispatch ──
@@ -109,7 +116,12 @@ impl Parser {
         let time = self.parse_optional_time_selector()?;
         let filter = self.parse_optional_inline_where()?;
         let pipeline = self.parse_pipeline()?;
-        Ok(Query::Observe(crate::ast::ObserveQuery { target, time, filter, pipeline }))
+        Ok(Query::Observe(crate::ast::ObserveQuery {
+            target,
+            time,
+            filter,
+            pipeline,
+        }))
     }
 
     fn parse_events(&mut self) -> Result<Query, ParseError> {
@@ -118,13 +130,22 @@ impl Parser {
         let time = self.parse_optional_time_selector()?;
         let filter = self.parse_optional_inline_where()?;
         let pipeline = self.parse_pipeline()?;
-        Ok(Query::Events(EventsQuery { target, time, filter, pipeline }))
+        Ok(Query::Events(EventsQuery {
+            target,
+            time,
+            filter,
+            pipeline,
+        }))
     }
 
     fn parse_inspect(&mut self) -> Result<Query, ParseError> {
         self.expect_ident("inspect")?;
         let target = self.parse_singular_target()?;
-        let at = if self.consume_ident("at") { Some(self.expect_timestamp_string()?) } else { None };
+        let at = if self.consume_ident("at") {
+            Some(self.expect_timestamp_string()?)
+        } else {
+            None
+        };
         Ok(Query::Inspect(InspectQuery { target, at }))
     }
 
@@ -132,20 +153,38 @@ impl Parser {
         self.expect_ident("analyze")?;
         let target = self.parse_analysis_target()?;
         let verb = self.parse_analysis_verb()?;
-        let subject = if self.is_at_time_or_pipe_or_eof() { None } else { Some(self.expect_identifier_like("analysis subject")?) };
+        let subject = if self.is_at_time_or_pipe_or_eof() {
+            None
+        } else {
+            Some(self.expect_identifier_like("analysis subject")?)
+        };
         let time = self.parse_optional_time_selector()?;
         let pipeline = self.parse_pipeline()?;
-        Ok(Query::Analyze(crate::ast::AnalyzeQuery { target, verb, subject, time, pipeline }))
+        Ok(Query::Analyze(crate::ast::AnalyzeQuery {
+            target,
+            verb,
+            subject,
+            time,
+            pipeline,
+        }))
     }
 
     fn parse_alert_rule(&mut self) -> Result<AlertRule, ParseError> {
         self.expect_ident("alert")?;
         self.expect_ident("when")?;
         let condition = self.parse_expression()?;
-        let duration = if self.consume_ident("for") { Some(self.expect_duration()?) } else { None };
+        let duration = if self.consume_ident("for") {
+            Some(self.expect_duration()?)
+        } else {
+            None
+        };
         self.expect_ident("then")?;
         let action = self.parse_alert_action()?;
-        Ok(AlertRule { condition, duration, action })
+        Ok(AlertRule {
+            condition,
+            duration,
+            action,
+        })
     }
 
     fn parse_fields(&mut self) -> Result<Query, ParseError> {
@@ -169,12 +208,29 @@ impl Parser {
 
     fn parse_singular_target(&mut self) -> Result<SingularTarget, ParseError> {
         let kind = match self.peek_ident() {
-            Some("container") => { self.advance(); SingularTargetKind::Container }
-            Some("image") => { self.advance(); SingularTargetKind::Image }
-            Some("network") => { self.advance(); SingularTargetKind::Network }
-            Some("volume") => { self.advance(); SingularTargetKind::Volume }
-            Some(other) => return Err(self.error_here(format!("expected singular target: container, image, network, or volume, found `{other}`"))),
-            None => return Err(self.error_here("expected singular target: container, image, network, or volume")),
+            Some("container") => {
+                self.advance();
+                SingularTargetKind::Container
+            }
+            Some("image") => {
+                self.advance();
+                SingularTargetKind::Image
+            }
+            Some("network") => {
+                self.advance();
+                SingularTargetKind::Network
+            }
+            Some("volume") => {
+                self.advance();
+                SingularTargetKind::Volume
+            }
+            Some(other) => return Err(self.error_here(format!(
+                "expected singular target: container, image, network, or volume, found `{other}`"
+            ))),
+            None => {
+                return Err(self
+                    .error_here("expected singular target: container, image, network, or volume"));
+            }
         };
         let value = self.expect_identifier_like("target name or ID")?;
         Ok(SingularTarget { kind, value })
@@ -189,20 +245,45 @@ impl Parser {
 
     fn parse_analysis_verb(&mut self) -> Result<AnalysisVerb, ParseError> {
         match self.peek_ident() {
-            Some("find") => { self.advance(); Ok(AnalysisVerb::Find) }
-            Some("correlate") => { self.advance(); Ok(AnalysisVerb::Correlate) }
-            Some("explain") => { self.advance(); Ok(AnalysisVerb::Explain) }
-            Some(other) => Err(self.error_here(format!("expected analysis verb: find, correlate, or explain, found `{other}`"))),
+            Some("find") => {
+                self.advance();
+                Ok(AnalysisVerb::Find)
+            }
+            Some("correlate") => {
+                self.advance();
+                Ok(AnalysisVerb::Correlate)
+            }
+            Some("explain") => {
+                self.advance();
+                Ok(AnalysisVerb::Explain)
+            }
+            Some(other) => Err(self.error_here(format!(
+                "expected analysis verb: find, correlate, or explain, found `{other}`"
+            ))),
             None => Err(self.error_here("expected analysis verb: find, correlate, or explain")),
         }
     }
 
     fn parse_alert_action(&mut self) -> Result<AlertAction, ParseError> {
         match self.peek_ident() {
-            Some("print") => { self.advance(); let msg = self.expect_string("alert message")?; Ok(AlertAction::Print(msg)) }
-            Some("webhook") => { self.advance(); let url = self.expect_string("webhook URL")?; Ok(AlertAction::Webhook(url)) }
-            Some("restart") => { self.advance(); let target = self.parse_singular_target()?; Ok(AlertAction::Restart(target)) }
-            Some(other) => Err(self.error_here(format!("expected alert action: print, webhook, or restart, found `{other}`"))),
+            Some("print") => {
+                self.advance();
+                let msg = self.expect_string("alert message")?;
+                Ok(AlertAction::Print(msg))
+            }
+            Some("webhook") => {
+                self.advance();
+                let url = self.expect_string("webhook URL")?;
+                Ok(AlertAction::Webhook(url))
+            }
+            Some("restart") => {
+                self.advance();
+                let target = self.parse_singular_target()?;
+                Ok(AlertAction::Restart(target))
+            }
+            Some(other) => Err(self.error_here(format!(
+                "expected alert action: print, webhook, or restart, found `{other}`"
+            ))),
             None => Err(self.error_here("expected alert action: print, webhook, or restart")),
         }
     }
@@ -251,7 +332,11 @@ impl Parser {
         if self.consume_ident("group") {
             self.expect_ident("by")?;
             let fields = self.parse_field_list()?;
-            let aggregates = if self.consume_ident("with") { self.parse_aggregates()? } else { Vec::new() };
+            let aggregates = if self.consume_ident("with") {
+                self.parse_aggregates()?
+            } else {
+                Vec::new()
+            };
             return Ok(PipelineNode::GroupBy { fields, aggregates });
         }
         if self.consume_ident("having") {
@@ -262,10 +347,16 @@ impl Parser {
             let mut fields = Vec::new();
             loop {
                 let field = self.expect_identifier_like("sort field")?;
-                let direction = if self.consume_ident("desc") { SortDirection::Desc }
-                else { self.consume_ident("asc"); SortDirection::Asc };
+                let direction = if self.consume_ident("desc") {
+                    SortDirection::Desc
+                } else {
+                    self.consume_ident("asc");
+                    SortDirection::Asc
+                };
                 fields.push((field, direction));
-                if !self.consume(TokenKind::Comma) { break; }
+                if !self.consume(TokenKind::Comma) {
+                    break;
+                }
             }
             return Ok(PipelineNode::SortBy { fields });
         }
@@ -297,9 +388,19 @@ impl Parser {
             self.expect(TokenKind::LParen, "`(`")?;
             let field = self.expect_identifier_like("aggregate field")?;
             self.expect(TokenKind::RParen, "`)`")?;
-            let alias = if self.consume_ident("as") { self.expect_identifier_like("alias")? } else { field.clone() };
-            aggs.push(crate::ast::AggregateExpr { function: func, field, alias });
-            if !self.consume(TokenKind::Comma) { break; }
+            let alias = if self.consume_ident("as") {
+                self.expect_identifier_like("alias")?
+            } else {
+                field.clone()
+            };
+            aggs.push(crate::ast::AggregateExpr {
+                function: func,
+                field,
+                alias,
+            });
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
         }
         Ok(aggs)
     }
@@ -314,8 +415,14 @@ impl Parser {
             } else {
                 Some(self.parse_inline_pipeline_nodes()?)
             }
-        } else { None };
-        Ok(PipelineNode::If { condition, then_branch, else_branch })
+        } else {
+            None
+        };
+        Ok(PipelineNode::If {
+            condition,
+            then_branch,
+            else_branch,
+        })
     }
 
     fn parse_inline_pipeline_nodes(&mut self) -> Result<Vec<PipelineNode>, ParseError> {
@@ -329,9 +436,13 @@ impl Parser {
     fn parse_set_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
         let field = self.expect_identifier_like("field name")?;
         self.expect(TokenKind::Eq, "`=`")?;
-        let value = if self.consume_ident("case") { self.parse_set_case()? }
-        else if self.consume_ident("if") { self.parse_set_if_else()? }
-        else { SetValue::Expr(self.parse_expression()?) };
+        let value = if self.consume_ident("case") {
+            self.parse_set_case()?
+        } else if self.consume_ident("if") {
+            self.parse_set_if_else()?
+        } else {
+            SetValue::Expr(self.parse_expression()?)
+        };
         Ok(PipelineNode::Set { field, value })
     }
 
@@ -343,22 +454,39 @@ impl Parser {
             let result = self.parse_value()?;
             when_clauses.push((condition, result));
         }
-        let else_value = if self.consume_ident("else") { Some(self.parse_value()?) } else { None };
+        let else_value = if self.consume_ident("else") {
+            Some(self.parse_value()?)
+        } else {
+            None
+        };
         self.expect_ident("end")?;
-        Ok(SetValue::Case { when_clauses, else_value })
+        Ok(SetValue::Case {
+            when_clauses,
+            else_value,
+        })
     }
 
     fn parse_set_if_else(&mut self) -> Result<SetValue, ParseError> {
         let condition = self.parse_expression()?;
         self.expect_ident("then")?;
         let then_value = self.parse_value()?;
-        let else_value = if self.consume_ident("else") { Some(self.parse_value()?) } else { None };
-        Ok(SetValue::IfElse { condition, then_value, else_value })
+        let else_value = if self.consume_ident("else") {
+            Some(self.parse_value()?)
+        } else {
+            None
+        };
+        Ok(SetValue::IfElse {
+            condition,
+            then_value,
+            else_value,
+        })
     }
 
     fn parse_field_list(&mut self) -> Result<Vec<String>, ParseError> {
         let mut fields = vec![self.expect_identifier_like("field")?];
-        while self.consume(TokenKind::Comma) { fields.push(self.expect_identifier_like("field")?); }
+        while self.consume(TokenKind::Comma) {
+            fields.push(self.expect_identifier_like("field")?);
+        }
         Ok(fields)
     }
 
@@ -401,7 +529,10 @@ impl Parser {
             self.expect(TokenKind::LParen, "`(`")?;
             let values = self.parse_value_list()?;
             self.expect(TokenKind::RParen, "`)`")?;
-            return Ok(Expression::In { expr: Box::new(left), values });
+            return Ok(Expression::In {
+                expr: Box::new(left),
+                values,
+            });
         }
 
         // Check for `is null` / `is not null`
@@ -453,7 +584,10 @@ impl Parser {
     /// Like try_parse_value but accepts ANY identifier (not just true/false)
     /// so that `state = running` treats `running` as a literal.
     fn try_parse_rhs_value(&mut self) -> Result<Value, ParseError> {
-        let token = self.peek().ok_or_else(|| self.error_here("expected value"))?.clone();
+        let token = self
+            .peek()
+            .ok_or_else(|| self.error_here("expected value"))?
+            .clone();
         match &token.kind {
             TokenKind::String(_) => {}
             TokenKind::Ident(_) => {}
@@ -483,11 +617,26 @@ impl Parser {
 
         loop {
             let op = match self.peek().map(|t| &t.kind) {
-                Some(TokenKind::Plus) if 1 >= min_prec => { self.advance(); BinOp::Add }
-                Some(TokenKind::Minus) if 1 >= min_prec => { self.advance(); BinOp::Sub }
-                Some(TokenKind::Star) if 2 >= min_prec => { self.advance(); BinOp::Mul }
-                Some(TokenKind::Slash) if 2 >= min_prec => { self.advance(); BinOp::Div }
-                Some(TokenKind::Percent) if 2 >= min_prec => { self.advance(); BinOp::Mod }
+                Some(TokenKind::Plus) if 1 >= min_prec => {
+                    self.advance();
+                    BinOp::Add
+                }
+                Some(TokenKind::Minus) if 1 >= min_prec => {
+                    self.advance();
+                    BinOp::Sub
+                }
+                Some(TokenKind::Star) if 2 >= min_prec => {
+                    self.advance();
+                    BinOp::Mul
+                }
+                Some(TokenKind::Slash) if 2 >= min_prec => {
+                    self.advance();
+                    BinOp::Div
+                }
+                Some(TokenKind::Percent) if 2 >= min_prec => {
+                    self.advance();
+                    BinOp::Mod
+                }
                 _ => break,
             };
             let next_prec = match op {
@@ -526,22 +675,26 @@ impl Parser {
         }
 
         // Function call: ident "(" ...
-        if let Some(Token { kind: TokenKind::Ident(name), .. }) = self.peek()
+        if let Some(Token {
+            kind: TokenKind::Ident(name),
+            ..
+        }) = self.peek()
             && let Some(peek2) = self.tokens.get(self.cursor + 1)
-                && matches!(peek2.kind, TokenKind::LParen) {
-                    let name = name.clone();
-                    self.advance(); // consume ident
-                    self.advance(); // consume LParen
-                    let mut args = Vec::new();
-                    if !self.check(TokenKind::RParen) {
-                        args.push(self.parse_expression()?);
-                        while self.consume(TokenKind::Comma) {
-                            args.push(self.parse_expression()?);
-                        }
-                    }
-                    self.expect(TokenKind::RParen, "`)`")?;
-                    return Ok(Expression::FnCall { name, args });
+            && matches!(peek2.kind, TokenKind::LParen)
+        {
+            let name = name.clone();
+            self.advance(); // consume ident
+            self.advance(); // consume LParen
+            let mut args = Vec::new();
+            if !self.check(TokenKind::RParen) {
+                args.push(self.parse_expression()?);
+                while self.consume(TokenKind::Comma) {
+                    args.push(self.parse_expression()?);
                 }
+            }
+            self.expect(TokenKind::RParen, "`)`")?;
+            return Ok(Expression::FnCall { name, args });
+        }
 
         // Try literal value first
         if let Ok(value) = self.try_parse_value() {
@@ -555,7 +708,9 @@ impl Parser {
 
     fn parse_value_list(&mut self) -> Result<Vec<Value>, ParseError> {
         let mut values = vec![self.parse_value()?];
-        while self.consume(TokenKind::Comma) { values.push(self.parse_value()?); }
+        while self.consume(TokenKind::Comma) {
+            values.push(self.parse_value()?);
+        }
         Ok(values)
     }
 
@@ -576,7 +731,10 @@ impl Parser {
     }
 
     fn try_parse_value(&mut self) -> Result<Value, ParseError> {
-        let token = self.peek().ok_or_else(|| self.error_here("expected value"))?.clone();
+        let token = self
+            .peek()
+            .ok_or_else(|| self.error_here("expected value"))?
+            .clone();
         match &token.kind {
             TokenKind::String(_) => {}
             TokenKind::Ident(v) if v == "true" || v == "false" => {}
@@ -597,7 +755,9 @@ impl Parser {
     }
 
     fn parse_value(&mut self) -> Result<Value, ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here("expected value"))?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here("expected value"))?;
         match token.kind {
             TokenKind::String(value) => Ok(Value::String(value)),
             TokenKind::Ident(value) if value == "true" => Ok(Value::Boolean(true)),
@@ -611,40 +771,65 @@ impl Parser {
     }
 
     fn expect_duration(&mut self) -> Result<Duration, ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here("expected duration such as `5m`"))?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here("expected duration such as `5m`"))?;
         match token.kind {
             TokenKind::Duration(d) => Ok(d),
-            _ => Err(ParseError::new(token.column, "expected duration such as `5m`")),
+            _ => Err(ParseError::new(
+                token.column,
+                "expected duration such as `5m`",
+            )),
         }
     }
 
     fn expect_u64(&mut self, context: &str) -> Result<u64, ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here(format!("expected integer for {context}")))?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here(format!("expected integer for {context}")))?;
         match token.kind {
             TokenKind::Integer(n) if n >= 0 => Ok(n as u64),
-            TokenKind::Integer(_) => Err(ParseError::new(token.column, format!("{context} must be non-negative"))),
-            _ => Err(ParseError::new(token.column, format!("expected integer for {context}"))),
+            TokenKind::Integer(_) => Err(ParseError::new(
+                token.column,
+                format!("{context} must be non-negative"),
+            )),
+            _ => Err(ParseError::new(
+                token.column,
+                format!("expected integer for {context}"),
+            )),
         }
     }
 
     fn expect_string(&mut self, context: &str) -> Result<String, ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here(format!("expected string for {context}")))?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here(format!("expected string for {context}")))?;
         match token.kind {
             TokenKind::String(s) => Ok(s),
-            _ => Err(ParseError::new(token.column, format!("expected a quoted string for {context}"))),
+            _ => Err(ParseError::new(
+                token.column,
+                format!("expected a quoted string for {context}"),
+            )),
         }
     }
 
     fn expect_timestamp_string(&mut self) -> Result<String, ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here("expected timestamp string"))?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here("expected timestamp string"))?;
         match token.kind {
             TokenKind::String(s) => Ok(s),
-            _ => Err(ParseError::new(token.column, "expected a quoted timestamp string"))?,
+            _ => Err(ParseError::new(
+                token.column,
+                "expected a quoted timestamp string",
+            ))?,
         }
     }
 
     fn expect_identifier_like(&mut self, context: &str) -> Result<String, ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here(format!("expected {context}")))?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here(format!("expected {context}")))?;
         match token.kind {
             TokenKind::Ident(s) => Ok(s),
             TokenKind::String(s) => Ok(s),
@@ -653,37 +838,59 @@ impl Parser {
     }
 
     fn expect_ident(&mut self, expected: &str) -> Result<(), ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here(format!("expected `{expected}`")))?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here(format!("expected `{expected}`")))?;
         match &token.kind {
             TokenKind::Ident(value) if value == expected => Ok(()),
-            _ => Err(ParseError::new(token.column, format!("expected `{expected}`"))),
+            _ => Err(ParseError::new(
+                token.column,
+                format!("expected `{expected}`"),
+            )),
         }
     }
 
     fn expect(&mut self, kind: TokenKind, description: &str) -> Result<(), ParseError> {
-        let token = self.advance().ok_or_else(|| self.error_here(format!("expected {description}")))?;
-        if token.kind == kind { Ok(()) }
-        else { Err(ParseError::new(token.column, format!("expected {description}"))) }
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here(format!("expected {description}")))?;
+        if token.kind == kind {
+            Ok(())
+        } else {
+            Err(ParseError::new(
+                token.column,
+                format!("expected {description}"),
+            ))
+        }
     }
 
     fn expect_eof(&mut self) -> Result<(), ParseError> {
         if self.peek().is_some() {
             let token = self.peek().unwrap();
-            return Err(ParseError::new(token.column, format!("unexpected token `{:?}`", token.kind)));
+            return Err(ParseError::new(
+                token.column,
+                format!("unexpected token `{:?}`", token.kind),
+            ));
         }
         Ok(())
     }
 
     fn consume_ident(&mut self, expected: &str) -> bool {
         match self.peek().map(|t| &t.kind) {
-            Some(TokenKind::Ident(v)) if v == expected => { self.advance(); true }
+            Some(TokenKind::Ident(v)) if v == expected => {
+                self.advance();
+                true
+            }
             _ => false,
         }
     }
 
     fn consume(&mut self, kind: TokenKind) -> bool {
         match self.peek().map(|t| &t.kind) {
-            Some(k) if *k == kind => { self.advance(); true }
+            Some(k) if *k == kind => {
+                self.advance();
+                true
+            }
             _ => false,
         }
     }
@@ -701,10 +908,15 @@ impl Parser {
         }
     }
 
-    fn peek(&self) -> Option<&Token> { self.tokens.get(self.cursor) }
+    fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.cursor)
+    }
 
     fn peek_ident(&self) -> Option<&str> {
-        match self.peek()?.kind { TokenKind::Ident(ref s) => Some(s.as_str()), _ => None }
+        match self.peek()?.kind {
+            TokenKind::Ident(ref s) => Some(s.as_str()),
+            _ => None,
+        }
     }
 
     fn advance(&mut self) -> Option<Token> {
@@ -729,24 +941,85 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
     while i < chars.len() {
         let col = i + 1;
 
-        if chars[i].is_whitespace() { i += 1; continue; }
+        if chars[i].is_whitespace() {
+            i += 1;
+            continue;
+        }
 
         // Comment
         if chars[i] == '#' {
-            while i < chars.len() && chars[i] != '\n' { i += 1; }
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
             continue;
         }
 
         // Single-char tokens
         match chars[i] {
-            '|' => { tokens.push(Token { kind: TokenKind::Pipe, column: col }); i += 1; continue; }
-            ',' => { tokens.push(Token { kind: TokenKind::Comma, column: col }); i += 1; continue; }
-            '(' => { tokens.push(Token { kind: TokenKind::LParen, column: col }); i += 1; continue; }
-            ')' => { tokens.push(Token { kind: TokenKind::RParen, column: col }); i += 1; continue; }
-            '+' => { tokens.push(Token { kind: TokenKind::Plus, column: col }); i += 1; continue; }
-            '*' => { tokens.push(Token { kind: TokenKind::Star, column: col }); i += 1; continue; }
-            '/' => { tokens.push(Token { kind: TokenKind::Slash, column: col }); i += 1; continue; }
-            '%' => { tokens.push(Token { kind: TokenKind::Percent, column: col }); i += 1; continue; }
+            '|' => {
+                tokens.push(Token {
+                    kind: TokenKind::Pipe,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
+            ',' => {
+                tokens.push(Token {
+                    kind: TokenKind::Comma,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
+            '(' => {
+                tokens.push(Token {
+                    kind: TokenKind::LParen,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
+            ')' => {
+                tokens.push(Token {
+                    kind: TokenKind::RParen,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
+            '+' => {
+                tokens.push(Token {
+                    kind: TokenKind::Plus,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
+            '*' => {
+                tokens.push(Token {
+                    kind: TokenKind::Star,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
+            '/' => {
+                tokens.push(Token {
+                    kind: TokenKind::Slash,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
+            '%' => {
+                tokens.push(Token {
+                    kind: TokenKind::Percent,
+                    column: col,
+                });
+                i += 1;
+                continue;
+            }
             _ => {}
         }
 
@@ -763,40 +1036,63 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
                         '\\' => s.push('\\'),
                         'n' => s.push('\n'),
                         't' => s.push('\t'),
-                        c => { s.push('\\'); s.push(c); }
+                        c => {
+                            s.push('\\');
+                            s.push(c);
+                        }
                     }
                 } else {
                     s.push(chars[i]);
                 }
                 i += 1;
             }
-            if i >= chars.len() { return Err(ParseError::new(start + 1, "unterminated string")); }
+            if i >= chars.len() {
+                return Err(ParseError::new(start + 1, "unterminated string"));
+            }
             i += 1; // closing "
-            tokens.push(Token { kind: TokenKind::String(s), column: col });
+            tokens.push(Token {
+                kind: TokenKind::String(s),
+                column: col,
+            });
             continue;
         }
 
         // Numbers, percentages, durations, identifiers
-        if chars[i].is_ascii_digit() || chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+        if chars[i].is_ascii_digit()
+            || chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()
+        {
             let start = i;
-            if chars[i] == '-' { i += 1; }
-            while i < chars.len() && chars[i].is_ascii_digit() { i += 1; }
+            if chars[i] == '-' {
+                i += 1;
+            }
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
             let mut is_float = false;
             if i < chars.len() && chars[i] == '.' {
                 is_float = true;
                 i += 1;
-                while i < chars.len() && chars[i].is_ascii_digit() { i += 1; }
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
             }
             let num_str: &str = &source[start..i];
 
             if i < chars.len() && chars[i] == '%' {
                 i += 1;
-                let val: f64 = num_str.parse().map_err(|_| ParseError::new(col, "invalid percentage"))?;
-                tokens.push(Token { kind: TokenKind::Percentage(val), column: col });
+                let val: f64 = num_str
+                    .parse()
+                    .map_err(|_| ParseError::new(col, "invalid percentage"))?;
+                tokens.push(Token {
+                    kind: TokenKind::Percentage(val),
+                    column: col,
+                });
             } else if i < chars.len() && matches!(chars[i], 's' | 'm' | 'h' | 'd') {
                 let unit_char = chars[i];
                 i += 1;
-                let val: u64 = num_str.parse().map_err(|_| ParseError::new(col, "invalid duration"))?;
+                let val: u64 = num_str
+                    .parse()
+                    .map_err(|_| ParseError::new(col, "invalid duration"))?;
                 let unit = match unit_char {
                     's' => DurationUnit::Seconds,
                     'm' => DurationUnit::Minutes,
@@ -804,49 +1100,120 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
                     'd' => DurationUnit::Days,
                     _ => unreachable!(),
                 };
-                tokens.push(Token { kind: TokenKind::Duration(Duration { value: val, unit }), column: col });
+                tokens.push(Token {
+                    kind: TokenKind::Duration(Duration { value: val, unit }),
+                    column: col,
+                });
             } else if is_float {
-                let val: f64 = num_str.parse().map_err(|_| ParseError::new(col, "invalid float"))?;
-                tokens.push(Token { kind: TokenKind::Float(val), column: col });
+                let val: f64 = num_str
+                    .parse()
+                    .map_err(|_| ParseError::new(col, "invalid float"))?;
+                tokens.push(Token {
+                    kind: TokenKind::Float(val),
+                    column: col,
+                });
             } else {
-                let val: i64 = num_str.parse().map_err(|_| ParseError::new(col, "invalid integer"))?;
-                tokens.push(Token { kind: TokenKind::Integer(val), column: col });
+                let val: i64 = num_str
+                    .parse()
+                    .map_err(|_| ParseError::new(col, "invalid integer"))?;
+                tokens.push(Token {
+                    kind: TokenKind::Integer(val),
+                    column: col,
+                });
             }
             continue;
         }
 
         // Multi-char operators: >= <= !=
         if chars[i] == '>' && i + 1 < chars.len() && chars[i + 1] == '=' {
-            tokens.push(Token { kind: TokenKind::Gte, column: col }); i += 2; continue;
+            tokens.push(Token {
+                kind: TokenKind::Gte,
+                column: col,
+            });
+            i += 2;
+            continue;
         }
         if chars[i] == '<' && i + 1 < chars.len() && chars[i + 1] == '=' {
-            tokens.push(Token { kind: TokenKind::Lte, column: col }); i += 2; continue;
+            tokens.push(Token {
+                kind: TokenKind::Lte,
+                column: col,
+            });
+            i += 2;
+            continue;
         }
         if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '=' {
-            tokens.push(Token { kind: TokenKind::NotEq, column: col }); i += 2; continue;
+            tokens.push(Token {
+                kind: TokenKind::NotEq,
+                column: col,
+            });
+            i += 2;
+            continue;
         }
         if chars[i] == '=' {
-            tokens.push(Token { kind: TokenKind::Eq, column: col }); i += 1; continue;
+            tokens.push(Token {
+                kind: TokenKind::Eq,
+                column: col,
+            });
+            i += 1;
+            continue;
         }
         if chars[i] == '>' {
-            tokens.push(Token { kind: TokenKind::Gt, column: col }); i += 1; continue;
+            tokens.push(Token {
+                kind: TokenKind::Gt,
+                column: col,
+            });
+            i += 1;
+            continue;
         }
         if chars[i] == '<' {
-            tokens.push(Token { kind: TokenKind::Lt, column: col }); i += 1; continue;
+            tokens.push(Token {
+                kind: TokenKind::Lt,
+                column: col,
+            });
+            i += 1;
+            continue;
         }
         if chars[i] == '-' && i + 1 < chars.len() && chars[i + 1] == '>' {
-            tokens.push(Token { kind: TokenKind::Pipe, column: col }); i += 2; continue;
-        }
-
-        // Identifier
-        if chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '.' || chars[i] == ':' || chars[i] == '@' || chars[i] == '/' || chars[i] == '-' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '.' || chars[i] == ':' || chars[i] == '@' || chars[i] == '/' || chars[i] == '-') { i += 1; }
-            tokens.push(Token { kind: TokenKind::Ident(source[start..i].to_owned()), column: col });
+            tokens.push(Token {
+                kind: TokenKind::Pipe,
+                column: col,
+            });
+            i += 2;
             continue;
         }
 
-        return Err(ParseError::new(col, format!("unexpected character `{}`", chars[i])));
+        // Identifier
+        if chars[i].is_ascii_alphanumeric()
+            || chars[i] == '_'
+            || chars[i] == '.'
+            || chars[i] == ':'
+            || chars[i] == '@'
+            || chars[i] == '/'
+            || chars[i] == '-'
+        {
+            let start = i;
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric()
+                    || chars[i] == '_'
+                    || chars[i] == '.'
+                    || chars[i] == ':'
+                    || chars[i] == '@'
+                    || chars[i] == '/'
+                    || chars[i] == '-')
+            {
+                i += 1;
+            }
+            tokens.push(Token {
+                kind: TokenKind::Ident(source[start..i].to_owned()),
+                column: col,
+            });
+            continue;
+        }
+
+        return Err(ParseError::new(
+            col,
+            format!("unexpected character `{}`", chars[i]),
+        ));
     }
 
     Ok(tokens)
@@ -862,7 +1229,9 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
 mod tests {
     use super::*;
 
-    fn parse_one(query: &str) -> ParsedQuery { parse(query).unwrap() }
+    fn parse_one(query: &str) -> ParsedQuery {
+        parse(query).unwrap()
+    }
 
     #[test]
     fn parses_observe_containers() {
@@ -881,14 +1250,19 @@ mod tests {
 
     #[test]
     fn parses_pipe_query() {
-        let q = parse_one("observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc | limit 10");
+        let q = parse_one(
+            "observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc | limit 10",
+        );
         assert!(matches!(q.query, Query::Observe(_)));
     }
 
     #[test]
     fn parses_fields_containers() {
         let q = parse_one("fields containers");
-        assert!(matches!(q.query, Query::Fields(CollectionTarget::Containers)));
+        assert!(matches!(
+            q.query,
+            Query::Fields(CollectionTarget::Containers)
+        ));
     }
 
     #[test]
@@ -927,13 +1301,18 @@ mod tests {
         if let Query::Observe(ref o) = q.query {
             assert!(matches!(o.pipeline[0], PipelineNode::SortBy { .. }));
             assert!(matches!(o.pipeline[1], PipelineNode::Limit(5)));
-        } else { panic!("expected Observe"); }
+        } else {
+            panic!("expected Observe");
+        }
     }
 
     #[test]
     fn parses_boolean_precedence() {
-        let q = parse_one("observe containers where status = running and (cpu > 80% or memory > 90%)");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let q =
+            parse_one("observe containers where status = running and (cpu > 80% or memory > 90%)");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         let filter = o.filter.as_ref().expect("expected filter");
         assert!(matches!(filter, Expression::And(_, _)));
     }
@@ -941,39 +1320,49 @@ mod tests {
     #[test]
     fn parses_inline_where_expression() {
         let q = parse_one("observe containers where status = running and cpu > 80%");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.filter, Some(Expression::And(_, _))));
     }
 
     #[test]
     fn parses_if_then_pipeline() {
         let q = parse_one(r#"observe containers | if cpu > 90% then alert "Critical CPU""#);
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[0], PipelineNode::If { .. }));
     }
 
     #[test]
     fn parses_if_then_else_if() {
         let q = parse_one(
-            r#"observe containers | if cpu > 90% then alert "Critical" else if cpu > 70% then alert "Warning""#
+            r#"observe containers | if cpu > 90% then alert "Critical" else if cpu > 70% then alert "Warning""#,
         );
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[0], PipelineNode::If { .. }));
     }
 
     #[test]
     fn parses_set_literal() {
         let q = parse_one(r#"observe containers | set tier = "prod""#);
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[0], PipelineNode::Set { .. }));
     }
 
     #[test]
     fn parses_set_case_when() {
         let q = parse_one(
-            r#"observe containers | set severity = case when cpu > 80% then "critical" else "ok" end"#
+            r#"observe containers | set severity = case when cpu > 80% then "critical" else "ok" end"#,
         );
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Set { value, .. } => assert!(matches!(value, SetValue::Case { .. })),
             _ => panic!("expected Set with Case"),
@@ -982,8 +1371,12 @@ mod tests {
 
     #[test]
     fn parses_set_if_else() {
-        let q = parse_one(r#"observe containers | set health = if state = running then "up" else "down""#);
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let q = parse_one(
+            r#"observe containers | set health = if state = running then "up" else "down""#,
+        );
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Set { value, .. } => assert!(matches!(value, SetValue::IfElse { .. })),
             _ => panic!("expected Set with IfElse"),
@@ -993,8 +1386,13 @@ mod tests {
     #[test]
     fn parses_in_operator() {
         let q = parse_one(r#"observe containers | where image in ("nginx", "redis")"#);
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
-        assert!(matches!(o.pipeline[0], PipelineNode::Where(Expression::In { .. })));
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        assert!(matches!(
+            o.pipeline[0],
+            PipelineNode::Where(Expression::In { .. })
+        ));
     }
 
     #[test]
@@ -1013,11 +1411,18 @@ mod tests {
     fn all_example_files_parse() {
         use std::path::Path;
         let examples_dir = Path::new("examples");
-        if !examples_dir.exists() { return; }
+        if !examples_dir.exists() {
+            return;
+        }
         let mut count = 0;
         for entry in std::fs::read_dir(examples_dir).unwrap() {
             let entry = entry.unwrap();
-            if entry.path().extension().map(|e| e == "dol").unwrap_or(false) {
+            if entry
+                .path()
+                .extension()
+                .map(|e| e == "dol")
+                .unwrap_or(false)
+            {
                 let content = std::fs::read_to_string(entry.path()).unwrap();
                 let result = parse(&content);
                 if let Err(ref e) = result {
@@ -1034,10 +1439,15 @@ mod tests {
     #[test]
     fn parses_arithmetic_expression() {
         let q = parse_one(r#"observe containers | set mem_gb = memory / 1073741824"#);
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Set { value, .. } => {
-                assert!(matches!(value, SetValue::Expr(Expression::Arithmetic { op: BinOp::Div, .. })));
+                assert!(matches!(
+                    value,
+                    SetValue::Expr(Expression::Arithmetic { op: BinOp::Div, .. })
+                ));
             }
             _ => panic!("expected Set with Expr"),
         }
@@ -1046,7 +1456,9 @@ mod tests {
     #[test]
     fn parses_between() {
         let q = parse_one("observe containers where cpu between 50 and 80");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         let filter = o.filter.as_ref().expect("expected filter");
         assert!(matches!(filter, Expression::Between { .. }));
     }
@@ -1054,7 +1466,9 @@ mod tests {
     #[test]
     fn parses_is_null() {
         let q = parse_one("observe containers where finished_at is null");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         let filter = o.filter.as_ref().expect("expected filter");
         assert!(matches!(filter, Expression::IsNull(_)));
     }
@@ -1062,7 +1476,9 @@ mod tests {
     #[test]
     fn parses_is_not_null() {
         let q = parse_one("observe containers where finished_at is not null");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         let filter = o.filter.as_ref().expect("expected filter");
         assert!(matches!(filter, Expression::IsNotNull(_)));
     }
@@ -1070,10 +1486,14 @@ mod tests {
     #[test]
     fn parses_function_call() {
         let q = parse_one("observe containers | where upper(name) contains \"API\"");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Where(Expression::Comparison { left, .. }) => {
-                assert!(matches!(left.as_ref(), Expression::FnCall { name, .. } if name == "upper"));
+                assert!(
+                    matches!(left.as_ref(), Expression::FnCall { name, .. } if name == "upper")
+                );
             }
             _ => panic!("expected FnCall comparison"),
         }
@@ -1082,7 +1502,9 @@ mod tests {
     #[test]
     fn parses_multi_field_sort() {
         let q = parse_one("observe containers | sort by state desc, cpu desc");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::SortBy { fields } => {
                 assert_eq!(fields.len(), 2);
@@ -1097,21 +1519,28 @@ mod tests {
     #[test]
     fn parses_distinct() {
         let q = parse_one("observe containers | distinct | select image");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[0], PipelineNode::Distinct));
     }
 
     #[test]
     fn parses_offset() {
         let q = parse_one("observe containers | sort by name asc | offset 10 | limit 5");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[1], PipelineNode::Offset(10)));
     }
 
     #[test]
     fn parses_having() {
-        let q = parse_one("observe containers | group by image with count(id) as cnt | having cnt > 3");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let q =
+            parse_one("observe containers | group by image with count(id) as cnt | having cnt > 3");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[1], PipelineNode::Having(_)));
     }
 }

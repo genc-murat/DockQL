@@ -231,10 +231,7 @@ where
 // ── Detectors ──────────────────────────────────────────────────────────────
 
 /// Detect restart loops: containers with restart_count >= threshold.
-pub fn detect_restart_loops(
-    containers: &[Container],
-    threshold: u64,
-) -> Vec<Anomaly> {
+pub fn detect_restart_loops(containers: &[Container], threshold: u64) -> Vec<Anomaly> {
     containers
         .iter()
         .filter_map(|c| {
@@ -368,10 +365,7 @@ pub fn detect_memory_pressure(
 }
 
 /// Detect deployment-related error spikes from historical events.
-pub fn detect_deployment_errors(
-    events: &[DockerEvent],
-    threshold: u64,
-) -> Vec<Anomaly> {
+pub fn detect_deployment_errors(events: &[DockerEvent], threshold: u64) -> Vec<Anomaly> {
     // Count "die" events per container.
     let mut die_counts: HashMap<String, u64> = HashMap::new();
     let mut die_times: HashMap<String, Vec<String>> = HashMap::new();
@@ -408,10 +402,7 @@ pub fn detect_deployment_errors(
                     "Container '{}' has died {} times (threshold: {})",
                     container, count, threshold
                 ),
-                evidence: times
-                    .into_iter()
-                    .map(|t| format!("die_at={}", t))
-                    .collect(),
+                evidence: times.into_iter().map(|t| format!("die_at={}", t)).collect(),
             }
         })
         .collect()
@@ -462,7 +453,10 @@ where
     let samples = metrics.collect()?;
 
     let mut anomalies = Vec::new();
-    anomalies.extend(detect_restart_loops(&containers, thresholds.restart_loop_count));
+    anomalies.extend(detect_restart_loops(
+        &containers,
+        thresholds.restart_loop_count,
+    ));
     anomalies.extend(detect_high_cpu(
         &samples,
         thresholds.high_cpu_percent,
@@ -484,10 +478,7 @@ where
                 fields: BTreeMap::from([
                     ("severity".to_owned(), JsonValue::String("info".to_owned())),
                     ("kind".to_owned(), JsonValue::String("healthy".to_owned())),
-                    (
-                        "container".to_owned(),
-                        JsonValue::String("*".to_owned()),
-                    ),
+                    ("container".to_owned(), JsonValue::String("*".to_owned())),
                     (
                         "message".to_owned(),
                         JsonValue::String("No anomalies detected".to_owned()),
@@ -538,10 +529,7 @@ where
                 fields: BTreeMap::from([
                     ("severity".to_owned(), JsonValue::String("info".to_owned())),
                     ("kind".to_owned(), JsonValue::String("healthy".to_owned())),
-                    (
-                        "container".to_owned(),
-                        JsonValue::String("*".to_owned()),
-                    ),
+                    ("container".to_owned(), JsonValue::String("*".to_owned())),
                     (
                         "message".to_owned(),
                         JsonValue::String("No anomalies detected in stored data".to_owned()),
@@ -592,10 +580,7 @@ where
                     (
                         "containers".to_owned(),
                         JsonValue::Array(
-                            names
-                                .iter()
-                                .map(|n| JsonValue::String(n.clone()))
-                                .collect(),
+                            names.iter().map(|n| JsonValue::String(n.clone())).collect(),
                         ),
                     ),
                     (
@@ -630,10 +615,7 @@ where
                     (
                         "containers".to_owned(),
                         JsonValue::Array(
-                            names
-                                .iter()
-                                .map(|n| JsonValue::String(n.clone()))
-                                .collect(),
+                            names.iter().map(|n| JsonValue::String(n.clone())).collect(),
                         ),
                     ),
                     (
@@ -722,7 +704,10 @@ where
                 ("signal".to_owned(), JsonValue::String("none".to_owned())),
                 ("value".to_owned(), JsonValue::String("-".to_owned())),
                 ("status".to_owned(), JsonValue::String("normal".to_owned())),
-                ("anomaly_count".to_owned(), JsonValue::Number(Number::from(0))),
+                (
+                    "anomaly_count".to_owned(),
+                    JsonValue::Number(Number::from(0)),
+                ),
             ]),
         });
     }
@@ -867,14 +852,8 @@ fn explanation_to_result(explanation: &ContainerExplanation) -> ExecutionResult 
                     "state".to_owned(),
                     JsonValue::String(explanation.state.clone()),
                 ),
-                (
-                    "signal".to_owned(),
-                    JsonValue::String(signal.name.clone()),
-                ),
-                (
-                    "value".to_owned(),
-                    JsonValue::String(signal.value.clone()),
-                ),
+                ("signal".to_owned(), JsonValue::String(signal.name.clone())),
+                ("value".to_owned(), JsonValue::String(signal.value.clone())),
                 (
                     "status".to_owned(),
                     JsonValue::String(signal.status.to_string()),
@@ -1134,7 +1113,12 @@ mod tests {
         let kinds: Vec<String> = result
             .rows
             .iter()
-            .filter_map(|r| r.fields.get("kind").and_then(|v| v.as_str()).map(str::to_owned))
+            .filter_map(|r| {
+                r.fields
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
             .collect();
         assert!(kinds.contains(&"restart_loop".to_owned()));
         assert!(kinds.contains(&"high_cpu".to_owned()));
@@ -1196,7 +1180,12 @@ mod tests {
         let signal_names: Vec<String> = result
             .rows
             .iter()
-            .filter_map(|r| r.fields.get("signal").and_then(|v| v.as_str()).map(str::to_owned))
+            .filter_map(|r| {
+                r.fields
+                    .get("signal")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
             .collect();
         assert!(signal_names.contains(&"state".to_owned()));
         assert!(signal_names.contains(&"cpu".to_owned()));
@@ -1252,9 +1241,15 @@ mod tests {
     fn find_anomalies_from_store_detects_deployment_errors() {
         let mut store = crate::storage::InMemoryTelemetryStore::default();
 
-        store.write_event(test_event("2026-01-01T12:00:00Z", "die", "api")).unwrap();
-        store.write_event(test_event("2026-01-01T12:01:00Z", "die", "api")).unwrap();
-        store.write_event(test_event("2026-01-01T12:02:00Z", "die", "api")).unwrap();
+        store
+            .write_event(test_event("2026-01-01T12:00:00Z", "die", "api"))
+            .unwrap();
+        store
+            .write_event(test_event("2026-01-01T12:01:00Z", "die", "api"))
+            .unwrap();
+        store
+            .write_event(test_event("2026-01-01T12:02:00Z", "die", "api"))
+            .unwrap();
 
         let query = AnalyzeQuery {
             target: AnalysisTarget::Collection(CollectionTarget::Containers),
@@ -1269,7 +1264,12 @@ mod tests {
         let kinds: Vec<String> = result
             .rows
             .iter()
-            .filter_map(|r| r.fields.get("kind").and_then(|v| v.as_str()).map(str::to_owned))
+            .filter_map(|r| {
+                r.fields
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
             .collect();
         assert!(kinds.contains(&"deployment_errors".to_owned()));
     }

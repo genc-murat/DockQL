@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::ast::{
-    AnalyzeQuery, AlertRule, CollectionTarget, EventsQuery, InspectQuery, ObserveQuery,
+    AlertRule, AnalyzeQuery, CollectionTarget, EventsQuery, InspectQuery, ObserveQuery,
     PipelineNode, Query, SortDirection,
 };
 
@@ -56,7 +56,10 @@ pub enum PlanStep {
     },
     Select(Vec<String>),
     GroupBy(Vec<String>),
-    SortBy { field: String, direction: SortDirection },
+    SortBy {
+        field: String,
+        direction: SortDirection,
+    },
     Limit(u64),
     Alert(String),
     If {
@@ -104,7 +107,11 @@ impl fmt::Display for LogicalPlan {
                 writeln!(f, " }}")
             }
             LogicalPlan::Analyze(p) => {
-                writeln!(f, "AnalyzePlan {{ verb: {:?}, subject: {:?} }}", p.verb, p.subject)?;
+                writeln!(
+                    f,
+                    "AnalyzePlan {{ verb: {:?}, subject: {:?} }}",
+                    p.verb, p.subject
+                )?;
                 for step in &p.steps {
                     writeln!(f, "  {step}")?;
                 }
@@ -136,17 +143,25 @@ impl fmt::Display for PlanStep {
             PlanStep::SortBy { field, direction } => write!(f, "SortBy({field}, {direction:?})"),
             PlanStep::Limit(n) => write!(f, "Limit({n})"),
             PlanStep::Alert(msg) => write!(f, "Alert(\"{msg}\")"),
-            PlanStep::If { condition, then_branch, else_branch } => {
+            PlanStep::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 write!(f, "If({condition:?}, then=[")?;
                 for (i, step) in then_branch.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{step}")?;
                 }
                 write!(f, "]")?;
                 if let Some(else_b) = else_branch {
                     write!(f, ", else=[")?;
                     for (i, step) in else_b.iter().enumerate() {
-                        if i > 0 { write!(f, ", ")?; }
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "{step}")?;
                     }
                     write!(f, "]")?;
@@ -229,12 +244,18 @@ fn plan_analyze(query: &AnalyzeQuery) -> Result<LogicalPlan, PlanError> {
 fn node_to_step(node: &PipelineNode) -> PlanStep {
     match node {
         PipelineNode::Where(expr) => match expr {
-            crate::ast::Expression::In { expr: inner_expr, values } => {
+            crate::ast::Expression::In {
+                expr: inner_expr,
+                values,
+            } => {
                 let field = match inner_expr.as_ref() {
                     crate::ast::Expression::Field(f) => f.clone(),
                     _ => return PlanStep::Filter(expr.clone()),
                 };
-                PlanStep::In { field, values: values.clone() }
+                PlanStep::In {
+                    field,
+                    values: values.clone(),
+                }
             }
             other => PlanStep::Filter(other.clone()),
         },
@@ -248,7 +269,10 @@ fn node_to_step(node: &PipelineNode) -> PlanStep {
                     direction: *direction,
                 }
             } else {
-                PlanStep::SortBy { field: String::new(), direction: SortDirection::Asc }
+                PlanStep::SortBy {
+                    field: String::new(),
+                    direction: SortDirection::Asc,
+                }
             }
         }
         PipelineNode::Limit(n) => PlanStep::Limit(*n),
@@ -278,7 +302,9 @@ fn optimize_steps(steps: &mut Vec<PlanStep>) {
     push_filters_early(steps);
 }
 fn push_filters_early(steps: &mut Vec<PlanStep>) {
-    let first_sort = steps.iter().position(|s| matches!(s, PlanStep::SortBy { .. }));
+    let first_sort = steps
+        .iter()
+        .position(|s| matches!(s, PlanStep::SortBy { .. }));
     let first_limit = steps.iter().position(|s| matches!(s, PlanStep::Limit(_)));
 
     let barrier = match (first_sort, first_limit) {
@@ -296,7 +322,11 @@ fn push_filters_early(steps: &mut Vec<PlanStep>) {
         return;
     }
 
-    let filters: Vec<PlanStep> = filter_indices.iter().rev().map(|&i| steps.remove(i)).collect();
+    let filters: Vec<PlanStep> = filter_indices
+        .iter()
+        .rev()
+        .map(|&i| steps.remove(i))
+        .collect();
     for (offset, filter) in filters.into_iter().enumerate() {
         steps.insert(1 + offset, filter);
     }
@@ -310,7 +340,10 @@ mod tests {
 
     #[test]
     fn plans_observe_query() {
-        let Query::Observe(q) = parser::parse("observe containers where state = running").unwrap().query else {
+        let Query::Observe(q) = parser::parse("observe containers where state = running")
+            .unwrap()
+            .query
+        else {
             panic!("expected observe");
         };
         let p = plan_observe(&q).unwrap();
@@ -324,7 +357,10 @@ mod tests {
 
     #[test]
     fn plans_events_query() {
-        let Query::Events(q) = parser::parse("events containers where action = \"die\"").unwrap().query else {
+        let Query::Events(q) = parser::parse("events containers where action = \"die\"")
+            .unwrap()
+            .query
+        else {
             panic!("expected events");
         };
         let p = plan_events(&q).unwrap();
@@ -335,7 +371,10 @@ mod tests {
 
     #[test]
     fn plans_inspect_query() {
-        let Query::Inspect(q) = parser::parse("inspect container api at \"2026-05-31T02:00:00Z\"").unwrap().query else {
+        let Query::Inspect(q) = parser::parse("inspect container api at \"2026-05-31T02:00:00Z\"")
+            .unwrap()
+            .query
+        else {
             panic!("expected inspect");
         };
         let p = plan_inspect(&q).unwrap();
@@ -346,7 +385,11 @@ mod tests {
 
     #[test]
     fn plans_alert_rule() {
-        let Query::Alert(rule) = parser::parse("alert when cpu > 85% for 2m then print \"High CPU\"").unwrap().query else {
+        let Query::Alert(rule) =
+            parser::parse("alert when cpu > 85% for 2m then print \"High CPU\"")
+                .unwrap()
+                .query
+        else {
             panic!("expected alert");
         };
         let p = plan(&Query::Alert(rule)).unwrap();
@@ -365,7 +408,9 @@ mod tests {
             PlanStep::Filter(crate::ast::Expression::Comparison {
                 left: Box::new(crate::ast::Expression::Field("state".into())),
                 operator: crate::ast::Operator::Eq,
-                right: Box::new(crate::ast::Expression::Literal(crate::ast::Value::String("running".into()))),
+                right: Box::new(crate::ast::Expression::Literal(crate::ast::Value::String(
+                    "running".into(),
+                ))),
             }),
         ];
         push_filters_early(&mut steps);

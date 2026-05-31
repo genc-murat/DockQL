@@ -1,8 +1,6 @@
-use std::collections::BTreeMap;
-use crate::ast::{
-    CollectionTarget, Expression, PipelineNode, Query, SetValue, Value
-};
+use crate::ast::{CollectionTarget, Expression, PipelineNode, Query, SetValue, Value};
 use crate::eval::EvalError;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
@@ -18,7 +16,10 @@ pub enum Type {
 
 impl Type {
     pub fn is_numeric(&self) -> bool {
-        matches!(self, Type::Integer | Type::Float | Type::Percentage | Type::Duration)
+        matches!(
+            self,
+            Type::Integer | Type::Float | Type::Percentage | Type::Duration
+        )
     }
 
     pub fn is_compatible(&self, other: &Type) -> bool {
@@ -94,7 +95,10 @@ impl SemanticAnalyzer {
             active_schema.insert(field.to_owned(), ty);
         }
 
-        Self { active_schema, target }
+        Self {
+            active_schema,
+            target,
+        }
     }
 
     pub fn validate_query(&mut self, query: &Query) -> Result<(), EvalError> {
@@ -176,7 +180,11 @@ impl SemanticAnalyzer {
                     Ok(Type::Integer)
                 }
             }
-            Expression::Comparison { left, operator, right } => {
+            Expression::Comparison {
+                left,
+                operator,
+                right,
+            } => {
                 let lt = self.infer_expr_type(left)?;
                 let rt = self.infer_expr_type(right)?;
                 if !lt.is_compatible(&rt) {
@@ -245,9 +253,7 @@ impl SemanticAnalyzer {
                             Ok(Type::String)
                         }
                     }
-                    _ => Err(EvalError::UnknownFunction {
-                        name: name.clone(),
-                    }),
+                    _ => Err(EvalError::UnknownFunction { name: name.clone() }),
                 }
             }
         }
@@ -339,16 +345,21 @@ impl SemanticAnalyzer {
                         Value::Percentage(_) => Type::Percentage,
                         Value::Boolean(_) => Type::Boolean,
                     },
-                    SetValue::Expr(expr) => {
-                        self.infer_expr_type(expr)?
-                    }
-                    SetValue::Case { when_clauses, else_value: _ } => {
+                    SetValue::Expr(expr) => self.infer_expr_type(expr)?,
+                    SetValue::Case {
+                        when_clauses,
+                        else_value: _,
+                    } => {
                         for (cond, _val) in when_clauses {
                             self.validate_expression(cond)?;
                         }
                         Type::Unknown
                     }
-                    SetValue::IfElse { condition, then_value: _, else_value: _ } => {
+                    SetValue::IfElse {
+                        condition,
+                        then_value: _,
+                        else_value: _,
+                    } => {
                         self.validate_expression(condition)?;
                         Type::Unknown
                     }
@@ -404,7 +415,8 @@ mod tests {
 
     #[test]
     fn test_valid_query() {
-        let parsed = parser::parse("observe containers | where cpu > 50% | select name, cpu").unwrap();
+        let parsed =
+            parser::parse("observe containers | where cpu > 50% | select name, cpu").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -432,28 +444,34 @@ mod tests {
 
     #[test]
     fn test_unknown_function() {
-        let parsed = parser::parse("observe containers | where invalid_fn(name) = \"test\"").unwrap();
+        let parsed =
+            parser::parse("observe containers | where invalid_fn(name) = \"test\"").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::UnknownFunction { .. })));
     }
 
     #[test]
     fn test_set_field_inheritance() {
-        let parsed = parser::parse("observe containers | set tier = \"prod\" | select name, tier").unwrap();
+        let parsed =
+            parser::parse("observe containers | set tier = \"prod\" | select name, tier").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
 
     #[test]
     fn test_label_lookup() {
-        let parsed = parser::parse("observe containers | where label.env = \"production\"").unwrap();
+        let parsed =
+            parser::parse("observe containers | where label.env = \"production\"").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
 
     #[test]
     fn test_nested_if_branch() {
-        let parsed = parser::parse("observe containers | if cpu > 90% then set high = true else set high = false").unwrap();
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then set high = true else set high = false",
+        )
+        .unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -474,7 +492,8 @@ mod tests {
 
     #[test]
     fn test_group_by_fields() {
-        let parsed = parser::parse("observe containers | group by state with count(id) as cnt").unwrap();
+        let parsed =
+            parser::parse("observe containers | group by state with count(id) as cnt").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -494,4 +513,3 @@ mod tests {
         assert!(res.is_ok());
     }
 }
-
