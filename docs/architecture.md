@@ -91,6 +91,15 @@ A ratatui-based TUI module providing two modes:
 
 Both modes use `crossterm` for raw terminal input and alternate screen rendering. The dashboard polls `DockerCliClient::list_containers()` and `docker events` on a 2-second interval loop without blocking the event loop.
 
+### 11. External Export Module (`src/export.rs`)
+Provides push-based integration with three external monitoring systems:
+- **InfluxDB**: Formats rows as InfluxDB line protocol and POSTs to the v1/v2 HTTP write API. String fields become tags, numeric fields become fields.
+- **Grafana Loki**: Wraps rows as Loki JSON push payload with `app=dol,source=docker` labels and sends to `/loki/api/v1/push`.
+- **Prometheus Pushgateway**: Converts numeric fields to gauge metrics in exposition format (`dol_<field>{container="...",image="...",state="..."} <value>`) and PUTs to the Pushgateway.
+
+The `ExportFormat` enum (`Influx`, `Loki`, `Prometheus`) is also used with `--export-format` to write results to files in the respective formats.
+`run_exports()` in `cli.rs` dispatches to the correct exporter based on CLI flags after each query execution, including in watch mode.
+
 ## Data Flow: Example Pipeline
 
 When executing `observe containers where cpu > 80% | select name, cpu | sort cpu desc limit 5`:

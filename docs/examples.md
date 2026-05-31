@@ -388,4 +388,66 @@ Keyboard controls:
 - `r` — force refresh
 - `q` / Esc — quit
 
+## 12. External Integrations
+
+Push query results directly to external monitoring systems.
+
+### InfluxDB
+
+```bash
+# Push container state to InfluxDB v1
+dol --export-influx "http://localhost:8086/write?db=dol" "observe containers"
+
+# Push metrics to InfluxDB v2
+dol --export-influx "http://localhost:8086/api/v2/write?org=myorg&bucket=dol" \
+    "observe containers | where state = running"
+```
+
+Each row is converted to InfluxDB line protocol:
+```
+containers,name=web,image=nginx:latest,state=running cpu=12.5,memory=64000000
+```
+
+### Grafana Loki
+
+```bash
+# Push container state to Loki
+dol --export-grafana-loki "http://localhost:3100" "observe containers"
+
+# Push filtered events
+dol --export-grafana-loki "http://localhost:3100" \
+    "events containers | where action = die | select time, container, action"
+```
+
+Each row is pushed as a Loki log entry with labels `app=dol,source=docker`.
+
+### Prometheus Pushgateway
+
+```bash
+# Push container metrics to Prometheus Pushgateway
+dol --export-prometheus "http://localhost:9091" "observe containers"
+```
+
+Numeric fields become gauge metrics:
+```
+dol_cpu{container="web",image="nginx:latest",state="running"} 12.5
+dol_memory{container="web",image="nginx:latest",state="running"} 64000000
+```
+
+### Export Format for Files
+
+Write results in a format suitable for external tools:
+
+```bash
+# InfluxDB line protocol file
+dol --export metrics.influx --export-format influx "observe containers"
+
+# Prometheus exposition format file
+dol --export metrics.prom --export-format prometheus "observe containers"
+
+# Loki JSON payload file
+dol --export metrics.loki --export-format loki "observe containers"
+```
+
+
 

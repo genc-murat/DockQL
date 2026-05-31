@@ -9,6 +9,7 @@ pub mod docker;
 pub mod eval;
 pub mod events;
 pub mod executor;
+pub mod export;
 pub mod metrics;
 pub mod parser;
 pub mod planner;
@@ -16,4 +17,6 @@ pub mod repl;
 pub mod sqlite_store;
 pub mod storage;
 
-pub use cli::{Cli, OutputFormat};
+pub use cli::Cli;
+pub use export::ExportFormat;
+pub use cli::OutputFormat;

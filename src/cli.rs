@@ -12,6 +12,7 @@ use crate::{
     docker::DockerCliClient,
     events::{self, DockerCliEventSource},
     executor::{self, render_csv, render_jsonl, render_table},
+    export::{self, ExportFormat},
     metrics::{DockerCliMetricsCollector, MetricsCollector},
     parser, planner,
     sqlite_store::SqliteTelemetryStore,
@@ -69,6 +70,22 @@ pub struct Cli {
     /// Export results to a file (format inferred from extension: .csv, .json, .jsonl, .table).
     #[arg(long)]
     pub export: Option<PathBuf>,
+
+    /// Export format for external systems: influx, loki, prometheus (use with --export).
+    #[arg(long)]
+    pub export_format: Option<ExportFormat>,
+
+    /// Push results to InfluxDB v1 HTTP write API (e.g. http://localhost:8086/write?db=mydb).
+    #[arg(long)]
+    pub export_influx: Option<String>,
+
+    /// Push results to Grafana Loki HTTP push API (e.g. http://localhost:3100).
+    #[arg(long)]
+    pub export_grafana_loki: Option<String>,
+
+    /// Push results to Prometheus Pushgateway (e.g. http://localhost:9091).
+    #[arg(long)]
+    pub export_prometheus: Option<String>,
 
     /// Remote Docker host (e.g. tcp://192.168.1.100:2375).
     #[arg(long)]
@@ -255,6 +272,29 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     };
 
     let output_result = |result: &executor::ExecutionResult| -> anyhow::Result<()> {
+        // When --export-format is set, write in that format regardless of --output
+        if let Some(export_fmt) = cli.export_format {
+            if let Some(ref writer) = export_writer {
+                use std::io::Write;
+                let mut file = writer.lock().unwrap();
+                match export_fmt {
+                    ExportFormat::Influx => {
+                        let text = export::format_as_influx(result, "containers");
+                        file.write_all(text.as_bytes())?;
+                    }
+                    ExportFormat::Loki => {
+                        let text = export::format_as_loki(result)?;
+                        file.write_all(text.as_bytes())?;
+                    }
+                    ExportFormat::Prometheus => {
+                        let text = export::format_as_prometheus(result);
+                        file.write_all(text.as_bytes())?;
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         match output_format {
             OutputFormat::Table => {
                 let text = render_table(result);
@@ -314,6 +354,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         let store = SqliteTelemetryStore::open(store_path)?;
         let result = executor::execute_with_store(&parsed.query, &store)?;
         output_result(&result)?;
+        run_exports(&cli, &result).await?;
         return Ok(());
     }
 
@@ -450,6 +491,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                             if let Err(e) = output_result(result) {
                                 eprintln!("Error writing output: {e}");
                             }
+                            if let Err(e) = run_exports(&cli, result).await {
+                                eprintln!("Export error: {e}");
+                            }
                         }
                         Err(e) => eprintln!("Error: {e}"),
                     }
@@ -472,11 +516,27 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     output_result(&result)?;
+    run_exports(&cli, &result).await?;
 
     Ok(())
 }
 
-/// Determine if a query needs a telemetry store for historical data.
+/// Push query results to configured external export targets.
+async fn run_exports(cli: &Cli, result: &executor::ExecutionResult) -> anyhow::Result<()> {
+    if let Some(ref url) = cli.export_influx {
+        eprintln!("Pushing {} rows to InfluxDB at {url} ...", result.rows.len());
+        export::push_to_influxdb(url, result).await?;
+    }
+    if let Some(ref url) = cli.export_grafana_loki {
+        eprintln!("Pushing {} rows to Grafana Loki at {url} ...", result.rows.len());
+        export::push_to_loki(url, result).await?;
+    }
+    if let Some(ref url) = cli.export_prometheus {
+        eprintln!("Pushing {} rows to Prometheus Pushgateway at {url} ...", result.rows.len());
+        export::push_to_prometheus(url, result).await?;
+    }
+    Ok(())
+}
 fn needs_store(query: &Query) -> bool {
     match query {
         Query::Inspect(q) => q.at.is_some(),
@@ -503,6 +563,10 @@ mod tests {
             explain: false,
             watch: None,
             export: None,
+            export_format: None,
+            export_influx: None,
+            export_grafana_loki: None,
+            export_prometheus: None,
             host: None,
             completion: None,
             diff: false,
@@ -528,6 +592,10 @@ mod tests {
             explain: false,
             watch: None,
             export: None,
+            export_format: None,
+            export_influx: None,
+            export_grafana_loki: None,
+            export_prometheus: None,
             host: None,
             completion: None,
             diff: false,

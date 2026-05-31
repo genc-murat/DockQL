@@ -570,6 +570,10 @@ The DOL CLI supports the following flags:
 | `--explain` | Show the logical query plan without executing |
 | `--diff` | Compare query results with the last store snapshot |
 | `--completion <shell>` | Generate shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `--export-format <fmt>` | Export file format: `influx`, `loki`, `prometheus` (used with `--export`) |
+| `--export-influx <url>` | Push results to InfluxDB v1/v2 HTTP write API |
+| `--export-grafana-loki <url>` | Push results to Grafana Loki HTTP push API |
+| `--export-prometheus <url>` | Push results to Prometheus Pushgateway |
 | `repl` | Start interactive REPL shell with tab completion and history |
 | `top` | Live-updating TUI container monitor (top-like) with auto-refresh and keyboard controls |
 | `dashboard` | Multi-panel TUI dashboard with container list and live Docker events |

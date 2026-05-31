@@ -23,6 +23,7 @@ dol "observe containers | group by state"
 - **Pattern matching** — `matches` (regex) and `in` operators for flexible filtering
 - **Diff mode** — compare current container state with the last store snapshot (`--diff`)
 - **Multiple output formats** — table (default), CSV, JSONL, JSON, ANSI-colored table
+- **External integrations** — push results directly to InfluxDB, Loki, or Prometheus Pushgateway
 - **Config file** — YAML/TOML configuration from standard paths; manage with `dol config init|set|view`
 - **Interactive REPL** — `dol repl` with tab completion, history, `.watch`, `.export` commands
 - **Terminal Dashboard** — `dol top` live container monitor with auto-refresh, color-coded states, keyboard controls
@@ -193,6 +194,25 @@ metrics_interval: 30
 snapshot_interval: 300
 ```
 
+### External Integrations
+
+```bash
+# Push results to InfluxDB (v1 write API)
+dol --export-influx "http://localhost:8086/write?db=dol" "observe containers"
+
+# Push to Grafana Loki
+dol --export-grafana-loki "http://localhost:3100" "observe containers"
+
+# Push to Prometheus Pushgateway
+dol --export-prometheus "http://localhost:9091" "observe containers"
+
+# Export to file in InfluxDB line protocol format
+dol --export metrics.txt --export-format influx "observe containers"
+
+# Export to file in Prometheus exposition format
+dol --export metrics.prom --export-format prometheus "observe containers"
+```
+
 ### Remote Host
 
 ```bash
@@ -326,6 +346,10 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `--explain` | Show query plan without executing |
 | `--diff` | Compare results with last store snapshot |
 | `--completion <shell>` | Generate shell completion script |
+| `--export-format <fmt>` | Export format for external systems: `influx`, `loki`, `prometheus` |
+| `--export-influx <url>` | Push results to InfluxDB v1 HTTP write API |
+| `--export-grafana-loki <url>` | Push results to Grafana Loki HTTP push API |
+| `--export-prometheus <url>` | Push results to Prometheus Pushgateway |
 | `repl` | Start interactive REPL shell |
 | `top` | Live-updating TUI container monitor |
 | `dashboard` | Multi-panel TUI with containers and events |
