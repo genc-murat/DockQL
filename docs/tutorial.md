@@ -663,6 +663,11 @@ dol> events containers | limit 5
 | `.watch <secs>`   | Re-run the last query every N sec |
 | `.export <path>`  | Write results to a file           || `.output <fmt>`   | Set output format (table, json, json-compact, csv, jsonl) |
 
+> **Error feedback:** If a query has a syntax error, DOL shows a detailed
+> error message with the exact column position, the surrounding query context
+> (with `-->`), and a `^` pointer under the error location. Errors are
+> displayed in **red** for easy visual scanning.
+
 **Auto-refresh a query:**
 
 ```text

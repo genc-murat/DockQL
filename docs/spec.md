@@ -544,10 +544,26 @@ Runtime errors should distinguish:
 Examples:
 
 ```text
+parse error at column 28: expected field
+  --> observe containers | where | sort by cpu
+                            ^
+
 parse error at column 20: expected expression after `where`
+  --> observe containers | where | sort by cpu
+                               ^
+
 runtime error: `sort by` requires finite input; add `last 5m` or `limit`
 runtime error: historical query requires a telemetry store
 ```
+
+Parser errors show:
+
+- The exact column position of the error.
+- A source context line with `-->` pointing to the offending query.
+- A `^` pointer under the exact column where parsing failed.
+- A descriptive message explaining what was expected.
+
+In the CLI and REPL, error messages are displayed in ANSI **red** for visual prominence.
 
 ## 12. Reserved Keywords
 

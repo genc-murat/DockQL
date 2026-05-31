@@ -1,5 +1,4 @@
 use serde::Serialize;
-use thiserror::Error;
 
 use crate::ast::{
     AlertAction, AlertRule, AnalysisTarget, AnalysisVerb, BinOp, CollectionTarget, Duration,
@@ -13,11 +12,45 @@ pub struct ParsedQuery {
     pub query: Query,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Error)]
-#[error("parse error at column {column}: {message}")]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ParseError {
     pub column: usize,
     pub message: String,
+    /// The original query source (trimmed), used to show surrounding context.
+    pub source: Option<String>,
+}
+
+impl std::error::Error for ParseError {}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "parse error at column {}: {}", self.column, self.message)?;
+
+        if let Some(ref source) = self.source {
+            // Show the source line with a pointer at the error column.
+            // The column is 1-indexed; we find the (approximate) line
+            // containing that column for multi-line queries.
+            let mut remaining = self.column;
+            let display_line = source
+                .lines()
+                .find(|line| {
+                    let line_len = line.chars().count();
+                    if remaining <= line_len || line_len == 0 && remaining == 1 {
+                        true
+                    } else {
+                        remaining = remaining.saturating_sub(line_len + 1);
+                        false
+                    }
+                })
+                .unwrap_or(source);
+
+            let col = remaining.min(display_line.chars().count());
+            write!(f, "\n  --> {display_line}")?;
+            write!(f, "\n     {}{}", " ".repeat(col.saturating_sub(1)), "^")?;
+        }
+
+        Ok(())
+    }
 }
 
 impl ParseError {
@@ -25,26 +58,37 @@ impl ParseError {
         Self {
             column,
             message: message.into(),
+            source: None,
         }
+    }
+
+    pub fn with_source(mut self, source: String) -> Self {
+        self.source = Some(source);
+        self
     }
 }
 
 pub fn parse(source: &str) -> Result<ParsedQuery, ParseError> {
     let trimmed = source.trim();
 
-    if trimmed.is_empty() {
-        return Err(ParseError::new(1, "empty DOL query"));
-    }
+    let result = (|| {
+        if trimmed.is_empty() {
+            return Err(ParseError::new(1, "empty DOL query"));
+        }
 
-    let tokens = tokenize(trimmed)?;
-    let mut parser = Parser::new(tokens, trimmed.chars().count() + 1);
-    let query = parser.parse_query()?;
-    parser.expect_eof()?;
+        let tokens = tokenize(trimmed)?;
+        let mut parser = Parser::new(tokens, trimmed.chars().count() + 1);
+        let query = parser.parse_query()?;
+        parser.expect_eof()?;
 
-    Ok(ParsedQuery {
-        source: trimmed.to_owned(),
-        query,
-    })
+        Ok(ParsedQuery {
+            source: trimmed.to_owned(),
+            query,
+        })
+    })();
+
+    // Attach the trimmed source to all parse errors for context display.
+    result.map_err(|e| e.with_source(trimmed.to_owned()))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1405,6 +1449,39 @@ mod tests {
     fn reports_position_for_bad_where() {
         let err = parse("observe containers where").unwrap_err();
         assert!(err.column >= 22);
+    }
+
+    #[test]
+    fn shows_context_with_pointer() {
+        // Query with a trailing `where` (expects expression, finds EOF)
+        let err = parse("observe containers where").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("-->"));
+        assert!(msg.contains("^"), "error display should have a pointer: {msg}");
+        assert!(
+            msg.contains("observe containers where"),
+            "error display should show the source query: {msg}"
+        );
+    }
+
+    #[test]
+    fn shows_context_with_pointer_at_pipe() {
+        // Query with `where` followed by pipe (expects expression, finds pipe)
+        let err = parse("observe containers | where | sort by cpu").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("-->"));
+        assert!(msg.contains("^"), "error display should have a pointer: {msg}");
+        assert!(
+            msg.contains("observe containers | where | sort by cpu"),
+            "error display should show the source query: {msg}"
+        );
+        // The pointer should be at or after the `where` keyword
+        let pointer_pos = msg.find('^').unwrap();
+        let source_pos = msg.find("where |").unwrap_or(msg.len());
+        assert!(
+            pointer_pos > source_pos,
+            "pointer should be after `where |`: {msg}"
+        );
     }
 
     #[test]

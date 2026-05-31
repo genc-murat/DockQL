@@ -234,7 +234,7 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
         }
 
         if let Err(e) = execute_dol_query(&trimmed, config).await {
-            eprintln!("Error: {e}");
+            eprintln!("\x1b[31mError: {e}\x1b[0m");
         }
     }
 
