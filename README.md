@@ -19,6 +19,7 @@ dol "observe containers | group by state"
 - **Analysis** — deterministic anomaly detection (CPU, memory, restart loops, deployment errors)
 - **Telemetry store** — persistent SQLite-backed storage for metrics, events, and snapshots
 - **Schema introspection** — discover available fields with `fields containers`
+- **Static Semantic Analysis** — static type checking and schema validation of queries prior to execution to catch errors early
 - **Control flow** — `if/then/else` pipeline branching, `case/when` expressions, `set` field assignment
 - **Arithmetic expressions** — compute fields with `+`, `-`, `*`, `/`, `%` (e.g., `set mem_gb = memory / 1073741824`)
 - **Aggregate functions** — `group by ... with sum/count/avg/min/max(field) as alias`

@@ -86,6 +86,7 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
+    crate::semantic::validate_semantics(query)?;
     match query {
         Query::Observe(query) => execute_observe(query, docker, metrics),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
@@ -101,6 +102,7 @@ pub fn execute_with_store<S>(query: &Query, store: &S) -> Result<ExecutionResult
 where
     S: TelemetryStore + ?Sized,
 {
+    crate::semantic::validate_semantics(query)?;
     match query {
         Query::Inspect(query) if query.at.is_some() => storage::inspect_at(query, store).map_err(Into::into),
         Query::Events(query) if query.time.is_some() => {
@@ -1061,6 +1063,17 @@ mod tests {
         let error = execute(&parsed.query, &client).unwrap_err();
 
         assert!(matches!(error, ExecutorError::Eval(eval::EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn rejects_invalid_type_comparison() {
+        let client = mock_client();
+        let parsed =
+            parser::parse("observe containers | where state > 50").expect("query should parse");
+
+        let error = execute(&parsed.query, &client).unwrap_err();
+
+        assert!(matches!(error, ExecutorError::Eval(eval::EvalError::InvalidComparison { .. })));
     }
 
     #[test]

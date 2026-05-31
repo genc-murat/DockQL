@@ -9,7 +9,8 @@ DOL is designed as a pipeline that reads query strings, parses them into an Abst
 ```mermaid
 flowchart TD
     Input["User Input (CLI, File, Config)"] --> Parser["Parser (Recursive Descent)"]
-    Parser -->|AST| Planner["Planner (Filter push-down, plan display)"]
+    Parser -->|AST| Semantic["Semantic Analyzer (Type checking & field validation)"]
+    Semantic -->|Validated AST| Planner["Planner (Filter push-down, plan display)"]
     Planner -->|LogicalPlan| Executor["Executor / Dispatcher"]
 
     Executor --> DockerClient["Docker Client (Live State)"]
@@ -27,10 +28,13 @@ flowchart TD
 ### 1. Parser (`src/parser.rs`)
 A hand-written recursive descent parser that converts raw DOL strings into a strongly typed AST (`src/ast.rs`). It features detailed error reporting with line/column context and explicit precedence handling for boolean operators, arithmetic operators (precedence climbing), and pipeline operators. Supports arithmetic expressions (`+`, `-`, `*`, `/`, `%`), function calls (`upper`, `lower`, `length`, `trim`, `concat`, `substring`), range checks (`between`, `is null`, `is not null`), aggregate functions (`sum`, `count`, `avg`, `min`, `max`), multi-field sort, inline comments (`#`), and all pipeline nodes (`having`, `distinct`, `offset`).
 
-### 2. Planner (`src/planner.rs`)
+### 2. Semantic Analyzer (`src/semantic.rs`)
+A static semantic analysis and type checking pass that runs immediately after parsing. It validates that all referenced fields (including dynamic fields added via `set` and dotted label paths like `label.env`) are valid for the given target (Containers, Images, Networks, or Volumes). It also performs static type compatibility checking on binary comparisons and arithmetic expressions (e.g., rejecting comparisons of String fields to numeric literals before querying data sources).
+
+### 3. Planner (`src/planner.rs`)
 Produces a `LogicalPlan` from the AST, performing filter push-down optimizations (e.g., moving `where` conditions closer to the data source). The plan is displayable for the `--explain` CLI flag, which shows the execution plan without running the query.
 
-### 3. Executor (`src/executor.rs`)
+### 4. Executor (`src/executor.rs`)
 The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `fields`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports four output formats: table, CSV, JSON, and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot.
 
 ### 4. Data Providers

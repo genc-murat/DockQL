@@ -254,6 +254,16 @@ DOL v0.1 supports these literal types:
 
 Bare identifiers are accepted for simple values in filters, but strings are recommended when a value contains punctuation, spaces, or mixed case.
 
+### 5.1 Static Semantic Analysis & Type Safety
+
+DOL implements a static semantic analyzer and type safety validation pass before executing any query. This phase runs immediately after parsing and prevents execution of queries that contain structural or type errors:
+
+- **Field Existence Validation**: All referenced fields in filters, projections (`select`), and aggregations (`group by`) are checked against the static schema of the collection target (e.g., containers, images). Dynamically added fields via `set` are added to the active schema context and allowed in downstream pipeline nodes.
+- **Label Prefix Support**: Dynamically resolved label lookups using the `label.` prefix (e.g., `label.env`) are recognized and statically validated as long as the base `labels` field exists on the target.
+- **Type Compatibility Checking**: High-level comparison and arithmetic operations validate that their operands are compatible. For example:
+  - Comparing a String field (e.g., `state`) to an Integer literal (e.g., `50`) with binary comparison operators like `>` will be rejected at compilation/validation time.
+  - Performing arithmetic operations on non-numeric types is statically rejected.
+
 ## 6. Operators
 
 ### 6.1 Comparison Operators
