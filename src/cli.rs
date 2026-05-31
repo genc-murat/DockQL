@@ -127,8 +127,26 @@ pub enum OutputFormat {
     Jsonl,
 }
 
+/// Resolve the effective Docker host from CLI `--host` or config file,
+/// and set `DOCKER_HOST` so that all `docker` CLI subprocesses use it.
+/// CLI `--host` takes precedence over config `host`.
+fn apply_host(cli_host: Option<&str>, config_host: Option<&str>) {
+    let host = cli_host.or(config_host);
+    if let Some(host) = host {
+        // SAFETY: setting DOCKER_HOST from user-provided --host flag or config
+        unsafe {
+            std::env::set_var("DOCKER_HOST", host);
+        }
+    }
+}
+
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let config = DolConfig::load();
+
+    // Set DOCKER_HOST *before* any subcommand or query execution so that
+    // DockerCliClient, DockerCliMetricsCollector, DockerCliEventSource,
+    // and all direct `docker` CLI calls pick up the correct host.
+    apply_host(cli.host.as_deref(), config.host.as_deref());
 
     // Handle subcommands.
     if let Some(cmd) = &cli.command {
@@ -155,13 +173,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         let name = cmd.get_name().to_string();
         clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
         return Ok(());
-    }
-
-    if let Some(ref host) = cli.host {
-        // SAFETY: setting DOCKER_HOST from user-provided --host flag
-        unsafe {
-            std::env::set_var("DOCKER_HOST", host);
-        }
     }
 
     // Handle --store-stats mode.
