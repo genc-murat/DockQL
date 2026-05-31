@@ -6,6 +6,13 @@
 
 <p align="center">A domain-specific language and CLI tool for querying, observing, and analyzing Docker infrastructure.</p>
 
+<p align="center">
+  <img src="https://img.shields.io/github/v/release/genc-murat/DockQL?color=3ecf8e&logo=github&style=for-the-badge" alt="Release">
+  <img src="https://img.shields.io/github/actions/workflow/status/genc-murat/DockQL/ci.yml?branch=main&label=CI&color=57a6ff&style=for-the-badge" alt="CI">
+  <img src="https://img.shields.io/github/deployments/genc-murat/DockQL/github-pages?label=Docs&logo=github&style=for-the-badge" alt="Docs">
+  <img src="https://img.shields.io/badge/Rust-1.96%2B-8a95a5?logo=rust&style=for-the-badge" alt="Rust">
+</p>
+
 ```bash
 dol "observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc"
 dol "events containers | where action = die | limit 10"
