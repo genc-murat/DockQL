@@ -13,23 +13,20 @@ compare container states over time, and run historical observe queries.
 
 ## Architecture
 
-```text
-┌─────────────────┐     ┌──────────────────┐
-│   DOL CLI       │────▶│   Query Router   │
-└─────────────────┘     └────────┬─────────┘
-                                  │
-             ┌────────────────────┼────────────────────┐
-             ▼                    ▼                    ▼
-    ┌────────────────┐  ┌────────────────┐   ┌────────────────┐
-    │  Batch Execute │  │  Historical    │   │  Stream        │
-    │  (Docker API)  │  │  Execute       │   │  Execute       │
-    └────────────────┘  │  (SQLite)      │   └────────────────┘
-                        └────────┬───────┘
-                                 │
-                        ┌────────▼───────┐
-                        │  SQLite Store  │
-                        │  (TelemetryStore)│
-                        └────────────────┘
+```mermaid
+flowchart TD
+    CLI["DOL CLI"] --> QR["Query Router"]
+    QR --> BE["Batch Execute<br/>(Docker API)"]
+    QR --> HE["Historical Execute<br/>(SQLite)"]
+    QR --> SE["Stream Execute"]
+    HE --> SS["SQLite Store<br/>(TelemetryStore)"]
+
+    style CLI fill:#1c2128,stroke:#58a6ff,color:#e6edf3
+    style QR fill:#1c2128,stroke:#58a6ff,color:#e6edf3
+    style BE fill:#161b22,stroke:#3fb950,color:#e6edf3
+    style HE fill:#161b22,stroke:#d29922,color:#e6edf3
+    style SE fill:#161b22,stroke:#3fb950,color:#e6edf3
+    style SS fill:#161b22,stroke:#f85149,color:#e6edf3
 ```
 
 ## Storage Schema
