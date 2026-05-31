@@ -20,7 +20,7 @@ flowchart TD
     DockerClient --> Pipeline["Query Pipeline Engine (Where, Select, Sort, Limit, GroupBy, Having, Distinct, Offset, Set, If/Else, Arithmetic, Function Calls)"]
     MetricsColl --> Pipeline
 
-    Pipeline -->|ExecutionResult| Output["Output Formatter (Table, CSV, JSON, JSONL)"]
+    Pipeline -->|ExecutionResult| Output["Output Formatter (Table, CSV, JSON, JSONL, JSON-Compact)"]
 ```
 
 ## Core Components
@@ -35,7 +35,7 @@ A static semantic analysis and type checking pass that runs immediately after pa
 Produces a `LogicalPlan` from the AST, performing filter push-down optimizations (e.g., moving `where` conditions closer to the data source). The plan is displayable for the `--explain` CLI flag, which shows the execution plan without running the query.
 
 ### 4. Executor (`src/executor.rs`)
-The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `fields`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports four output formats: table, CSV, JSON, and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot.
+The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `fields`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports five output formats: table, CSV, JSON, JSON-Compact (minified JSON), and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot.
 
 ### 4. Data Providers
 - **Docker Client (`src/docker.rs`):** Interfaces with the Docker Engine daemon (currently via Docker CLI wrapping) to list containers, images, volumes, networks, stream events, and inspect individual containers for enriched fields (`started_at`, `finished_at`, `restart_count`).
@@ -97,7 +97,7 @@ When executing `observe containers where cpu > 80% | select name, cpu | sort cpu
 
 The CLI (`src/cli.rs`) uses `clap` for argument parsing. Key flags include:
 
-- `--output <table|csv|json|jsonl>` — output format selection
+- `--output <table|csv|json|json-compact|jsonl>` — output format selection
 - `--explain` — show logical plan without executing
 - `--watch <s>` — repeat query every N seconds
 - `--diff` — compare with last store snapshot

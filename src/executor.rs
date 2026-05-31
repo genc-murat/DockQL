@@ -712,29 +712,35 @@ pub fn render_csv(result: &ExecutionResult) -> String {
     }
 
     let columns: Vec<String> = result.rows[0].fields.keys().cloned().collect();
+    let mut buf = Vec::new();
+    {
+        let mut writer = csv::Writer::from_writer(&mut buf);
 
-    let mut lines = vec![columns.join(",")];
+        // Write header
+        writer
+            .write_record(&columns)
+            .expect("csv header write should succeed");
 
-    for row in &result.rows {
-        let values: Vec<String> = columns
-            .iter()
-            .map(|col| {
-                let val = row
-                    .fields
-                    .get(col)
-                    .map(eval::render_json_cell)
-                    .unwrap_or_default();
-                if val.contains(',') || val.contains('"') || val.contains('\n') {
-                    format!("\"{}\"", val.replace('"', "\"\""))
-                } else {
-                    val
-                }
-            })
-            .collect();
-        lines.push(values.join(","));
+        // Write data rows
+        for row in &result.rows {
+            let values: Vec<String> = columns
+                .iter()
+                .map(|col| {
+                    row.fields
+                        .get(col)
+                        .map(eval::render_json_cell)
+                        .unwrap_or_default()
+                })
+                .collect();
+            writer
+                .write_record(&values)
+                .expect("csv row write should succeed");
+        }
+
+        writer.flush().expect("csv flush should succeed");
     }
 
-    lines.join("\n")
+    String::from_utf8(buf).unwrap_or_default()
 }
 
 pub fn render_jsonl(result: &ExecutionResult) -> String {
@@ -746,7 +752,7 @@ pub fn render_jsonl(result: &ExecutionResult) -> String {
         .join("\n")
 }
 
-fn ansi_color(value: &str) -> &'static str {
+fn ansi_state_color(value: &str) -> &'static str {
     match value {
         "running" => "\x1b[32m",
         "exited" | "dead" => "\x1b[31m",
@@ -756,6 +762,24 @@ fn ansi_color(value: &str) -> &'static str {
         "warning" => "\x1b[33m",
         "ok" | "healthy" => "\x1b[32m",
         _ => "\x1b[0m",
+    }
+}
+
+/// Return ANSI green/yellow/red based on a numeric value threshold.
+/// Green < 50%, yellow 50–80%, red > 80%.
+fn ansi_threshold_color(value_str: &str) -> &'static str {
+    // Strip trailing % or other non-numeric suffixes
+    let cleaned = value_str.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
+    if let Ok(val) = cleaned.parse::<f64>() {
+        if val > 80.0 {
+            "\x1b[31m" // red
+        } else if val > 50.0 {
+            "\x1b[33m" // yellow
+        } else {
+            "\x1b[32m" // green
+        }
+    } else {
+        "\x1b[0m"
     }
 }
 
@@ -771,7 +795,7 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
         .iter()
         .map(|column| column.len())
         .collect::<Vec<_>>();
-    let rendered_rows = result
+    let rendered_rows: Vec<Vec<(String, &'static str)>> = result
         .rows
         .iter()
         .map(|row| {
@@ -785,19 +809,43 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
                         .map(eval::render_json_cell)
                         .unwrap_or_default();
                     widths[index] = widths[index].max(value.len());
-                    value
+
+                    // Determine per-cell color
+                    let cell_color: &'static str = match column.as_str() {
+                        "cpu" => ansi_threshold_color(&value),
+                        "memory" | "mem" => {
+                            // Memory in bytes: >1GB → red, >512MB → yellow
+                            if let Ok(bytes) = value.parse::<f64>() {
+                                if bytes > 1_073_741_824.0 {
+                                    "\x1b[31m"
+                                } else if bytes > 536_870_912.0 {
+                                    "\x1b[33m"
+                                } else {
+                                    "\x1b[32m"
+                                }
+                            } else {
+                                "\x1b[0m"
+                            }
+                        }
+                        "state" | "status" => ansi_state_color(&value),
+                        _ => "\x1b[0m",
+                    };
+
+                    (value, cell_color)
                 })
-                .collect::<Vec<_>>()
+                .collect()
         })
-        .collect::<Vec<_>>();
+        .collect();
 
     let mut lines = Vec::new();
-    lines.push(render_table_line(&columns, &widths));
-
     let header_color = "\x1b[1;37m";
-    if let Some(first) = lines.last_mut() {
-        *first = format!("{header_color}{first}{ANSI_RESET}");
-    }
+    lines.push(format!(
+        "{header_color}{}{ANSI_RESET}",
+        render_table_line(
+            &columns.iter().map(|c| c.clone()).collect::<Vec<_>>(),
+            &widths
+        )
+    ));
 
     lines.push(
         widths
@@ -808,16 +856,13 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
     );
 
     for row in &rendered_rows {
-        let color = row
+        let line = row
             .iter()
-            .find_map(|v| {
-                let c = ansi_color(v);
-                if c != "\x1b[0m" { Some(c) } else { None }
-            })
-            .unwrap_or("\x1b[0m");
-
-        let line = render_table_line(row, &widths);
-        lines.push(format!("{color}{line}{ANSI_RESET}"));
+            .zip(&widths)
+            .map(|((value, color), width)| format!("{color}{value:<width$}{ANSI_RESET}"))
+            .collect::<Vec<_>>()
+            .join("  ");
+        lines.push(line);
     }
 
     lines.join("\n")

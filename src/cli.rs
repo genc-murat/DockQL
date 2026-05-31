@@ -31,7 +31,7 @@ pub struct Cli {
     /// DOL query to execute (positional).
     pub query: Option<String>,
 
-    /// Output format: table, json, csv, jsonl.
+    /// Output format: table, json, json-compact, csv, jsonl.
     #[arg(long, value_enum)]
     pub output: Option<OutputFormat>,
 
@@ -124,10 +124,14 @@ pub enum CliCommand {
     Dashboard,
 }
 
+/// Output format: table, json, json-compact, csv, jsonl.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum OutputFormat {
     Table,
     Json,
+    /// Compact (minified) JSON without indentation or newlines.
+    #[value(name = "json-compact")]
+    JsonCompact,
     Csv,
     Jsonl,
 }
@@ -349,6 +353,17 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     }
                 }
             }
+            OutputFormat::JsonCompact => {
+                if let Ok(json) = serde_json::to_string(&result) {
+                    if let Some(ref writer) = export_writer {
+                        use std::io::Write;
+                        let mut file = writer.lock().unwrap();
+                        file.write_all(json.as_bytes())?;
+                    } else {
+                        println!("{json}");
+                    }
+                }
+            }
             OutputFormat::Csv => {
                 let csv = render_csv(result);
                 if let Some(ref writer) = export_writer {
@@ -442,7 +457,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                                     for event in events {
                                         match output_format {
                                             OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
-                                            OutputFormat::Json | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
+                                            OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
                                             OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
                                         }
                                     }
@@ -515,7 +530,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 OutputFormat::Table => {
                     println!("{}", render_table(&result));
                 }
-                OutputFormat::Json => {
+                OutputFormat::Json | OutputFormat::JsonCompact => {
                     println!(
                         "{}",
                         serde_json::to_string(&result.rows[0])

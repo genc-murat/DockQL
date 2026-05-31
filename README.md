@@ -112,8 +112,11 @@ dol 'observe containers \
 ### Output Formats
 
 ```bash
-# JSON output
+# JSON output (pretty-printed)
 dol --output json "observe containers"
+
+# Compact (minified) JSON — single line, no indentation
+dol --output json-compact "observe containers"
 
 # CSV output
 dol --output csv "observe containers | select name, state, cpu"
@@ -124,6 +127,8 @@ dol --output jsonl "events containers | limit 5"
 # ANSI-colored table (default when output is a terminal)
 dol "observe containers"
 ```
+
+`json-compact` is ideal for piping into other tools or for reducing output size in scripts.
 
 ### Background Data Collection
 
@@ -396,7 +401,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `--snapshot-interval <s>` | Snapshot collection interval in seconds |
 | `--store-stats` | Show telemetry store statistics |
 | `--apply-retention` | Apply retention policies to the store |
-| `--output <fmt>` | Output format: `table`, `json`, `csv`, `jsonl` |
+| `--output <fmt>` | Output format: `table`, `json`, `json-compact`, `csv`, `jsonl` |
 | `--export <path>` | Write output to file instead of stdout |
 | `--host <addr>` | Docker daemon host address |
 | `--watch <s>` | Re-run query every N seconds |

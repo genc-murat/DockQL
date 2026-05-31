@@ -661,8 +661,7 @@ dol> events containers | limit 5
 | `.exit` / `.quit` | Exit the REPL                     |
 | `.history`        | Show command history              |
 | `.watch <secs>`   | Re-run the last query every N sec |
-| `.export <path>`  | Write results to a file           |
-| `.output <fmt>`   | Set output format (table/json/csv)|
+| `.export <path>`  | Write results to a file           || `.output <fmt>`   | Set output format (table, json, json-compact, csv, jsonl) |
 
 **Auto-refresh a query:**
 

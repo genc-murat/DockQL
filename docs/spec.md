@@ -626,7 +626,7 @@ The DOL CLI supports the following flags:
 | `--snapshot-interval <s>` | Snapshot interval in seconds (default: 300) |
 | `--store-stats` | Display telemetry store statistics |
 | `--apply-retention` | Apply retention policies to clean old data |
-| `--output <fmt>` | Output format: `table`, `json`, `csv`, `jsonl` (default: table) |
+| `--output <fmt>` | Output format: `table`, `json`, `json-compact`, `csv`, `jsonl` (default: table) |
 | `--export <path>` | Write output to file (format inferred from extension: .csv, .json, .jsonl, .table) |
 | `--export-format <fmt>` | Export file format: `influx`, `loki`, `prometheus` (used with `--export`) |
 | `--host <addr>` | Docker daemon address (e.g., `tcp://192.168.1.100:2375`) |
@@ -654,7 +654,7 @@ Additional REPL commands (within `dol repl`):
 | `.history` | Show command history |
 | `.watch <secs>` | Re-run the last query every N seconds |
 | `.export <path>` | Write subsequent results to a file |
-| `.output <fmt>` | Set output format (`table`, `json`, `csv`, `jsonl`) |
+| `.output <fmt>` | Set output format (`table`, `json`, `json-compact`, `csv`, `jsonl`) |
 
 Config file support (YAML/TOML):
 
