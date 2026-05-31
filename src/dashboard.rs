@@ -1127,3 +1127,192 @@ fn draw_dash_events_panel(f: &mut Frame, area: Rect, events: &[ParsedEvent]) {
         .borders(Borders::ALL);
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::docker::DockerEvent;
+
+    // ── is_container_state_change ───────────────────────────────
+
+    #[test]
+    fn test_is_container_state_change_true_for_state_actions() {
+        for action in &[
+            "create", "start", "die", "stop", "destroy", "kill", "restart", "pause", "unpause",
+            "update",
+        ] {
+            assert!(
+                is_container_state_change(action),
+                "{action} should be a state change"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_container_state_change_false_for_other_actions() {
+        for action in &[
+            "exec_create", "exec_start", "attach", "export", "pull", "push", "tag", "commit",
+        ] {
+            assert!(
+                !is_container_state_change(action),
+                "{action} should NOT be a state change"
+            );
+        }
+    }
+
+    // ── format_event_time ───────────────────────────────────────
+
+    #[test]
+    fn test_format_event_time_unix_seconds() {
+        // 10 digits = Unix seconds; 3600+1800+45 = 5445s = 01:30:45
+        let event = DockerEvent {
+            time: "5445".to_owned(),
+            event_type: "container".to_owned(),
+            action: "start".to_owned(),
+            actor_id: "abc123".to_owned(),
+            container: Some("test".to_owned()),
+            image: Some("nginx".to_owned()),
+            attributes: vec![],
+        };
+        assert_eq!(format_event_time(&event), "01:30:45");
+    }
+
+    #[test]
+    fn test_format_event_time_nanoseconds() {
+        // >=16 digits = nanoseconds: 5,400,000,000,000,000 ns = 5,400,000 sec = 12:00:00
+        let event = DockerEvent {
+            time: "5400000000000000".to_owned(),
+            event_type: "container".to_owned(),
+            action: "die".to_owned(),
+            actor_id: "def456".to_owned(),
+            container: Some("app".to_owned()),
+            image: Some("python".to_owned()),
+            attributes: vec![],
+        };
+        assert_eq!(format_event_time(&event), "12:00:00");
+    }
+
+    #[test]
+    fn test_format_event_time_iso_timestamp() {
+        // >=19 chars and non-numeric → extract HH:MM:SS from ISO
+        let event = DockerEvent {
+            time: "2026-05-31T14:30:00.000000000Z".to_owned(),
+            event_type: "container".to_owned(),
+            action: "stop".to_owned(),
+            actor_id: "ghi789".to_owned(),
+            container: Some("db".to_owned()),
+            image: Some("postgres".to_owned()),
+            attributes: vec![],
+        };
+        assert_eq!(format_event_time(&event), "14:30:00");
+    }
+
+    #[test]
+    fn test_format_event_time_short_string() {
+        // Short non-numeric string → ??
+        let event = DockerEvent {
+            time: "?".to_owned(),
+            event_type: "container".to_owned(),
+            action: "unknown".to_owned(),
+            actor_id: "".to_owned(),
+            container: None,
+            image: None,
+            attributes: vec![],
+        };
+        assert_eq!(format_event_time(&event), "??:??:??");
+    }
+
+    // ── format_mem ──────────────────────────────────────────────
+
+    #[test]
+    fn test_format_mem_bytes() {
+        assert_eq!(format_mem(0), "0B");
+        assert_eq!(format_mem(500), "500B");
+        assert_eq!(format_mem(1500), "2K");
+        assert_eq!(format_mem(1_500_000), "2M");
+        assert_eq!(format_mem(1_500_000_000), "1.5G");
+        assert_eq!(format_mem(999), "999B");
+        assert_eq!(format_mem(1_000_000_000), "1.0G");
+    }
+
+    // ── gauge_bar ───────────────────────────────────────────────
+
+    #[test]
+    fn test_gauge_bar_full() {
+        let bar = gauge_bar(1.0, 10);
+        assert_eq!(bar.chars().count(), 10);
+        assert!(bar.chars().all(|c| c == '█'));
+    }
+
+    #[test]
+    fn test_gauge_bar_empty() {
+        let bar = gauge_bar(0.0, 10);
+        assert_eq!(bar.chars().count(), 10);
+        assert!(bar.chars().all(|c| c == '░'));
+    }
+
+    #[test]
+    fn test_gauge_bar_half() {
+        let bar = gauge_bar(0.5, 10);
+        assert_eq!(bar.chars().count(), 10);
+        assert_eq!(bar.matches('█').count(), 5);
+        assert_eq!(bar.matches('░').count(), 5);
+    }
+
+    #[test]
+    fn test_gauge_bar_zero_width() {
+        assert_eq!(gauge_bar(0.5, 0), "");
+    }
+
+    #[test]
+    fn test_gauge_bar_clamps() {
+        let bar = gauge_bar(2.0, 5);
+        assert_eq!(bar.chars().count(), 5);
+        assert!(bar.chars().all(|c| c == '█'));
+    }
+
+    // ── gauge_color ─────────────────────────────────────────────
+
+    #[test]
+    fn test_gauge_color_thresholds() {
+        assert_eq!(gauge_color(0.0), Color::Green);
+        assert_eq!(gauge_color(0.30), Color::Green);
+        assert_eq!(gauge_color(0.50), Color::Green);
+        assert_eq!(gauge_color(0.51), Color::Yellow);
+        assert_eq!(gauge_color(0.75), Color::Yellow);
+        assert_eq!(gauge_color(0.80), Color::Yellow);
+        assert_eq!(gauge_color(0.81), Color::Red);
+        assert_eq!(gauge_color(1.0), Color::Red);
+    }
+
+    // ── state_color ─────────────────────────────────────────────
+
+    #[test]
+    fn test_state_color_mapping() {
+        assert_eq!(state_color("running"), Color::Green);
+        assert_eq!(state_color("exited"), Color::Red);
+        assert_eq!(state_color("dead"), Color::Red);
+        assert_eq!(state_color("paused"), Color::Yellow);
+        assert_eq!(state_color("restarting"), Color::Cyan);
+        assert_eq!(state_color("created"), Color::Blue);
+        assert_eq!(state_color("unknown"), Color::White);
+    }
+
+    // ── event_action_color ──────────────────────────────────────
+
+    #[test]
+    fn test_event_action_color_mapping() {
+        assert_eq!(event_action_color("start"), Color::Green);
+        assert_eq!(event_action_color("restart"), Color::Green);
+        assert_eq!(event_action_color("unpause"), Color::Green);
+        assert_eq!(event_action_color("die"), Color::Red);
+        assert_eq!(event_action_color("kill"), Color::Red);
+        assert_eq!(event_action_color("oom"), Color::Red);
+        assert_eq!(event_action_color("destroy"), Color::Red);
+        assert_eq!(event_action_color("stop"), Color::Yellow);
+        assert_eq!(event_action_color("pause"), Color::Yellow);
+        assert_eq!(event_action_color("create"), Color::Cyan);
+        assert_eq!(event_action_color("pull"), Color::Cyan);
+        assert_eq!(event_action_color("unknown_action"), Color::White);
+    }
+}

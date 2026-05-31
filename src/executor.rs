@@ -1617,4 +1617,139 @@ mod tests {
         assert!(field_names.contains(&"name"));
         assert!(field_names.contains(&"cpu"));
     }
+
+    // ── Render helpers ──────────────────────────────────────────
+
+    #[test]
+    fn renders_table_with_no_rows() {
+        let result = ExecutionResult { rows: vec![] };
+        assert_eq!(render_table(&result), "No rows");
+    }
+
+    #[test]
+    fn renders_csv_empty() {
+        let result = ExecutionResult { rows: vec![] };
+        assert_eq!(render_csv(&result), "");
+    }
+
+    #[test]
+    fn renders_csv_with_commas_and_quotes() {
+        let result = ExecutionResult {
+            rows: vec![Row::from_fields([
+                ("name", JsonValue::String("api,prod".to_owned())),
+                ("note", JsonValue::String("contains \"quotes\"".to_owned())),
+            ])],
+        };
+        let csv = render_csv(&result);
+        // The csv crate should properly quote fields with commas or quotes
+        assert!(csv.contains("\"api,prod\""), "comma field should be quoted: {csv}");
+        assert!(
+            csv.contains("\"contains \"\"quotes\"\"\""),
+            "quote field should be escaped: {csv}"
+        );
+    }
+
+    #[test]
+    fn renders_table_colored_basic() {
+        let result = ExecutionResult {
+            rows: vec![Row::from_fields([
+                ("name", JsonValue::String("api".to_owned())),
+                ("state", JsonValue::String("running".to_owned())),
+            ])],
+        };
+        let table = render_table_colored(&result);
+        // Should contain ANSI color codes
+        assert!(table.contains("\x1b["), "colored output should have ANSI codes");
+        assert!(table.contains("api"));
+        assert!(table.contains("running"));
+    }
+
+    #[test]
+    fn renders_table_colored_cpu_thresholds() {
+        let result = ExecutionResult {
+            rows: vec![
+                Row::from_fields([
+                    ("name", JsonValue::String("low".to_owned())),
+                    ("cpu", json_f64(25.0)),
+                ]),
+                Row::from_fields([
+                    ("name", JsonValue::String("mid".to_owned())),
+                    ("cpu", json_f64(65.0)),
+                ]),
+                Row::from_fields([
+                    ("name", JsonValue::String("high".to_owned())),
+                    ("cpu", json_f64(95.0)),
+                ]),
+            ],
+        };
+        let table = render_table_colored(&result);
+        // green (\x1b[32m) for <50%
+        assert!(table.contains("\x1b[32m25"));
+        // yellow (\x1b[33m) for 50-80%
+        assert!(table.contains("\x1b[33m65"));
+        // red (\x1b[31m) for >80%
+        assert!(table.contains("\x1b[31m95"));
+    }
+
+    #[test]
+    fn renders_table_colored_memory_thresholds() {
+        let result = ExecutionResult {
+            rows: vec![
+                Row::from_fields([
+                    ("name", JsonValue::String("small".to_owned())),
+                    ("memory", json_u64(268_435_456)), // 256MB
+                ]),
+                Row::from_fields([
+                    ("name", JsonValue::String("medium".to_owned())),
+                    ("memory", json_u64(805_306_368)), // 768MB
+                ]),
+                Row::from_fields([
+                    ("name", JsonValue::String("large".to_owned())),
+                    ("memory", json_u64(2_147_483_648)), // 2GB
+                ]),
+            ],
+        };
+        let table = render_table_colored(&result);
+        // green (\x1b[32m) for <512MB
+        assert!(table.contains("\x1b[32m268435456"));
+        // yellow (\x1b[33m) for 512MB-1GB
+        assert!(table.contains("\x1b[33m805306368"));
+        // red (\x1b[31m) for >1GB
+        assert!(table.contains("\x1b[31m2147483648"));
+    }
+
+    #[test]
+    fn renders_table_colored_empty() {
+        let result = ExecutionResult { rows: vec![] };
+        assert_eq!(render_table_colored(&result), "No rows");
+    }
+
+    #[test]
+    fn renders_colored_header_is_bold_white() {
+        let result = ExecutionResult {
+            rows: vec![Row::from_fields([
+                ("name", JsonValue::String("api".to_owned())),
+                ("cpu", json_f64(50.0)),
+            ])],
+        };
+        let table = render_table_colored(&result);
+        // Header should be bold white (\x1b[1;37m)
+        assert!(table.contains("\x1b[1;37m"));
+        assert!(table.contains(ANSI_RESET));
+    }
+
+    #[test]
+    fn renders_jsonl_with_multiple_rows() {
+        let result = ExecutionResult {
+            rows: vec![
+                Row::from_fields([("name", JsonValue::String("a".to_owned()))]),
+                Row::from_fields([("name", JsonValue::String("b".to_owned()))]),
+            ],
+        };
+        let jsonl = render_jsonl(&result);
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"name\":\"a\""));
+        assert!(lines[1].contains("\"name\":\"b\""));
+    }
 }

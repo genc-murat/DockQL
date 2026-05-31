@@ -753,4 +753,121 @@ mod tests {
 
         assert!(error.to_string().contains("--store"));
     }
+
+    #[test]
+    fn test_needs_store_inspect_at_returns_true() {
+        let query = parser::parse(
+            "inspect container test at \"2026-01-01T00:00:00Z\"",
+        )
+        .expect("parse")
+        .query;
+        assert!(needs_store(&query));
+    }
+
+    #[test]
+    fn test_needs_store_events_time_returns_true() {
+        let query = parser::parse(
+            "events containers from \"2026-01-01T00:00:00Z\" to \"2026-01-02T00:00:00Z\"",
+        )
+        .expect("parse")
+        .query;
+        assert!(needs_store(&query));
+    }
+
+    #[test]
+    fn test_needs_store_plain_observe_returns_false() {
+        let query = parser::parse("observe containers").expect("parse").query;
+        assert!(!needs_store(&query));
+    }
+
+    #[test]
+    fn test_needs_store_alert_returns_false() {
+        let query = parser::parse(
+            "alert when cpu > 80% for 30s then print \"alert\"",
+        )
+        .expect("parse")
+        .query;
+        assert!(!needs_store(&query));
+    }
+
+    #[test]
+    fn test_needs_store_plain_events_returns_false() {
+        let query =
+            parser::parse("events containers").expect("parse").query;
+        assert!(!needs_store(&query));
+    }
+
+    #[test]
+    fn test_apply_host_sets_env_var() {
+        // Save original and restore after test
+        let original = std::env::var("DOCKER_HOST").ok();
+        // Clear it first
+        unsafe { std::env::remove_var("DOCKER_HOST"); }
+
+        apply_host(Some("tcp://192.168.1.100:2375"), None);
+        assert_eq!(
+            std::env::var("DOCKER_HOST").unwrap(),
+            "tcp://192.168.1.100:2375"
+        );
+
+        // Restore original
+        match original {
+            Some(v) => unsafe { std::env::set_var("DOCKER_HOST", v); },
+            None => unsafe { std::env::remove_var("DOCKER_HOST"); },
+        }
+    }
+
+    #[test]
+    fn test_apply_host_config_fallback() {
+        let original = std::env::var("DOCKER_HOST").ok();
+        unsafe { std::env::remove_var("DOCKER_HOST"); }
+
+        // CLI host takes precedence over config host
+        apply_host(Some("tcp://cli:2375"), Some("tcp://config:2375"));
+        assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://cli:2375");
+
+        // Without CLI host, config host is used
+        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        apply_host(None, Some("tcp://config:2375"));
+        assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://config:2375");
+
+        match original {
+            Some(v) => unsafe { std::env::set_var("DOCKER_HOST", v); },
+            None => unsafe { std::env::remove_var("DOCKER_HOST"); },
+        }
+    }
+
+    #[test]
+    fn test_apply_host_no_args_does_nothing() {
+        let original = std::env::var("DOCKER_HOST").ok();
+        unsafe { std::env::remove_var("DOCKER_HOST"); }
+
+        apply_host(None, None);
+        assert_eq!(std::env::var("DOCKER_HOST").unwrap_or_default(), "");
+
+        match original {
+            Some(v) => unsafe { std::env::set_var("DOCKER_HOST", v); },
+            None => unsafe { std::env::remove_var("DOCKER_HOST"); },
+        }
+    }
+
+    #[test]
+    fn test_output_format_value_enum() {
+        // Verify the enum has all expected variants
+        assert!(matches!(OutputFormat::Table, OutputFormat::Table));
+        assert!(matches!(OutputFormat::Json, OutputFormat::Json));
+        assert!(matches!(OutputFormat::JsonCompact, OutputFormat::JsonCompact));
+        assert!(matches!(OutputFormat::Csv, OutputFormat::Csv));
+        assert!(matches!(OutputFormat::Jsonl, OutputFormat::Jsonl));
+    }
+
+    #[test]
+    fn test_output_format_jsoncompact_is_distinct() {
+        // JsonCompact must be a separate variant from Json
+        match OutputFormat::JsonCompact {
+            OutputFormat::Json => panic!("JsonCompact should not equal Json"),
+            OutputFormat::JsonCompact => {}
+            _ => {}
+        }
+    }
 }

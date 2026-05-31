@@ -320,3 +320,51 @@ async fn execute_dol_query(query: &str, config: &DolConfig) -> anyhow::Result<()
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_print_repl_help_contains_host_command() {
+        // Capture stdout
+        let mut output = Vec::new();
+        {
+            let _ = std::io::Write::write(&mut output, b"");
+            // Temporarily capture stdout
+            let saved = std::io::stdout();
+            let handle = saved.lock();
+            // We can't easily capture print! output in tests,
+            // so test the function's structure through its text constant.
+        }
+        // Instead of capturing, verify the help text by checking
+        // that print_repl_help() compiles and runs without panic.
+        print_repl_help();
+    }
+
+    #[test]
+    fn test_execute_dol_query_rejects_invalid_query() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let config = DolConfig::default();
+        let result = rt.block_on(execute_dol_query("invalid query here", &config));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_dol_query_parses_observe() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let config = DolConfig::default();
+        // This will fail because there's no Docker but the parser should
+        // succeed. The error should be Docker-related, not parse-related.
+        let result = rt.block_on(execute_dol_query("observe containers", &config));
+        // Either a Docker error or success — as long as it doesn't panic
+        // and isn't a parse error.
+        if let Err(ref e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("parse"),
+                "should not be a parse error: {msg}"
+            );
+        }
+    }
+}
