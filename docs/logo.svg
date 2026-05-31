@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Container outline -->
+  <rect x="4" y="4" width="56" height="56" rx="14" stroke="#57a6ff" stroke-width="2.5"/>
+  <!-- Observability waveform -->
+  <path d="M12 36 Q20 24, 28 36 Q36 48, 44 36 Q52 24, 56 30"
+        stroke="#3ecf8e" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Real-time data point -->
+  <circle cx="44" cy="30" r="3.5" fill="#57a6ff"/>
+  <!-- Secondary data dot -->
+  <circle cx="24" cy="33" r="2" fill="#3ecf8e" opacity="0.6"/>
+</svg>

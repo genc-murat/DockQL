@@ -29,7 +29,7 @@ jobs:
 
       - name: Build Rust API docs
         env:
-          RUSTDOCFLAGS: "--default-theme=ayu --extend-css=docs/rustdoc.css"
+          RUSTDOCFLAGS: "--default-theme=ayu --extend-css=docs/rustdoc.css --logo=docs/logo.svg"
         run: cargo doc --no-deps --all-features
 
       - name: Create redirect index.html
@@ -48,8 +48,10 @@ jobs:
               --template docs/pandoc-template.html
           done
 
-      - name: Copy HTML assets
-        run: cp docs/*.html target/doc/ 2>/dev/null || true
+      - name: Copy assets to output
+        run: |
+          cp docs/*.html target/doc/ 2>/dev/null || true
+          cp docs/logo.svg target/doc/ 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

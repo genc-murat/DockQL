@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="generator" content="pandoc" />
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
 $for(author-meta)$
   <meta name="author" content="$author-meta$" />
 $endfor$
@@ -13,32 +14,40 @@ $endif$
 $if(keywords)$
   <meta name="keywords" content="$for(keywords)$$keywords$$sep$, $endfor$" />
 $endif$
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <title>$if(title-prefix)$$title-prefix$ – $endif$$pagetitle$</title>
   <style>
     :root {
-      --bg: #0d1117;
-      --surface: #161b22;
-      --border: #30363d;
-      --text: #e6edf3;
-      --muted: #8b949e;
-      --accent: #58a6ff;
-      --green: #3fb950;
-      --orange: #d29922;
-      --red: #f85149;
-      --code-bg: #1c2128;
-      --inline-code-bg: #252b33;
+      --bg: #0a0e14;
+      --surface: #11161e;
+      --surface-hover: #181f2a;
+      --border: #1f2a37;
+      --text: #e3e9f1;
+      --muted: #8a95a5;
+      --accent: #57a6ff;
+      --accent-glow: rgba(87, 166, 255, 0.15);
+      --green: #3ecf8e;
+      --orange: #d4973c;
+      --red: #f14c4c;
+      --code-bg: #0d121a;
+      --inline-code-bg: #1a2332;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: var(--bg);
       color: var(--text);
-      line-height: 1.7;
-      padding: 40px 24px 80px;
+      line-height: 1.65;
+      padding: 40px 0 80px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
     .container {
       max-width: 880px;
       margin: 0 auto;
+      padding: 0 28px;
     }
 
     /* ── Headings ───────────────────────────── */
@@ -65,8 +74,8 @@ $endif$
     em { color: var(--muted); }
 
     /* ── Links ──────────────────────────────── */
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
+    a { color: var(--accent); text-decoration: none; transition: color .2s; }
+    a:hover { text-decoration: underline; color: #7cb8ff; }
 
     /* ── Lists ──────────────────────────────── */
     ul, ol { margin-bottom: 16px; padding-left: 24px; }
@@ -77,17 +86,19 @@ $endif$
     pre {
       background: var(--code-bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: 10px;
       padding: 16px 18px;
       margin-bottom: 16px;
       overflow-x: auto;
-      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
       font-size: 0.82rem;
-      line-height: 1.5;
+      line-height: 1.6;
       color: #c9d1d9;
+      transition: border-color .3s;
     }
+    pre:hover { border-color: rgba(87, 166, 255, 0.3); }
     code {
-      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
       font-size: 0.85em;
     }
     :not(pre) > code {
@@ -95,16 +106,47 @@ $endif$
       padding: 2px 6px;
       border-radius: 4px;
       font-size: 0.82rem;
-      color: #f0f6fc;
+      color: #e3e9f1;
     }
     pre code { background: none; padding: 0; font-size: inherit; }
+
+    /* ── Syntax highlighting (Pandoc) ──────── */
+    /* mapped to landing page colors */
+    .kw  { color: #ff7b72; }  /* keyword */
+    .cf  { color: #ff7b72; }  /* control flow */
+    .fu  { color: #d2a8ff; }  /* function */
+    .st  { color: #a5d6ff; }  /* string */
+    .ch  { color: #a5d6ff; }  /* character */
+    .dv,
+    .bn,
+    .fl  { color: #79c0ff; }  /* number */
+    .op  { color: #ffa657; }  /* operator */
+    .co  { color: #636d7d; }  /* comment */
+    .dt  { color: #7cb8ff; }  /* data type */
+    .va  { color: #e3e9f1; }  /* variable */
+    .bu  { color: #d2a8ff; }  /* built-in */
+    .im  { color: #57a6ff; }  /* import */
+    .in  { color: #57a6ff; }  /* information */
+    .cn  { color: #79c0ff; }  /* constant */
+    .ss  { color: #a5d6ff; }  /* special string */
+    .sc  { color: #ffa657; }  /* special char */
+    .vs  { color: #a5d6ff; }  /* verbatim string */
+    .at  { color: #d4973c; }  /* attribute */
+    .av  { color: #d4973c; }  /* attribute value */
+    .do  { color: #3ecf8e; }  /* documentation */
+    .an  { color: #8a95a5; }  /* annotation */
+    .ot  { color: #8a95a5; }  /* other */
+    .re  { color: #8a95a5; }  /* region marker */
+    .wa  { color: #d4973c; }  /* warning */
+    .er  { color: #f14c4c; }  /* error */
+    .al  { color: #f14c4c; }  /* alert */
 
     /* ── Tables ─────────────────────────────── */
     table {
       border-collapse: collapse;
       margin-bottom: 20px;
       width: 100%;
-      font-size: 0.9rem;
+      font-size: 0.88rem;
     }
     th, td {
       padding: 8px 14px;
@@ -116,20 +158,20 @@ $endif$
       color: var(--muted);
       font-weight: 600;
       text-transform: uppercase;
-      font-size: 0.78rem;
+      font-size: 0.74rem;
       letter-spacing: 0.04em;
     }
     td { color: var(--text); }
     tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
-    tr:hover td { background: rgba(88,166,255,0.06); }
+    tr:hover td { background: rgba(87,166,255,0.06); }
 
     /* ── Blockquotes ────────────────────────── */
     blockquote {
       border-left: 3px solid var(--accent);
-      padding: 8px 16px;
+      padding: 10px 18px;
       margin-bottom: 16px;
-      background: rgba(88,166,255,0.06);
-      border-radius: 0 6px 6px 0;
+      background: rgba(87,166,255,0.06);
+      border-radius: 0 8px 8px 0;
     }
     blockquote p { margin-bottom: 0; color: var(--muted); }
 
@@ -147,6 +189,7 @@ $endif$
     /* ── Responsive ─────────────────────────── */
     @media (max-width: 640px) {
       body { padding: 24px 16px 60px; }
+      .container { padding: 0 16px; }
       h1 { font-size: 1.5rem; }
       h2 { font-size: 1.2rem; }
       h3 { font-size: 1rem; }
@@ -170,7 +213,6 @@ $endfor$
 </div>
   <script type="module">
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-    // Convert pandoc's <code class="language-mermaid"> into <pre class="mermaid">
     document.querySelectorAll('code.language-mermaid').forEach(el => {
       const pre = el.closest('pre');
       if (pre) {
@@ -178,7 +220,7 @@ $endfor$
         pre.textContent = el.textContent;
       }
     });
-    mermaid.initialize({ theme: 'dark', themeVariables: { background: '#0d1117', primaryColor: '#58a6ff' } });
+    mermaid.initialize({ theme: 'dark', themeVariables: { background: '#0a0e14', primaryColor: '#57a6ff' } });
   </script>
 </body>
 </html>

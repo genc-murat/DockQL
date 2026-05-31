@@ -3,200 +3,372 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="logo.svg">
     <title>DOL — Docker Observability Language</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0d1117;
-            --surface: #161b22;
-            --border: #30363d;
-            --text: #e6edf3;
-            --muted: #8b949e;
-            --accent: #58a6ff;
-            --green: #3fb950;
-            --orange: #d29922;
-            --red: #f85149;
+            --bg: #0a0e14;
+            --surface: #11161e;
+            --surface-hover: #181f2a;
+            --border: #1f2a37;
+            --text: #e3e9f1;
+            --muted: #8a95a5;
+            --accent: #57a6ff;
+            --accent-glow: rgba(87, 166, 255, 0.15);
+            --green: #3ecf8e;
+            --orange: #d4973c;
+            --red: #f14c4c;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             background: var(--bg);
             color: var(--text);
-            line-height: 1.6;
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
-        .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+        .container {
+            max-width: 880px;
+            margin: 0 auto;
+            padding: 0 28px;
+        }
 
-        /* ── Hero ─────────────────────────────────── */
-        .hero {
-            padding: 80px 0 60px;
-            text-align: center;
+        /* ── Navigation bar ──────────────────────── */
+        .nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 0;
             border-bottom: 1px solid var(--border);
         }
-        .hero h1 {
-            font-size: 3rem;
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.15rem;
             font-weight: 700;
             letter-spacing: -0.02em;
-            background: linear-gradient(135deg, var(--accent), var(--green));
+            color: var(--text);
+            text-decoration: none;
+        }
+        .nav-brand svg {
+            width: 28px;
+            height: 28px;
+        }
+        .nav-brand span { color: var(--accent); }
+        .nav-links {
+            display: flex;
+            gap: 24px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: color .2s;
+        }
+        .nav-links a:hover { color: var(--text); }
+        .nav-links .btn {
+            background: var(--accent);
+            color: #0a0e14;
+            padding: 6px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: opacity .2s;
+        }
+        .nav-links .btn:hover { opacity: .85; color: #0a0e14; }
+
+        /* ── Hero ────────────────────────────────── */
+        .hero {
+            padding: 80px 0 56px;
+            text-align: center;
+            position: relative;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -120px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 400px;
+            background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .hero h1 {
+            position: relative;
+            font-size: 3.2rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1.15;
+            background: linear-gradient(135deg, var(--text) 0%, var(--accent) 50%, var(--green) 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
-        .hero p.tagline {
+        .hero .tagline {
             margin-top: 16px;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             color: var(--muted);
-            max-width: 640px;
+            max-width: 600px;
             margin-left: auto;
             margin-right: auto;
+            line-height: 1.6;
         }
         .hero .badges {
-            margin-top: 24px;
+            margin-top: 28px;
             display: flex;
             justify-content: center;
             gap: 8px;
             flex-wrap: wrap;
+            position: relative;
         }
-        .hero .badges img { height: 20px; border-radius: 4px; }
+        .hero .badges img { height: auto; max-height: 28px; border-radius: 4px; vertical-align: middle; }
 
-        /* ── Code block ────────────────────────────── */
+        /* ── Code block ──────────────────────────── */
         .code-block {
-            margin: 40px auto;
+            margin: 48px auto;
             max-width: 720px;
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 8px;
+            border-radius: 10px;
             overflow: hidden;
+            transition: border-color .3s;
         }
+        .code-block:hover { border-color: rgba(87, 166, 255, 0.3); }
         .code-block .header {
-            padding: 8px 16px;
-            background: #1c2128;
+            padding: 10px 18px;
+            background: #0d121a;
             border-bottom: 1px solid var(--border);
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             color: var(--muted);
             display: flex;
             align-items: center;
             gap: 8px;
+            user-select: none;
         }
         .code-block .header .dot {
             width: 10px; height: 10px; border-radius: 50%;
+            transition: opacity .2s;
         }
+        .code-block:hover .header .dot { opacity: .9; }
         .code-block .header .dot.r { background: #ff5f57; }
         .code-block .header .dot.y { background: #ffbd2e; }
         .code-block .header .dot.g { background: #28c840; }
         .code-block pre {
-            padding: 16px 20px;
-            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-            font-size: 0.85rem;
+            padding: 18px 22px;
+            font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.8rem;
+            line-height: 1.6;
             overflow-x: auto;
             color: #c9d1d9;
         }
-        .code-block pre .cmt { color: #8b949e; }
+        .code-block pre .cmt { color: #636d7d; }
         .code-block pre .kw { color: #ff7b72; }
         .code-block pre .fn { color: #d2a8ff; }
         .code-block pre .str { color: #a5d6ff; }
         .code-block pre .num { color: #79c0ff; }
         .code-block pre .op { color: #ffa657; }
 
-        /* ── Sections ──────────────────────────────── */
-        section { padding: 60px 0; }
+        /* ── CTA buttons ─────────────────────────── */
+        .cta-row {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 36px;
+            flex-wrap: wrap;
+        }
+        .cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all .2s;
+        }
+        .cta-primary {
+            background: var(--accent);
+            color: #0a0e14;
+        }
+        .cta-primary:hover {
+            background: #6cb3ff;
+            transform: translateY(-1px);
+        }
+        .cta-secondary {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .cta-secondary:hover {
+            border-color: var(--muted);
+            transform: translateY(-1px);
+        }
+
+        /* ── Sections ────────────────────────────── */
+        section { padding: 64px 0; }
         section + section { border-top: 1px solid var(--border); }
         section h2 {
-            font-size: 1.6rem;
+            font-size: 1.3rem;
             font-weight: 600;
-            margin-bottom: 24px;
+            letter-spacing: -0.01em;
+            margin-bottom: 20px;
+            color: var(--text);
         }
-        section p, section li { color: var(--muted); }
-        section p { margin-bottom: 12px; }
-        section ul {
-            list-style: none;
-            padding: 0;
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-            gap: 8px;
-        }
-        section ul li {
-            padding: 10px 14px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            font-size: 0.9rem;
-        }
-        section ul li::before { content: "▸ "; color: var(--green); }
+        section > p { color: var(--muted); margin-bottom: 16px; }
 
-        /* ── Cards ─────────────────────────────────── */
+        /* ── Feature grid ────────────────────────── */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 6px;
+        }
+        .feature-item {
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background .15s, color .15s;
+        }
+        .feature-item:hover {
+            background: var(--surface);
+            color: var(--text);
+        }
+        .feature-item .icon {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--green);
+            flex-shrink: 0;
+        }
+
+        /* ── Cards ───────────────────────────────── */
         .cards {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 16px;
-            margin-top: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 12px;
         }
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 8px;
+            border-radius: 10px;
             padding: 20px;
-            transition: border-color .2s;
+            transition: border-color .2s, background .2s;
         }
-        .card:hover { border-color: var(--accent); }
+        .card:hover {
+            border-color: rgba(87, 166, 255, 0.25);
+            background: var(--surface-hover);
+        }
         .card h3 {
-            font-size: 1rem;
-            margin-bottom: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 6px;
         }
-        .card p {
-            font-size: 0.85rem;
-            color: var(--muted);
-            margin: 0;
-        }
-        .card a {
-            color: var(--accent);
+        .card h3 a {
+            color: var(--text);
             text-decoration: none;
         }
-        .card a:hover { text-decoration: underline; }
+        .card h3 a:hover { color: var(--accent); }
+        .card p {
+            font-size: 0.82rem;
+            color: var(--muted);
+            line-height: 1.55;
+            margin: 0;
+        }
 
-        /* ── Footer ────────────────────────────────── */
+        /* ── Quick start code block ──────────────── */
+        .quick-start .code-block { margin-top: 16px; }
+
+        /* ── Footer ──────────────────────────────── */
         footer {
             text-align: center;
-            padding: 32px 0;
+            padding: 36px 0;
             border-top: 1px solid var(--border);
             color: var(--muted);
-            font-size: 0.85rem;
+            font-size: 0.82rem;
         }
-        footer a { color: var(--accent); text-decoration: none; }
+        footer a {
+            color: var(--muted);
+            text-decoration: none;
+            transition: color .2s;
+        }
+        footer a:hover { color: var(--text); }
+        footer .sep { margin: 0 10px; color: var(--border); }
 
-        /* ── Responsive ────────────────────────────── */
+        /* ── Responsive ──────────────────────────── */
         @media (max-width: 640px) {
-            .hero h1 { font-size: 2rem; }
             .hero { padding: 48px 0 32px; }
-            section { padding: 32px 0; }
+            .hero h1 { font-size: 2rem; }
+            .hero .tagline { font-size: 1rem; }
+            .nav { flex-direction: column; gap: 12px; }
+            .nav-links { width: 100%; justify-content: center; flex-wrap: wrap; }
+            section { padding: 40px 0; }
+            .container { padding: 0 20px; }
+            .feature-grid { grid-template-columns: 1fr; }
+            .cards { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
 
-<div class="hero">
-    <div class="container">
-        <h1>DOL</h1>
+<div class="container">
+    <!-- Nav -->
+    <nav class="nav">
+        <a href="#" class="nav-brand">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="DOL logo">
+                <rect x="4" y="4" width="56" height="56" rx="14" stroke="#57a6ff" stroke-width="2.5"/>
+                <path d="M12 36 Q20 24, 28 36 Q36 48, 44 36 Q52 24, 56 30" stroke="#3ecf8e" stroke-width="2.5" stroke-linecap="round"/>
+                <circle cx="44" cy="30" r="3.5" fill="#57a6ff"/>
+                <circle cx="24" cy="33" r="2" fill="#3ecf8e" opacity="0.6"/>
+            </svg>
+            dol<span>.</span>
+        </a>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#docs">Docs</a>
+            <a href="#quickstart">Quick Start</a>
+            <a href="https://github.com/genc-murat/DockQL" class="btn">GitHub</a>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <div class="hero">
+        <h1>Docker<br>Observability Language</h1>
         <p class="tagline">
-            Docker Observability Language — a domain-specific language and CLI tool
-            for querying, observing, and analyzing Docker infrastructure.
+            A domain-specific language and CLI tool for querying, observing, and
+            analyzing your Docker infrastructure in real time.
         </p>
         <div class="badges">
-            <img src="https://img.shields.io/badge/Rust-1.96%2B-dea584?logo=rust" alt="Rust">
-            <img src="https://img.shields.io/github/v/release/genc-murat/DockQL?color=3fb950&logo=github" alt="Release">
-            <img src="https://img.shields.io/github/actions/workflow/status/genc-murat/DockQL/ci.yml?branch=main&label=CI" alt="CI">
-            <img src="https://img.shields.io/github/deployments/genc-murat/DockQL/github-pages?label=docs&logo=github" alt="Docs">
+            <img src="https://img.shields.io/badge/Rust-1.96%2B-8a95a5?logo=rust&style=for-the-badge" alt="Rust">
+            <img src="https://img.shields.io/github/v/release/genc-murat/DockQL?color=3ecf8e&logo=github&style=for-the-badge" alt="Release">
+            <img src="https://img.shields.io/github/actions/workflow/status/genc-murat/DockQL/ci.yml?branch=main&label=CI&color=57a6ff&style=for-the-badge" alt="CI">
+            <img src="https://img.shields.io/github/deployments/genc-murat/DockQL/github-pages?label=docs&logo=github&style=for-the-badge" alt="Docs">
+        </div>
+        <div class="cta-row">
+            <a href="https://github.com/genc-murat/DockQL" class="cta cta-primary">View on GitHub →</a>
+            <a href="#quickstart" class="cta cta-secondary">Quick Start</a>
         </div>
     </div>
-</div>
 
-<div class="container">
     <!-- Terminal mock -->
     <div class="code-block">
         <div class="header">
             <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-            <span style="margin-left:8px;">dol</span>
+            <span style="margin-left:6px;">dol</span>
         </div>
         <pre><span class="cmt"># List running containers with high CPU</span>
-$ dol <span class="str">"observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc"</span>
+$ dol <span class="str">"observe containers | where cpu > 80% | sort cpu desc | select name, image, cpu"</span>
 
 ┌──────────────┬──────────────────┬──────┐
 │ name         │ image            │ cpu  │
@@ -211,64 +383,65 @@ $ dol <span class="str">"events containers where action = die | select time, con
     </div>
 
     <!-- Features -->
-    <section>
-        <h2>⚡ Features</h2>
-        <ul>
-            <li>Live container observation with filtering &amp; sorting</li>
-            <li>Real-time Docker event streaming</li>
-            <li>Historical time-travel inspection</li>
-            <li>Alerting with duration guards (print, webhook, restart)</li>
-            <li>Anomaly detection (CPU, memory, restart loops)</li>
-            <li>Persistent SQLite telemetry store</li>
-            <li>Static semantic analysis &amp; type checking</li>
-            <li>Aggregate functions (sum, count, avg, min, max)</li>
-            <li>Arithmetic expressions &amp; string functions</li>
-            <li>If/then/else pipeline branching, case/when</li>
-            <li>Interactive REPL with tab completion</li>
-            <li>Terminal dashboard (top &amp; multi-panel)</li>
-            <li>Export to InfluxDB, Loki, Prometheus</li>
-            <li>ANSI-colored table, CSV, JSON, JSONL output</li>
-        </ul>
+    <section id="features">
+        <h2>Features</h2>
+        <div class="feature-grid">
+            <div class="feature-item"><span class="icon"></span>Live container observation</div>
+            <div class="feature-item"><span class="icon"></span>Real-time Docker event streaming</div>
+            <div class="feature-item"><span class="icon"></span>Historical time-travel inspection</div>
+            <div class="feature-item"><span class="icon"></span>Alerting with duration guards</div>
+            <div class="feature-item"><span class="icon"></span>Anomaly detection engine</div>
+            <div class="feature-item"><span class="icon"></span>Persistent SQLite telemetry store</div>
+            <div class="feature-item"><span class="icon"></span>Static semantic analysis &amp; type checking</div>
+            <div class="feature-item"><span class="icon"></span>Aggregate functions (sum, count, avg)</div>
+            <div class="feature-item"><span class="icon"></span>Arithmetic &amp; string functions</div>
+            <div class="feature-item"><span class="icon"></span>If/then/else pipeline branching</div>
+            <div class="feature-item"><span class="icon"></span>Interactive REPL with tab completion</div>
+            <div class="feature-item"><span class="icon"></span>Live TUI dashboard (top &amp; multi-panel)</div>
+            <div class="feature-item"><span class="icon"></span>Export to InfluxDB, Loki, Prometheus</div>
+            <div class="feature-item"><span class="icon"></span>ANSI table, CSV, JSON, JSONL output</div>
+        </div>
     </section>
 
     <!-- Documentation -->
-    <section>
-        <h2>📖 Documentation</h2>
+    <section id="docs">
+        <h2>Documentation</h2>
         <div class="cards">
             <div class="card">
                 <h3><a href="spec.html">Language Spec</a></h3>
-                <p>Complete DOL v0.1 specification — syntax, types, operators, pipeline nodes, and reserved keywords.</p>
+                <p>Syntax, types, operators, pipeline nodes, and reserved keywords.</p>
             </div>
             <div class="card">
                 <h3><a href="architecture.html">Architecture</a></h3>
-                <p>High-level architecture overview — parser, planner, executor, storage, and component relationships.</p>
+                <p>Parser, planner, executor, storage, and component relationships.</p>
             </div>
             <div class="card">
                 <h3><a href="examples.html">Query Examples</a></h3>
-                <p>55 categorized examples covering observe, events, inspect, analyze, alert, aggregation, and pipeline queries.</p>
+                <p>55 categorized examples covering all query types and patterns.</p>
             </div>
             <div class="card">
                 <h3><a href="analyze.html">Analysis Docs</a></h3>
-                <p>Documentation for the deterministic anomaly detection engine — restart loops, CPU/memory pressure, deployment errors.</p>
+                <p>Anomaly detection engine — restart loops, CPU/memory pressure, deployment errors.</p>
             </div>
             <div class="card">
                 <h3><a href="storage.html">Storage Docs</a></h3>
-                <p>Details on the SQLite telemetry store schema, retention policies, and historical query execution.</p>
+                <p>SQLite telemetry store schema, retention policies, and historical queries.</p>
             </div>
             <div class="card">
                 <h3><a href="dol/index.html">API Docs (cargo doc)</a></h3>
-                <p>Auto-generated Rust API documentation for all modules — parser, eval, executor, alerts, and more.</p>
+                <p>Auto-generated Rust API docs for all modules — parser, eval, executor, alerts, and more.</p>
             </div>
         </div>
     </section>
 
     <!-- Quick Start -->
-    <section>
-        <h2>🚀 Quick Start</h2>
-        <div class="code-block">
+    <section id="quickstart">
+        <h2>Quick Start</h2>
+        <p>Clone, build, and run your first query in under a minute.</p>
+        <div class="code-block quick-start">
             <div class="header">
                 <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-                <span style="margin-left:8px;">terminal</span>
+                <span style="margin-left:6px;">terminal</span>
             </div>
             <pre><span class="cmt"># Clone and build</span>
 $ git clone https://github.com/genc-murat/DockQL.git
@@ -284,24 +457,23 @@ $ ./target/release/dol repl
 <span class="cmt"># Live-updating container monitor</span>
 $ ./target/release/dol top</pre>
         </div>
-    </section>
-
-    <!-- Installation -->
-    <section>
-        <h2>📦 Installation</h2>
-        <p>Pre-built binaries are available for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64) via the <a href="https://github.com/genc-murat/DockQL/releases" style="color:var(--accent);">GitHub Releases</a> page.</p>
-        <p>Alternatively, build from source with Rust 1.85+:</p>
-        <div class="code-block" style="margin-top:12px;">
+        <div class="code-block" style="margin-top:16px;">
             <pre>cargo install dol --git https://github.com/genc-murat/DockQL</pre>
         </div>
+        <p style="margin-top:10px;font-size:0.82rem;color:var(--muted);">
+            Pre-built binaries for Linux, macOS, and Windows on
+            <a href="https://github.com/genc-murat/DockQL/releases" style="color:var(--accent);">GitHub Releases</a>.
+        </p>
     </section>
 </div>
 
 <footer>
     <div class="container">
-        <p><a href="https://github.com/genc-murat/DockQL">GitHub</a> &middot;
-        <a href="https://github.com/genc-murat/DockQL/blob/main/LICENSE">MIT License</a></p>
-        <p style="margin-top:4px;font-size:0.8rem;">DOL — Docker Observability Language</p>
+        <a href="https://github.com/genc-murat/DockQL">GitHub</a>
+        <span class="sep">·</span>
+        <a href="https://github.com/genc-murat/DockQL/blob/main/LICENSE">MIT License</a>
+        <span class="sep">·</span>
+        <span>DOL — Docker Observability Language</span>
     </div>
 </footer>
 

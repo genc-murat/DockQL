@@ -6,6 +6,9 @@ repository = "https://github.com/genc-murat/DockQL"
 homepage = "https://github.com/genc-murat/DockQL"
 description = "Docker Observability Language - A domain-specific language and CLI tool for querying Docker infrastructure"
 
+[package.metadata.docs.rs]
+logo = "https://genc-murat.github.io/DockQL/logo.svg"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }

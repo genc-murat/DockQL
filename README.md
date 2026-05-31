@@ -1,6 +1,10 @@
-# DOL — Docker Observability Language
+<p align="center">
+  <img src="docs/logo.svg" width="80" height="80" alt="DOL logo">
+</p>
 
-A domain-specific language and CLI tool for querying, observing, and analyzing Docker infrastructure.
+<h1 align="center">DOL — Docker Observability Language</h1>
+
+<p align="center">A domain-specific language and CLI tool for querying, observing, and analyzing Docker infrastructure.</p>
 
 ```bash
 dol "observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc"
