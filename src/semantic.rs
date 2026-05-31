@@ -397,3 +397,101 @@ pub fn validate_semantics(query: &Query) -> Result<(), EvalError> {
     analyzer.validate_query(query)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser;
+
+    #[test]
+    fn test_valid_query() {
+        let parsed = parser::parse("observe containers | where cpu > 50% | select name, cpu").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_field() {
+        let parsed = parser::parse("observe containers | where invalid_field = 1").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_invalid_comparison() {
+        let parsed = parser::parse("observe containers | where state > 50").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::InvalidComparison { .. })));
+    }
+
+    #[test]
+    fn test_invalid_arithmetic() {
+        let parsed = parser::parse("observe containers | set val = state + 1").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::Arithmetic(_))));
+    }
+
+    #[test]
+    fn test_unknown_function() {
+        let parsed = parser::parse("observe containers | where invalid_fn(name) = \"test\"").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnknownFunction { .. })));
+    }
+
+    #[test]
+    fn test_set_field_inheritance() {
+        let parsed = parser::parse("observe containers | set tier = \"prod\" | select name, tier").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_label_lookup() {
+        let parsed = parser::parse("observe containers | where label.env = \"production\"").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_nested_if_branch() {
+        let parsed = parser::parse("observe containers | if cpu > 90% then set high = true else set high = false").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_and_or_types() {
+        let parsed = parser::parse("observe containers | where state and name").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_distinct_and_limit() {
+        let parsed = parser::parse("observe containers | distinct | limit 5").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_group_by_fields() {
+        let parsed = parser::parse("observe containers | group by state with count(id) as cnt").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_other_collection_targets() {
+        let parsed = parser::parse("observe images | select name, size").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+
+        let parsed = parser::parse("observe networks | select name, scope").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+
+        let parsed = parser::parse("observe volumes | select name, scope").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+}
+
