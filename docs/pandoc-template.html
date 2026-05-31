@@ -175,7 +175,6 @@ $endfor$
       const pre = el.closest('pre');
       if (pre) {
         pre.className = 'mermaid';
-        pre.removeChild(el);
         pre.textContent = el.textContent;
       }
     });
