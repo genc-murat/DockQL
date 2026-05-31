@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::ast::{
-    AlertRule, AnalyzeQuery, CollectionTarget, EventsQuery, InspectQuery, ObserveQuery,
+    AlertRule, AnalyzeQuery, CollectionTarget, EventsQuery, InspectQuery, LogsQuery, ObserveQuery,
     PipelineNode, Query, SortDirection,
 };
 
@@ -10,6 +10,8 @@ pub enum LogicalPlan {
     Observe(ObservePlan),
     Events(EventsPlan),
     Inspect(InspectPlan),
+    Logs(LogsPlan),
+    Ping,
     Analyze(AnalyzePlan),
     Alert(AlertPlan),
     Fields(crate::ast::CollectionTarget),
@@ -44,6 +46,13 @@ pub struct AnalyzePlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AlertPlan {
     pub rule: AlertRule,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogsPlan {
+    pub container: String,
+    pub tail: Option<u64>,
+    pub steps: Vec<PlanStep>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,6 +129,20 @@ impl fmt::Display for LogicalPlan {
             LogicalPlan::Alert(p) => {
                 writeln!(f, "AlertPlan {{ condition: {:?} }}", p.rule.condition)
             }
+            LogicalPlan::Logs(p) => {
+                writeln!(
+                    f,
+                    "LogsPlan {{ container: {}, tail: {:?} }}",
+                    p.container, p.tail
+                )?;
+                for step in &p.steps {
+                    writeln!(f, "  {step}")?;
+                }
+                Ok(())
+            }
+            LogicalPlan::Ping => {
+                writeln!(f, "Ping {{ test Docker connectivity }}")
+            }
             LogicalPlan::Fields(target) => {
                 writeln!(f, "FieldsPlan {{ target: {target:?} }}")
             }
@@ -180,6 +203,8 @@ pub fn plan(query: &Query) -> Result<LogicalPlan, PlanError> {
         Query::Inspect(q) => plan_inspect(q),
         Query::Analyze(q) => plan_analyze(q),
         Query::Alert(rule) => Ok(LogicalPlan::Alert(AlertPlan { rule: rule.clone() })),
+        Query::Logs(q) => plan_logs(q),
+        Query::Ping => Ok(LogicalPlan::Ping),
         Query::Fields(target) => Ok(LogicalPlan::Fields(*target)),
     }
 }
@@ -224,6 +249,24 @@ fn plan_inspect(query: &InspectQuery) -> Result<LogicalPlan, PlanError> {
     Ok(LogicalPlan::Inspect(InspectPlan {
         target: query.target.clone(),
         at: query.at.clone(),
+    }))
+}
+
+fn plan_logs(query: &LogsQuery) -> Result<LogicalPlan, PlanError> {
+    let mut steps = Vec::new();
+
+    if let Some(filter) = &query.filter {
+        steps.push(PlanStep::Filter(filter.clone()));
+    }
+
+    for node in &query.pipeline {
+        steps.push(node_to_step(node));
+    }
+
+    Ok(LogicalPlan::Logs(LogsPlan {
+        container: query.container.clone(),
+        tail: query.tail,
+        steps,
     }))
 }
 

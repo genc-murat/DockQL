@@ -127,6 +127,15 @@ impl SemanticAnalyzer {
             Query::Alert(rule) => {
                 self.validate_expression(&rule.condition)?;
             }
+            Query::Logs(q) => {
+                if let Some(filter) = &q.filter {
+                    self.validate_expression(filter)?;
+                }
+                for node in &q.pipeline {
+                    self.apply_pipeline_node(node)?;
+                }
+            }
+            Query::Ping => {}
             Query::Inspect(_) | Query::Fields(_) => {}
         }
         Ok(())
@@ -401,6 +410,8 @@ pub fn validate_semantics(query: &Query) -> Result<(), EvalError> {
             },
         },
         Query::Alert(_) => CollectionTarget::Containers,
+        Query::Logs(_) => CollectionTarget::Containers,
+        Query::Ping => CollectionTarget::Containers,
         Query::Inspect(_) | Query::Fields(_) => return Ok(()),
     };
 

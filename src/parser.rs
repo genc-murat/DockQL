@@ -2,8 +2,8 @@ use serde::Serialize;
 
 use crate::ast::{
     AlertAction, AlertRule, AnalysisTarget, AnalysisVerb, BinOp, CollectionTarget, Duration,
-    DurationUnit, EventsQuery, Expression, InspectQuery, Operator, PipelineNode, Query, SetValue,
-    SingularTarget, SingularTargetKind, SortDirection, TimeSelector, Value,
+    DurationUnit, EventsQuery, Expression, InspectQuery, LogsQuery, Operator, PipelineNode, Query,
+    SetValue, SingularTarget, SingularTargetKind, SortDirection, TimeSelector, Value,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -146,6 +146,11 @@ impl Parser {
             Some("inspect") => self.parse_inspect(),
             Some("analyze") => self.parse_analyze(),
             Some("alert") => self.parse_alert_rule().map(Query::Alert),
+            Some("logs") => self.parse_logs(),
+            Some("ping") => {
+                self.advance();
+                Ok(Query::Ping)
+            }
             Some("fields") => self.parse_fields(),
             Some(other) => Err(self.error_here(format!(
                 "expected query family, found `{other}`; try `observe containers`"
@@ -229,6 +234,25 @@ impl Parser {
             duration,
             action,
         })
+    }
+
+    fn parse_logs(&mut self) -> Result<Query, ParseError> {
+        self.expect_ident("logs")?;
+        self.expect_ident("container")?;
+        let container = self.expect_identifier_like("container name or ID")?;
+        let tail = if self.consume_ident("tail") {
+            Some(self.expect_u64("tail")?)
+        } else {
+            None
+        };
+        let filter = self.parse_optional_inline_where()?;
+        let pipeline = self.parse_pipeline()?;
+        Ok(Query::Logs(LogsQuery {
+            container,
+            tail,
+            filter,
+            pipeline,
+        }))
     }
 
     fn parse_fields(&mut self) -> Result<Query, ParseError> {

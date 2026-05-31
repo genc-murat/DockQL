@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, process::Command};
+use std::{collections::HashMap, ffi::OsStr, process::Command};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,6 +9,15 @@ pub trait DockerClient {
     fn list_images(&self) -> Result<Vec<Image>, DockerError>;
     fn list_networks(&self) -> Result<Vec<Network>, DockerError>;
     fn list_volumes(&self) -> Result<Vec<Volume>, DockerError>;
+
+    /// Inspect a single container by ID (or ID prefix) and return its full details.
+    fn inspect_container(&self, id: &str) -> Result<Container, DockerError>;
+
+    /// Retrieve the last `tail` log lines from a container.
+    fn container_logs(&self, id: &str, tail: usize) -> Result<Vec<String>, DockerError>;
+
+    /// Check whether the Docker daemon is reachable and responsive.
+    fn ping(&self) -> Result<bool, DockerError>;
 }
 
 pub fn list_running_containers<C>(client: &C) -> Result<Vec<Container>, DockerError>
@@ -22,7 +31,7 @@ where
         .collect())
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Container {
     pub id: String,
     pub name: String,
@@ -114,9 +123,47 @@ pub enum DockerError {
     },
 }
 
+/// The result of running a command.
 #[derive(Debug, Clone)]
+pub struct RunOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+}
+
+/// Abstraction over command execution, allowing tests to mock docker output.
+pub trait CommandRunner: std::fmt::Debug + Send {
+    fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError>;
+}
+
+/// The real command runner that delegates to `std::process::Command`.
+#[derive(Debug)]
+pub struct RealCommandRunner;
+
+impl CommandRunner for RealCommandRunner {
+    fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError> {
+        let command_display = format_command_str(bin, args);
+        let output = Command::new(bin)
+            .args(args)
+            .output()
+            .map_err(|source| DockerError::CommandIo {
+                command: command_display,
+                source,
+            })?;
+        Ok(RunOutput {
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct DockerCliClient {
     docker_bin: String,
+    cmd_runner: Box<dyn CommandRunner>,
 }
 
 impl Default for DockerCliClient {
@@ -129,6 +176,18 @@ impl DockerCliClient {
     pub fn new(docker_bin: impl Into<String>) -> Self {
         Self {
             docker_bin: docker_bin.into(),
+            cmd_runner: Box::new(RealCommandRunner),
+        }
+    }
+
+    /// Create a client with a custom command runner (useful for testing).
+    pub fn with_runner(
+        docker_bin: impl Into<String>,
+        cmd_runner: Box<dyn CommandRunner>,
+    ) -> Self {
+        Self {
+            docker_bin: docker_bin.into(),
+            cmd_runner,
         }
     }
 
@@ -145,19 +204,12 @@ impl DockerCliClient {
     }
 
     fn run_json_lines_str(&self, args: &[String]) -> Result<Vec<Value>, DockerError> {
-        let command_display = format_command_str(&self.docker_bin, args);
-        let output = Command::new(&self.docker_bin)
-            .args(args)
-            .output()
-            .map_err(|source| DockerError::CommandIo {
-                command: command_display.clone(),
-                source,
-            })?;
+        let output = self.cmd_runner.run(&self.docker_bin, args)?;
 
-        if !output.status.success() {
+        if !output.success {
             return Err(DockerError::CommandFailed {
-                command: command_display,
-                code: output.status.code(),
+                command: format_command_str(&self.docker_bin, args),
+                code: output.exit_code,
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
             });
         }
@@ -210,6 +262,56 @@ impl DockerClient for DockerCliClient {
             .map(volume_from_ls_json)
             .collect()
     }
+
+    fn inspect_container(&self, id: &str) -> Result<Container, DockerError> {
+        let values = self.run_json_lines(["inspect", "--format", "{{json .}}", id])?;
+        match values.first() {
+            Some(value) => container_from_inspect_json(value),
+            None => Err(DockerError::CommandFailed {
+                command: format!("docker inspect {id}"),
+                code: None,
+                stderr: "container not found".to_owned(),
+            }),
+        }
+    }
+
+    fn container_logs(&self, id: &str, tail: usize) -> Result<Vec<String>, DockerError> {
+        let tail_str = tail.to_string();
+        let args: Vec<String> = vec![
+            "logs".to_owned(),
+            "--tail".to_owned(),
+            tail_str,
+            id.to_owned(),
+        ];
+        let output = self.cmd_runner.run(&self.docker_bin, &args)?;
+
+        if !output.success {
+            return Err(DockerError::CommandFailed {
+                command: format_command_str(&self.docker_bin, &args),
+                code: output.exit_code,
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
+        }
+
+        // Combine stdout and stderr (docker logs may write to either stream)
+        let all_output = [&output.stdout[..], &output.stderr[..]].concat();
+        let output_str = String::from_utf8_lossy(&all_output);
+        Ok(output_str.lines().map(|l| l.to_owned()).collect())
+    }
+
+    fn ping(&self) -> Result<bool, DockerError> {
+        let args: Vec<String> = vec![
+            "ps".to_owned(),
+            "--format".to_owned(),
+            "{{.ID}}".to_owned(),
+            "--limit".to_owned(),
+            "1".to_owned(),
+        ];
+        match self.cmd_runner.run(&self.docker_bin, &args) {
+            Ok(output) => Ok(output.success),
+            Err(_) => Ok(false),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -218,6 +320,8 @@ pub struct MockDockerClient {
     pub images: Vec<Image>,
     pub networks: Vec<Network>,
     pub volumes: Vec<Volume>,
+    /// Simulated container logs, keyed by container ID or name.
+    pub logs: HashMap<String, Vec<String>>,
 }
 
 impl DockerClient for MockDockerClient {
@@ -235,6 +339,35 @@ impl DockerClient for MockDockerClient {
 
     fn list_volumes(&self) -> Result<Vec<Volume>, DockerError> {
         Ok(self.volumes.clone())
+    }
+
+    fn inspect_container(&self, id: &str) -> Result<Container, DockerError> {
+        // Search by ID prefix first, then by name
+        self.containers
+            .iter()
+            .find(|c| c.id.starts_with(id) || c.name == id)
+            .cloned()
+            .ok_or_else(|| DockerError::CommandFailed {
+                command: format!("docker inspect {id}"),
+                code: None,
+                stderr: format!("No such container: {id}"),
+            })
+    }
+
+    fn container_logs(&self, id: &str, _tail: usize) -> Result<Vec<String>, DockerError> {
+        // Search by ID prefix first, then by name
+        let key = self
+            .containers
+            .iter()
+            .find(|c| c.id.starts_with(id) || c.name == id)
+            .map(|c| c.id.clone())
+            .unwrap_or_else(|| id.to_owned());
+
+        Ok(self.logs.get(&key).cloned().unwrap_or_default())
+    }
+
+    fn ping(&self) -> Result<bool, DockerError> {
+        Ok(true)
     }
 }
 
@@ -265,6 +398,99 @@ fn container_from_ps_json(value: &Value) -> Result<Container, DockerError> {
         started_at: None,
         finished_at: None,
         restart_count: None,
+    })
+}
+
+/// Parse a single `docker inspect --format '{{json .}}' <id>` JSON object into a Container.
+fn container_from_inspect_json(value: &Value) -> Result<Container, DockerError> {
+    // Labels come as an object in inspect, convert to "key=val" strings
+    let labels = value
+        .pointer("/Config/Labels")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| {
+                    format!("{}={}", k, v.as_str().unwrap_or(""))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // Ports come as an object like {"8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}
+    let ports = value
+        .pointer("/NetworkSettings/Ports")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .flat_map(|(container_port, bindings)| {
+                    let arr = bindings.as_array();
+                    if arr.map_or(true, |a| a.is_empty()) {
+                        vec![container_port.clone()]
+                    } else {
+                        arr.unwrap()
+                            .iter()
+                            .map(|b| {
+                                let host_ip = b
+                                    .get("HostIp")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                let host_port = b
+                                    .get("HostPort")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                if host_port.is_empty() {
+                                    container_port.clone()
+                                } else if host_ip.is_empty() || host_ip == "0.0.0.0" {
+                                    format!("{host_port}->{container_port}")
+                                } else {
+                                    format!("{host_ip}:{host_port}->{container_port}")
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let name = get_string(value, &["Name"]);
+    let name = name.strip_prefix('/').unwrap_or(&name).to_owned();
+
+    Ok(Container {
+        id: get_string(value, &["Id"]),
+        name,
+        image: value
+            .pointer("/Config/Image")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_default(),
+        status: value
+            .pointer("/State/Status")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_default(),
+        state: value
+            .pointer("/State/Status")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_default(),
+        ports,
+        labels,
+        created_at: value
+            .pointer("/Created")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        started_at: value
+            .pointer("/State/StartedAt")
+            .and_then(Value::as_str)
+            .filter(|s| !s.starts_with("0001"))
+            .map(str::to_owned),
+        finished_at: value
+            .pointer("/State/FinishedAt")
+            .and_then(Value::as_str)
+            .filter(|s| !s.starts_with("0001"))
+            .map(str::to_owned),
+        restart_count: value.pointer("/RestartCount").and_then(Value::as_u64),
     })
 }
 
@@ -491,6 +717,226 @@ mod tests {
         assert_eq!(network.name, "bridge");
         assert_eq!(network.driver, "bridge");
         assert_eq!(network.scope, "local");
+    }
+
+    #[test]
+    fn mock_inspect_container_by_id_prefix() {
+        let client = MockDockerClient {
+            containers: vec![Container {
+                id: "abc123def456".to_owned(),
+                name: "api-service".to_owned(),
+                image: "api:latest".to_owned(),
+                status: "Up 2 minutes".to_owned(),
+                state: "running".to_owned(),
+                ports: vec!["8080/tcp".to_owned()],
+                labels: vec![],
+                created_at: None,
+                started_at: None,
+                finished_at: None,
+                restart_count: Some(0),
+            }],
+            ..Default::default()
+        };
+
+        let container = client
+            .inspect_container("abc123")
+            .expect("should find by id prefix");
+        assert_eq!(container.name, "api-service");
+    }
+
+    #[test]
+    fn mock_inspect_container_by_name() {
+        let client = MockDockerClient {
+            containers: vec![Container {
+                id: "abc123".to_owned(),
+                name: "web".to_owned(),
+                ..Container::default()
+            }],
+            ..Default::default()
+        };
+
+        let container = client
+            .inspect_container("web")
+            .expect("should find by name");
+        assert_eq!(container.id, "abc123");
+    }
+
+    #[test]
+    fn mock_inspect_container_not_found() {
+        let client = MockDockerClient::default();
+
+        let err = client.inspect_container("nonexistent").unwrap_err();
+        match err {
+            DockerError::CommandFailed { ref stderr, .. } => {
+                assert!(stderr.contains("No such container"));
+            }
+            _ => panic!("expected CommandFailed error"),
+        }
+    }
+
+    #[test]
+    fn mock_container_logs_by_id() {
+        let mut logs = std::collections::HashMap::new();
+        logs.insert("abc123".to_owned(), vec!["line1".to_owned(), "line2".to_owned()]);
+
+        let client = MockDockerClient {
+            containers: vec![Container {
+                id: "abc123".to_owned(),
+                name: "web".to_owned(),
+                ..Container::default()
+            }],
+            logs,
+            ..Default::default()
+        };
+
+        let log_lines = client
+            .container_logs("abc123", 100)
+            .expect("should return logs");
+        assert_eq!(log_lines, vec!["line1", "line2"]);
+    }
+
+    #[test]
+    fn mock_container_logs_not_found_returns_empty() {
+        let client = MockDockerClient::default();
+
+        let log_lines = client
+            .container_logs("nonexistent", 50)
+            .expect("should return empty vec");
+        assert!(log_lines.is_empty());
+    }
+
+    #[test]
+    fn mock_ping_returns_true() {
+        let client = MockDockerClient::default();
+        assert!(client.ping().expect("ping should not fail"));
+    }
+
+    // -------------------------------------------------------------------------
+    // MockCommandRunner — allows testing DockerCliClient without a real Docker
+    // -------------------------------------------------------------------------
+
+    #[derive(Debug)]
+    struct MockCommandRunner {
+        outputs: std::collections::HashMap<String, RunOutput>,
+    }
+
+    impl CommandRunner for MockCommandRunner {
+        fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError> {
+            let key = format_command_str(bin, args);
+            self.outputs.get(&key).cloned().ok_or_else(|| {
+                DockerError::CommandFailed {
+                    command: key,
+                    code: None,
+                    stderr: "no mock output defined for this command".to_owned(),
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn docker_cli_container_logs_success() {
+        let runner = MockCommandRunner {
+            outputs: std::collections::HashMap::from([(
+                "docker logs --tail 50 abc123".to_owned(),
+                RunOutput {
+                    stdout: b"line 1\nline 2\nline 3\n"[..].to_owned(),
+                    stderr: Vec::new(),
+                    success: true,
+                    exit_code: Some(0),
+                },
+            )]),
+        };
+
+        let client = DockerCliClient::with_runner("docker", Box::new(runner));
+        let logs = client.container_logs("abc123", 50).expect("should succeed");
+        assert_eq!(logs, vec!["line 1", "line 2", "line 3"]);
+    }
+
+    #[test]
+    fn docker_cli_container_logs_empty() {
+        let runner = MockCommandRunner {
+            outputs: std::collections::HashMap::from([(
+                "docker logs --tail 10 xyz789".to_owned(),
+                RunOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    success: true,
+                    exit_code: Some(0),
+                },
+            )]),
+        };
+
+        let client = DockerCliClient::with_runner("docker", Box::new(runner));
+        let logs = client.container_logs("xyz789", 10).expect("should succeed");
+        assert!(logs.is_empty());
+    }
+
+    #[test]
+    fn docker_cli_container_logs_failure() {
+        let runner = MockCommandRunner {
+            outputs: std::collections::HashMap::from([(
+                "docker logs --tail 5 dead".to_owned(),
+                RunOutput {
+                    stdout: Vec::new(),
+                    stderr: b"Error: No such container: dead"[..].to_owned(),
+                    success: false,
+                    exit_code: Some(1),
+                },
+            )]),
+        };
+
+        let client = DockerCliClient::with_runner("docker", Box::new(runner));
+        let err = client.container_logs("dead", 5).unwrap_err();
+        match err {
+            DockerError::CommandFailed {
+                ref command,
+                ref stderr,
+                ..
+            } => {
+                assert!(command.contains("logs"), "command should mention logs");
+                assert!(
+                    stderr.contains("No such container"),
+                    "stderr should contain error"
+                );
+            }
+            _ => panic!("expected CommandFailed error"),
+        }
+    }
+
+    #[test]
+    fn docker_cli_ping_success() {
+        let runner = MockCommandRunner {
+            outputs: std::collections::HashMap::from([(
+                "docker ps --format {{.ID}} --limit 1".to_owned(),
+                RunOutput {
+                    stdout: b"abc123\n"[..].to_owned(),
+                    stderr: Vec::new(),
+                    success: true,
+                    exit_code: Some(0),
+                },
+            )]),
+        };
+
+        let client = DockerCliClient::with_runner("docker", Box::new(runner));
+        assert!(client.ping().expect("ping should not fail"));
+    }
+
+    #[test]
+    fn docker_cli_ping_failure() {
+        let runner = MockCommandRunner {
+            outputs: std::collections::HashMap::from([(
+                "docker ps --format {{.ID}} --limit 1".to_owned(),
+                RunOutput {
+                    stdout: Vec::new(),
+                    stderr: b"cannot connect to Docker daemon"[..].to_owned(),
+                    success: false,
+                    exit_code: Some(1),
+                },
+            )]),
+        };
+
+        let client = DockerCliClient::with_runner("docker", Box::new(runner));
+        assert!(!client.ping().expect("ping should not fail"));
     }
 
     #[test]

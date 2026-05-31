@@ -26,7 +26,7 @@ Version 0.1 prioritizes:
 
 ## 2. Query Families
 
-DOL v0.1 has six top-level query families.
+DOL v0.1 has eight top-level query families.
 
 ### 2.1 `observe`
 
@@ -70,7 +70,35 @@ inspect image postgres:16
 inspect container api-service at "2026-01-01 12:00:00"
 ```
 
-### 2.4 `analyze`
+### 2.4 `logs`
+
+`logs` retrieves log output from a running container. Returns the last N lines
+with line numbers, message content, and container name.
+
+Execution mode: batch.
+
+Examples:
+
+```dol
+logs container my-app
+logs container my-app tail 50
+logs container my-app | where message contains "error" | select line, message
+```
+
+### 2.5 `ping`
+
+`ping` tests connectivity to the Docker daemon. Returns a status field (`ok` or
+`error`) and a human-readable message.
+
+Execution mode: batch.
+
+Examples:
+
+```dol
+ping
+```
+
+### 2.6 `analyze`
 
 `analyze` runs deterministic analysis over current or stored Docker telemetry.
 
@@ -94,7 +122,7 @@ New analysis types (added v0.1):
 - **leaks** — detects memory usage growth trends from historical metrics (requires `--store`).
 - **drift** — compares two telemetry snapshots to detect image, state, label, or restart count changes (requires `--store`).
 
-### 2.5 `fields`
+### 2.7 `fields`
 
 `fields` returns the schema (field names and types) for a given entity type. This is useful for discovery and tooling integration.
 
@@ -109,7 +137,7 @@ fields networks
 fields volumes
 ```
 
-### 2.6 `alert`
+### 2.8 `alert`
 
 `alert` defines a continuously evaluated condition and an action.
 

@@ -16,6 +16,8 @@
 ```bash
 dol "observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc"
 dol "events containers | where action = die | limit 10"
+dol "logs container my-app tail 50"
+dol "ping"
 dol "observe containers | group by state"
 ```
 
@@ -46,6 +48,8 @@ dol "observe containers | group by state"
 - **Interactive REPL** — `dol repl` with tab completion, history, `.watch`, `.export` commands
 - **Terminal Dashboard** — `dol top` live container monitor with auto-refresh, color-coded states, keyboard controls
 - **Multi-panel Dashboard** — `dol dashboard` with container list + live Docker events panel
+- **Container logs** — retrieve log output with `logs container <name> tail <n>`
+- **Docker connectivity** — test daemon reachability with `ping`
 - **Shell completion** — generate completion scripts with `--completion <shell>`
 - **Batch and stream modes** — snapshots for `observe`/`inspect`, streaming for `events`/`alert`
 
@@ -109,6 +113,12 @@ dol "observe containers | where memory > 500MB and state = running | select name
 
 # Stream container crash events
 dol "events containers where action = die"
+
+# View the last 50 log lines from a container
+dol "logs container my-app tail 50"
+
+# Check if Docker daemon is reachable
+dol "ping"
 
 # Top 10 largest images
 dol "observe images | sort by size desc | limit 10"
@@ -380,6 +390,8 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 - `observe containers` / `images` / `networks` / `volumes`
 - `events containers` / `images` / `networks` / `volumes`
 - `inspect container <name>` / `image <name>` (with optional `at "<time>"`)
+- `logs container <name> [tail <n>]` — view container logs (default: last 100 lines)
+- `ping` — test Docker daemon connectivity
 - `fields containers` / `images` / `networks` / `volumes` (schema introspection)
 - `analyze [containers|container <name>] find [anomalies|restart_loops|deployment_errors|leaks|dependencies|density|drift]`
 - `alert when <condition> [for <duration>] then <action>`
@@ -476,6 +488,8 @@ events containers | where action = die | limit 10
 events images | where action = pull
 inspect container api-service
 inspect container db-master at "2025-05-30 04:59:59Z"
+logs container my-app tail 50
+ping
 analyze containers find anomalies
 alert when cpu > 85% for 2m then print High CPU
 observe containers | set severity = case when cpu > 80% then "critical" else "ok" end

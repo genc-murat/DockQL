@@ -5,8 +5,8 @@ use thiserror::Error;
 use crate::{
     analyze::{self, AnalyzeError},
     ast::{
-        AggregateExpr, CollectionTarget, DurationUnit, Expression, ObserveQuery, PipelineNode,
-        Query, SortDirection,
+        AggregateExpr, CollectionTarget, DurationUnit, Expression, LogsQuery, ObserveQuery,
+        PipelineNode, Query, SortDirection,
     },
     docker::{Container, DockerClient, DockerError, Image, MetricSample, Network, Volume},
     eval::{self, EvalError},
@@ -89,6 +89,8 @@ where
         Query::Observe(query) => execute_observe(query, docker, metrics),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
+        Query::Logs(query) => execute_logs(query, docker),
+        Query::Ping => execute_ping(docker),
         Query::Analyze(query) => {
             analyze::execute_analyze(query, docker, metrics).map_err(ExecutorError::Analyze)
         }
@@ -116,6 +118,8 @@ where
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Observe(_) => Err(ExecutorError::UnsupportedQuery("observe historical")),
+        Query::Logs(_) => Err(ExecutorError::UnsupportedQuery("logs")),
+        Query::Ping => Err(ExecutorError::UnsupportedQuery("ping")),
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
         Query::Fields(target) => execute_fields(*target),
     }
@@ -272,6 +276,59 @@ pub fn render_table(result: &ExecutionResult) -> String {
             .map(|row| render_table_line(row, &widths)),
     );
     lines.join("\n")
+}
+
+fn execute_logs<C>(query: &LogsQuery, docker: &C) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + ?Sized,
+{
+    let tail = query.tail.unwrap_or(100) as usize;
+    let lines = docker.container_logs(&query.container, tail)?;
+
+    let mut rows: Vec<Row> = lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let mut fields = BTreeMap::new();
+            fields.insert("line".to_owned(), JsonValue::Number(Number::from(i + 1)));
+            fields.insert("message".to_owned(), JsonValue::String(line));
+            fields.insert(
+                "container".to_owned(),
+                JsonValue::String(query.container.clone()),
+            );
+            Row { fields }
+        })
+        .collect();
+
+    if let Some(filter) = &query.filter {
+        rows = filter_rows(rows, filter)?;
+    }
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
+fn execute_ping<C>(docker: &C) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + ?Sized,
+{
+    let reachable = docker.ping()?;
+    let mut fields = BTreeMap::new();
+    fields.insert("status".to_owned(), JsonValue::String(if reachable { "ok" } else { "error" }.to_owned()));
+    fields.insert(
+        "message".to_owned(),
+        JsonValue::String(if reachable {
+            "Docker daemon is reachable".to_owned()
+        } else {
+            "Cannot connect to Docker daemon".to_owned()
+        }),
+    );
+    Ok(ExecutionResult {
+        rows: vec![Row { fields }],
+    })
 }
 
 fn execute_fields(target: CollectionTarget) -> Result<ExecutionResult, ExecutorError> {
@@ -1562,6 +1619,7 @@ mod tests {
                 scope: Some("local".to_owned()),
                 labels: Vec::new(),
             }],
+            logs: std::collections::HashMap::new(),
         }
     }
 
@@ -1722,6 +1780,42 @@ mod tests {
     fn renders_table_colored_empty() {
         let result = ExecutionResult { rows: vec![] };
         assert_eq!(render_table_colored(&result), "No rows");
+    }
+
+    #[test]
+    fn executes_logs_query() {
+        let client = {
+            let mut c = mock_client();
+            c.logs.insert("abc".to_owned(), vec![
+                "line 1".to_owned(),
+                "line 2".to_owned(),
+                "line 3".to_owned(),
+            ]);
+            c
+        };
+        let parsed = parser::parse("logs container api tail 10").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0].fields["line"], JsonValue::Number(Number::from(1)));
+        assert_eq!(result.rows[0].fields["message"], JsonValue::String("line 1".to_owned()));
+        assert_eq!(result.rows[2].fields["message"], JsonValue::String("line 3".to_owned()));
+    }
+
+    #[test]
+    fn executes_logs_query_empty() {
+        let client = mock_client();
+        let parsed = parser::parse("logs container worker").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn executes_ping_query() {
+        let client = mock_client();
+        let parsed = parser::parse("ping").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].fields["status"], JsonValue::String("ok".to_owned()));
     }
 
     #[test]

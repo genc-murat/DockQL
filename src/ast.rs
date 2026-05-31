@@ -8,6 +8,8 @@ pub enum Query {
     Analyze(AnalyzeQuery),
     Alert(AlertRule),
     Fields(CollectionTarget),
+    Logs(LogsQuery),
+    Ping,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -30,6 +32,14 @@ pub struct EventsQuery {
 pub struct InspectQuery {
     pub target: SingularTarget,
     pub at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LogsQuery {
+    pub container: String,
+    pub tail: Option<u64>,
+    pub filter: Option<Expression>,
+    pub pipeline: Vec<PipelineNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

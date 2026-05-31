@@ -1,0 +1,3 @@
+logs container my-app tail 200
+| where message contains "error"
+| select line, message
