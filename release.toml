@@ -1,0 +1,30 @@
+# Only allow releases from the main branch
+allow-branch = ["main"]
+
+# Don't publish to crates.io (this is a CLI binary, not a library)
+publish = false
+
+# Use a single commit for version bump + changelog update
+consolidate-commits = true
+
+# Sign commit and tag (optional, disabled by default)
+sign-commit = false
+sign-tag = false
+
+# Git tag format — must match cargo-dist's tag pattern (v*)
+tag-name = "v{{version}}"
+tag-message = "Release v{{version}}"
+tag = true
+pre-release-commit-message = "chore: Release v{{version}}"
+
+# Push to remote after tagging
+push = true
+push-remote = "origin"
+
+# Pre-release replacements: update CHANGELOG.md for the new release
+pre-release-replacements = [
+  # Replace "## [Unreleased]" header with "## [version] - date"
+  { file = "CHANGELOG.md", search = "## \\[Unreleased\\]", replace = "## [{{version}}] - {{date}}", min = 1, max = 1 },
+  # Replace "...HEAD" with version ref, then add new Unreleased link
+  { file = "CHANGELOG.md", search = "\\.\\.\\.HEAD", replace = "...v{{version}}\n\n[Unreleased]: https://github.com/genc-murat/DockQL/compare/v{{version}}...HEAD", min = 1, max = 1 },
+]
