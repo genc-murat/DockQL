@@ -27,7 +27,7 @@ dol "observe containers | group by state"
 - **Historical observe** — query past container states with `observe containers last 5m`
 - **Alerting** — continuously evaluate conditions with duration guards; actions include print, webhook (real HTTP POST), and container restart
 - **Alert history** — all fired alerts are persisted in the SQLite store for audit/review
-- **Analysis** — deterministic anomaly detection (CPU, memory, restart loops, deployment errors)
+- **Analysis** — deterministic anomaly detection (CPU, memory, restart loops, deployment errors, resource leaks, config drift, dependencies, density)
 - **Telemetry store** — persistent SQLite-backed storage for metrics, events, and snapshots
 - **Schema introspection** — discover available fields with `fields containers`
 - **Static Semantic Analysis** — static type checking and schema validation of queries prior to execution to catch errors early
@@ -283,7 +283,7 @@ REPL commands:
 - `.history` — show command history
 - `.watch <secs>` — re-run the last query every N seconds
 - `.export <path>` — set export file path
-- `.output <fmt>` — set output format (table, json, csv, jsonl)
+- `.output <fmt>` — set output format (table, json, json-compact, csv, jsonl)
 
 ### Terminal Dashboard
 
@@ -343,7 +343,7 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 - `events containers` / `images` / `networks` / `volumes`
 - `inspect container <name>` / `image <name>` (with optional `at "<time>"`)
 - `fields containers` / `images` / `networks` / `volumes` (schema introspection)
-- `analyze [containers|container <name>] find [anomalies|restart_loops|deployment_errors|...]`
+- `analyze [containers|container <name>] find [anomalies|restart_loops|deployment_errors|leaks|dependencies|density|drift]`
 - `alert when <condition> [for <duration>] then <action>`
 
 ### Pipeline Nodes

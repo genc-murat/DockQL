@@ -292,6 +292,26 @@ analyze containers find anomalies
 analyze container api-service correlate
 ```
 
+**Map container dependencies (compose, network, volume):**
+```dol
+analyze containers find dependencies
+```
+
+**Analyze container density by image, state, and project:**
+```dol
+analyze containers find density
+```
+
+**Detect memory resource leaks (requires `--store`):**
+```dol
+analyze containers find leaks
+```
+
+**Detect configuration drift between snapshots (requires `--store`):**
+```dol
+analyze containers find drift
+```
+
 ## 8. Complex Pipelines
 
 You can chain multiple operations together using the `|` pipe operator.

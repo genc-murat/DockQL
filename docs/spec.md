@@ -81,8 +81,18 @@ Examples:
 ```dol
 analyze containers find anomalies
 analyze containers find restart_loops last 10m
+analyze containers find dependencies
+analyze containers find density
+analyze containers find leaks
+analyze containers find drift
 analyze container api-service correlate events last 1h
 ```
+
+New analysis types (added v0.1):
+- **dependencies** — maps compose project, network, and volume relationships.
+- **density** — container distribution across images, states, and compose projects.
+- **leaks** — detects memory usage growth trends from historical metrics (requires `--store`).
+- **drift** — compares two telemetry snapshots to detect image, state, label, or restart count changes (requires `--store`).
 
 ### 2.5 `fields`
 

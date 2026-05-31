@@ -146,6 +146,10 @@ pub struct AnalysisThresholds {
     pub restart_loop_count: u64,
     /// Number of "die" events in recent history that indicate deployment failure.
     pub deployment_error_threshold: u64,
+    /// Memory usage increase percentage indicating a resource leak (e.g., 20 = 20% increase).
+    pub resource_leak_memory_increase_pct: f64,
+    /// Minimum number of metric samples needed to detect a trend.
+    pub resource_leak_min_samples: u64,
 }
 
 impl Default for AnalysisThresholds {
@@ -157,6 +161,8 @@ impl Default for AnalysisThresholds {
             critical_memory_ratio: 0.95,
             restart_loop_count: 3,
             deployment_error_threshold: 3,
+            resource_leak_memory_increase_pct: 20.0,
+            resource_leak_min_samples: 3,
         }
     }
 }
@@ -187,23 +193,40 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    match (&query.target, &query.verb) {
-        // analyze containers find anomalies
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find) => {
+    match (&query.target, &query.verb, query.subject.as_deref()) {
+        // analyze containers find anomalies (default)
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, None)
+        | (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("anomalies")) => {
             find_container_anomalies(docker, metrics, thresholds)
         }
-        // analyze containers correlate <subject>
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Correlate) => {
+        // analyze containers find dependencies
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("dependencies")) => {
+            analyze_dependencies(docker)
+        }
+        // analyze containers find density
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("density")) => {
+            analyze_density(docker)
+        }
+        // analyze containers find leaks — requires store, return error
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("leaks")) => {
+            Err(AnalyzeError::Unsupported)
+        }
+        // analyze containers find drift — requires store, return error
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("drift")) => {
+            Err(AnalyzeError::Unsupported)
+        }
+        // analyze containers correlate
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Correlate, _) => {
             correlate_containers(docker, metrics, thresholds)
         }
-        // analyze container <name> explain  →  OR  → explain container <name>
-        (AnalysisTarget::Singular(target), AnalysisVerb::Explain)
+        // analyze container <name> explain
+        (AnalysisTarget::Singular(target), AnalysisVerb::Explain, _)
             if target.kind == SingularTargetKind::Container =>
         {
             explain_container(&target.value, docker, metrics, thresholds)
         }
         // analyze containers explain (explain all)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Explain) => {
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Explain, _) => {
             explain_all_containers(docker, metrics, thresholds)
         }
         _ => Err(AnalyzeError::Unsupported),
@@ -220,9 +243,59 @@ where
 {
     let thresholds = AnalysisThresholds::default();
 
-    match (&query.target, &query.verb) {
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find) => {
+    match (&query.target, &query.verb, query.subject.as_deref()) {
+        // analyze containers find anomalies (default, from store)
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, None)
+        | (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("anomalies")) => {
             find_anomalies_from_store(store, &thresholds)
+        }
+        // analyze containers find leaks (from store)
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("leaks")) => {
+            let anomalies = detect_resource_leaks(store, &thresholds);
+            if anomalies.is_empty() {
+                Ok(ExecutionResult {
+                    rows: vec![Row {
+                        fields: BTreeMap::from([
+                            ("severity".to_owned(), JsonValue::String("info".to_owned())),
+                            ("kind".to_owned(), JsonValue::String("no_leaks_detected".to_owned())),
+                            ("container".to_owned(), JsonValue::String("*".to_owned())),
+                            (
+                                "message".to_owned(),
+                                JsonValue::String("No resource leaks detected in stored data".to_owned()),
+                            ),
+                            ("evidence".to_owned(), JsonValue::Array(Vec::new())),
+                        ]),
+                    }],
+                })
+            } else {
+                Ok(ExecutionResult {
+                    rows: anomalies.iter().map(Anomaly::to_row).collect(),
+                })
+            }
+        }
+        // analyze containers find drift (from store)
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("drift")) => {
+            let anomalies = detect_config_drift(store)?;
+            if anomalies.is_empty() {
+                Ok(ExecutionResult {
+                    rows: vec![Row {
+                        fields: BTreeMap::from([
+                            ("severity".to_owned(), JsonValue::String("info".to_owned())),
+                            ("kind".to_owned(), JsonValue::String("no_drift".to_owned())),
+                            ("container".to_owned(), JsonValue::String("*".to_owned())),
+                            (
+                                "message".to_owned(),
+                                JsonValue::String("No configuration drift detected".to_owned()),
+                            ),
+                            ("evidence".to_owned(), JsonValue::Array(Vec::new())),
+                        ]),
+                    }],
+                })
+            } else {
+                Ok(ExecutionResult {
+                    rows: anomalies.iter().map(Anomaly::to_row).collect(),
+                })
+            }
         }
         _ => Err(AnalyzeError::Unsupported),
     }
@@ -435,6 +508,556 @@ pub fn detect_unhealthy_states(containers: &[Container]) -> Vec<Anomaly> {
             })
         })
         .collect()
+}
+
+// ── New analysis: Resource Leak Detection ────────────────────────────
+
+/// Detect containers whose memory usage is trending upward over time,
+/// indicating a possible memory leak.
+pub fn detect_resource_leaks<S>(
+    store: &S,
+    thresholds: &AnalysisThresholds,
+) -> Vec<Anomaly>
+where
+    S: TelemetryStore + ?Sized,
+{
+    let samples = match store.latest_metrics() {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    // Group samples by container ID and sort by timestamp.
+    let mut by_container: std::collections::BTreeMap<String, Vec<&MetricSample>> =
+        std::collections::BTreeMap::new();
+    for sample in &samples {
+        by_container
+            .entry(sample.container_id.clone())
+            .or_default()
+            .push(sample);
+    }
+
+    let mut anomalies = Vec::new();
+
+    // Build a reverse lookup from container_id -> name for display.
+    let id_to_name: std::collections::HashMap<String, String> = samples
+        .iter()
+        .map(|s| (s.container_id.clone(), s.container_name.clone()))
+        .collect();
+
+    for (container_id, container_samples) in &by_container {
+        let container_name = id_to_name.get(container_id).map(|s| s.as_str()).unwrap_or(container_id.as_str());
+        if container_samples.len() < thresholds.resource_leak_min_samples as usize {
+            continue;
+        }
+
+        // Sort by timestamp (chronological order).
+        let mut sorted = container_samples.clone();
+        sorted.sort_by_key(|s| s.timestamp.as_str());
+
+        // Collect memory readings.
+        let mem_values: Vec<u64> = sorted
+            .iter()
+            .filter_map(|s| s.memory_usage_bytes)
+            .collect();
+
+        if mem_values.len() < 2 {
+            continue;
+        }
+
+        let first = mem_values[0];
+        let last = mem_values[mem_values.len() - 1];
+
+        if first == 0 {
+            continue;
+        }
+
+        let increase_pct = ((last as f64 - first as f64) / first as f64) * 100.0;
+
+        if increase_pct >= thresholds.resource_leak_memory_increase_pct {
+            let severity = if increase_pct >= thresholds.resource_leak_memory_increase_pct * 2.0 {
+                Severity::Critical
+            } else {
+                Severity::Warning
+            };
+
+            anomalies.push(Anomaly {
+                severity,
+                kind: "resource_leak".to_owned(),
+                container: container_name.to_string(),
+                message: format!(
+                    "Container '{}' memory grew {:.0}% (from {} to {}) over {} samples — possible leak",
+                    container_name,
+                    increase_pct,
+                    format_bytes(first),
+                    format_bytes(last),
+                    mem_values.len()
+                ),
+                evidence: vec![
+                    format!("initial_memory={}", first),
+                    format!("latest_memory={}", last),
+                    format!("increase_pct={:.1}", increase_pct),
+                    format!("samples={}", mem_values.len()),
+                ],
+            });
+        }
+    }
+
+    anomalies
+}
+
+// ── New analysis: Dependency Analysis ─────────────────────────────────
+
+/// Analyze container dependencies: which containers share networks,
+/// compose projects, and images.
+pub fn analyze_dependencies<C>(
+    docker: &C,
+) -> Result<ExecutionResult, AnalyzeError>
+where
+    C: DockerClient + ?Sized,
+{
+    let containers = docker.list_containers()?;
+    let networks = docker.list_networks().unwrap_or_default();
+    let volumes = docker.list_volumes().unwrap_or_default();
+
+    let mut rows = Vec::new();
+
+    // 1. Compose project groupings (from labels).
+    let mut by_compose: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for c in &containers {
+        let project = c
+            .labels
+            .iter()
+            .find_map(|label| {
+                let parts: Vec<&str> = label.splitn(2, '=').collect();
+                if parts.len() == 2 && parts[0] == "com.docker.compose.project" {
+                    Some(parts[1].to_owned())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "standalone".to_owned());
+        by_compose
+            .entry(project)
+            .or_default()
+            .push(c.name.clone());
+    }
+
+    for (project, names) in &by_compose {
+        if names.len() > 1 || project != "standalone" {
+            rows.push(Row {
+                fields: BTreeMap::from([
+                    (
+                        "dependency".to_owned(),
+                        JsonValue::String("compose_project".to_owned()),
+                    ),
+                    ("key".to_owned(), JsonValue::String(project.clone())),
+                    (
+                        "containers".to_owned(),
+                        JsonValue::Array(
+                            names.iter().map(|n| JsonValue::String(n.clone())).collect(),
+                        ),
+                    ),
+                    (
+                        "count".to_owned(),
+                        JsonValue::Number(Number::from(names.len())),
+                    ),
+                ]),
+            });
+        }
+    }
+
+    // 2. Network dependencies.
+    for n in &networks {
+        if !n.containers.is_empty() {
+            rows.push(Row {
+                fields: BTreeMap::from([
+                    (
+                        "dependency".to_owned(),
+                        JsonValue::String("network".to_owned()),
+                    ),
+                    ("key".to_owned(), JsonValue::String(n.name.clone())),
+                    (
+                        "containers".to_owned(),
+                        JsonValue::Array(
+                            n.containers
+                                .iter()
+                                .map(|c| JsonValue::String(c.clone()))
+                                .collect(),
+                        ),
+                    ),
+                    (
+                        "count".to_owned(),
+                        JsonValue::Number(Number::from(n.containers.len())),
+                    ),
+                ]),
+            });
+        }
+    }
+
+    // 3. Volume dependencies (by compose project labels).
+    // Volumes don't have container lists, so we note them by driver.
+    for v in &volumes {
+        rows.push(Row {
+            fields: BTreeMap::from([
+                (
+                    "dependency".to_owned(),
+                    JsonValue::String("volume".to_owned()),
+                ),
+                ("key".to_owned(), JsonValue::String(v.name.clone())),
+                (
+                    "containers".to_owned(),
+                    JsonValue::Array(Vec::new()),
+                ),
+                (
+                    "count".to_owned(),
+                    JsonValue::Number(Number::from(0)),
+                ),
+            ]),
+        });
+    }
+
+    if rows.is_empty() {
+        rows.push(Row {
+            fields: BTreeMap::from([
+                (
+                    "dependency".to_owned(),
+                    JsonValue::String("none".to_owned()),
+                ),
+                ("key".to_owned(), JsonValue::String("-".to_owned())),
+                ("containers".to_owned(), JsonValue::Array(Vec::new())),
+                ("count".to_owned(), JsonValue::Number(Number::from(0))),
+            ]),
+        });
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
+// ── New analysis: Config Drift Detection ───────────────────────────────
+
+/// Detect configuration drift between historical snapshots.
+///
+/// Compares the two most recent snapshots in the store and emits anomalies
+/// for containers whose image, state, or labels have changed.
+pub fn detect_config_drift<S>(
+    store: &S,
+) -> Result<Vec<Anomaly>, AnalyzeError>
+where
+    S: TelemetryStore + ?Sized,
+{
+    // Get all snapshots to find the two most recent.
+    let mut all = store
+        .all_snapshots()
+        .map_err(|_| AnalyzeError::Unsupported)?;
+
+    if all.is_empty() {
+        return Err(AnalyzeError::Unsupported);
+    }
+
+    // Snapshots are sorted by timestamp ascending.
+    let latest = all.pop().unwrap();
+    let previous = all.pop();
+
+    // If there's only one snapshot, emit baselines.
+    // Otherwise, compare the two most recent.
+
+    let mut anomalies = Vec::new();
+
+    match previous {
+        Some(prev) => {
+            // We have two snapshots — compare them.
+            for container in &latest.containers {
+                let prev_container = prev.containers.iter().find(|c| c.name == container.name);
+
+                match prev_container {
+                    Some(prev_c) => {
+                        // Check for image drift.
+                        if prev_c.image != container.image {
+                            anomalies.push(Anomaly {
+                                severity: Severity::Warning,
+                                kind: "config_drift".to_owned(),
+                                container: container.name.clone(),
+                                message: format!(
+                                    "Container '{}' image changed from '{}' to '{}'",
+                                    container.name, prev_c.image, container.image
+                                ),
+                                evidence: vec![
+                                    format!("previous_image={}", prev_c.image),
+                                    format!("current_image={}", container.image),
+                                ],
+                            });
+                        }
+
+                        // Check for state drift.
+                        if prev_c.state != container.state {
+                            let severity = match container.state.as_str() {
+                                "running" => Severity::Info,
+                                "exited" | "dead" => Severity::Warning,
+                                _ => Severity::Warning,
+                            };
+                            anomalies.push(Anomaly {
+                                severity,
+                                kind: "state_change".to_owned(),
+                                container: container.name.clone(),
+                                message: format!(
+                                    "Container '{}' state changed from '{}' to '{}'",
+                                    container.name, prev_c.state, container.state
+                                ),
+                                evidence: vec![
+                                    format!("previous_state={}", prev_c.state),
+                                    format!("current_state={}", container.state),
+                                ],
+                            });
+                        }
+
+                        // Check for restart count drift.
+                        let prev_restarts = prev_c.restart_count.unwrap_or(0);
+                        let curr_restarts = container.restart_count.unwrap_or(0);
+                        if curr_restarts > prev_restarts {
+                            anomalies.push(Anomaly {
+                                severity: Severity::Warning,
+                                kind: "restart_increase".to_owned(),
+                                container: container.name.clone(),
+                                message: format!(
+                                    "Container '{}' restart count increased from {} to {}",
+                                    container.name, prev_restarts, curr_restarts
+                                ),
+                                evidence: vec![
+                                    format!("previous_restarts={}", prev_restarts),
+                                    format!("current_restarts={}", curr_restarts),
+                                ],
+                            });
+                        }
+
+                        // Check for label drift.
+                        let prev_labels: std::collections::BTreeSet<&str> =
+                            prev_c.labels.iter().map(|s| s.as_str()).collect();
+                        let curr_labels: std::collections::BTreeSet<&str> =
+                            container.labels.iter().map(|s| s.as_str()).collect();
+                        let added: Vec<&&str> = curr_labels.difference(&prev_labels).collect();
+                        let removed: Vec<&&str> = prev_labels.difference(&curr_labels).collect();
+                        if !added.is_empty() || !removed.is_empty() {
+                            anomalies.push(Anomaly {
+                                severity: Severity::Info,
+                                kind: "label_drift".to_owned(),
+                                container: container.name.clone(),
+                                message: format!(
+                                    "Container '{}' labels changed: added={:?}, removed={:?}",
+                                    container.name, added, removed
+                                ),
+                                evidence: vec![
+                                    format!("added_labels={:?}", added),
+                                    format!("removed_labels={:?}", removed),
+                                ],
+                            });
+                        }
+                    }
+                    None => {
+                        // New container appeared.
+                        anomalies.push(Anomaly {
+                            severity: Severity::Info,
+                            kind: "container_appeared".to_owned(),
+                            container: container.name.clone(),
+                            message: format!(
+                                "Container '{}' appeared with image={}, state={}",
+                                container.name, container.image, container.state
+                            ),
+                            evidence: vec![
+                                format!("image={}", container.image),
+                                format!("state={}", container.state),
+                            ],
+                        });
+                    }
+                }
+            }
+
+            // Check for containers that disappeared.
+            for prev_c in &prev.containers {
+                if !latest.containers.iter().any(|c| c.name == prev_c.name) {
+                    anomalies.push(Anomaly {
+                        severity: Severity::Warning,
+                        kind: "container_disappeared".to_owned(),
+                        container: prev_c.name.clone(),
+                        message: format!(
+                            "Container '{}' was present in previous snapshot but is now gone",
+                            prev_c.name
+                        ),
+                        evidence: vec![
+                            format!("previous_state={}", prev_c.state),
+                            format!("previous_image={}", prev_c.image),
+                        ],
+                    });
+                }
+            }
+        }
+        None => {
+            // Only one snapshot — report it as baseline.
+            for container in &latest.containers {
+                anomalies.push(Anomaly {
+                    severity: Severity::Info,
+                    kind: "config_baseline".to_owned(),
+                    container: container.name.clone(),
+                    message: format!(
+                        "Container '{}' baseline — image={}, state={}",
+                        container.name, container.image, container.state
+                    ),
+                    evidence: vec![
+                        format!("image={}", container.image),
+                        format!("state={}", container.state),
+                        format!("restart_count={}", container.restart_count.unwrap_or(0)),
+                    ],
+                });
+            }
+        }
+    }
+
+    Ok(anomalies)
+}
+
+// ── New analysis: Density Analysis ─────────────────────────────────────
+
+/// Analyze container density / distribution across images, states,
+/// and compose projects.
+pub fn analyze_density<C>(
+    docker: &C,
+) -> Result<ExecutionResult, AnalyzeError>
+where
+    C: DockerClient + ?Sized,
+{
+    let containers = docker.list_containers()?;
+    let total = containers.len();
+    let mut rows = Vec::new();
+
+    // 1. By image.
+    let mut by_image: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for c in &containers {
+        by_image
+            .entry(c.image.clone())
+            .or_default()
+            .push(c.name.clone());
+    }
+    for (image, names) in &by_image {
+        let pct = if total > 0 { (names.len() as f64 / total as f64) * 100.0 } else { 0.0 };
+        rows.push(Row {
+            fields: BTreeMap::from([
+                (
+                    "dimension".to_owned(),
+                    JsonValue::String("image".to_owned()),
+                ),
+                ("value".to_owned(), JsonValue::String(image.clone())),
+                (
+                    "container_count".to_owned(),
+                    JsonValue::Number(Number::from(names.len())),
+                ),
+                (
+                    "density_pct".to_owned(),
+                    JsonValue::Number(
+                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or(Number::from(0)),
+                    ),
+                ),
+            ]),
+        });
+    }
+
+    // 2. By state.
+    let mut by_state: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+    for c in &containers {
+        *by_state.entry(c.state.clone()).or_default() += 1;
+    }
+    for (state, count) in &by_state {
+        let pct = if total > 0 { (*count as f64 / total as f64) * 100.0 } else { 0.0 };
+        rows.push(Row {
+            fields: BTreeMap::from([
+                (
+                    "dimension".to_owned(),
+                    JsonValue::String("state".to_owned()),
+                ),
+                ("value".to_owned(), JsonValue::String(state.clone())),
+                (
+                    "container_count".to_owned(),
+                    JsonValue::Number(Number::from(*count)),
+                ),
+                (
+                    "density_pct".to_owned(),
+                    JsonValue::Number(
+                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or(Number::from(0)),
+                    ),
+                ),
+            ]),
+        });
+    }
+
+    // 3. By compose project.
+    let mut by_project: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for c in &containers {
+        let project = c
+            .labels
+            .iter()
+            .find_map(|label| {
+                let parts: Vec<&str> = label.splitn(2, '=').collect();
+                if parts.len() == 2 && parts[0] == "com.docker.compose.project" {
+                    Some(parts[1].to_owned())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "standalone".to_owned());
+        by_project
+            .entry(project)
+            .or_default()
+            .push(c.name.clone());
+    }
+    for (project, names) in &by_project {
+        let pct = if total > 0 {
+            (names.len() as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        rows.push(Row {
+            fields: BTreeMap::from([
+                (
+                    "dimension".to_owned(),
+                    JsonValue::String("compose_project".to_owned()),
+                ),
+                ("value".to_owned(), JsonValue::String(project.clone())),
+                (
+                    "container_count".to_owned(),
+                    JsonValue::Number(Number::from(names.len())),
+                ),
+                (
+                    "density_pct".to_owned(),
+                    JsonValue::Number(
+                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or(Number::from(0)),
+                    ),
+                ),
+            ]),
+        });
+    }
+
+    // Total summary.
+    rows.push(Row {
+        fields: BTreeMap::from([
+            (
+                "dimension".to_owned(),
+                JsonValue::String("total".to_owned()),
+            ),
+            ("value".to_owned(), JsonValue::String("-".to_owned())),
+            (
+                "container_count".to_owned(),
+                JsonValue::Number(Number::from(total)),
+            ),
+            (
+                "density_pct".to_owned(),
+                JsonValue::Number(Number::from(100)),
+            ),
+        ]),
+    });
+
+    Ok(ExecutionResult { rows })
 }
 
 // ── Composite analysis functions ───────────────────────────────────────────
@@ -1236,6 +1859,531 @@ mod tests {
             .collect();
         assert!(correlations.contains(&"shared_image".to_owned()));
     }
+
+    // ── Resource Leak tests ────────────────────────────────────────
+
+    #[test]
+    fn detects_resource_leak_with_increasing_memory() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+        let thresholds = AnalysisThresholds {
+            resource_leak_memory_increase_pct: 20.0,
+            resource_leak_min_samples: 3,
+            ..AnalysisThresholds::default()
+        };
+
+        // Write 5 samples with increasing memory (leak pattern)
+        for i in 0..5 {
+            let mem = 100_000_000 + (i * 30_000_000); // 100M, 130M, 160M, 190M, 220M
+            let sample = MetricSample {
+                container_id: format!("leaky_id"),
+                container_name: "leaky-container".to_owned(),
+                timestamp: format!("2026-01-01T12:00:{:02}Z", i),
+                cpu_percent: Some(50.0),
+                memory_usage_bytes: Some(mem),
+                memory_limit_bytes: Some(1_073_741_824),
+                network_rx_bytes: Some(0),
+                network_tx_bytes: Some(0),
+                disk_read_bytes: Some(0),
+                disk_write_bytes: Some(0),
+            };
+            store.write_metric(sample).unwrap();
+        }
+
+        let anomalies = detect_resource_leaks(&store, &thresholds);
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].kind, "resource_leak");
+        assert_eq!(anomalies[0].container, "leaky-container");
+    }
+
+    #[test]
+    fn no_resource_leak_with_stable_memory() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+        let thresholds = AnalysisThresholds {
+            resource_leak_memory_increase_pct: 20.0,
+            resource_leak_min_samples: 3,
+            ..AnalysisThresholds::default()
+        };
+
+        // Write 3 samples with stable memory
+        for i in 0..3 {
+            let sample = MetricSample {
+                container_id: format!("stable_id"),
+                container_name: "stable".to_owned(),
+                timestamp: format!("2026-01-01T12:00:{:02}Z", i),
+                cpu_percent: Some(50.0),
+                memory_usage_bytes: Some(100_000_000),
+                memory_limit_bytes: Some(1_073_741_824),
+                network_rx_bytes: Some(0),
+                network_tx_bytes: Some(0),
+                disk_read_bytes: Some(0),
+                disk_write_bytes: Some(0),
+            };
+            store.write_metric(sample).unwrap();
+        }
+
+        let anomalies = detect_resource_leaks(&store, &thresholds);
+        assert!(anomalies.is_empty());
+    }
+
+    #[test]
+    fn no_resource_leak_with_insufficient_samples() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+        let thresholds = AnalysisThresholds {
+            resource_leak_memory_increase_pct: 20.0,
+            resource_leak_min_samples: 5,
+            ..AnalysisThresholds::default()
+        };
+
+        // Only 2 samples — below threshold
+        for i in 0..2 {
+            let sample = MetricSample {
+                container_id: format!("few_id"),
+                container_name: "few".to_owned(),
+                timestamp: format!("2026-01-01T12:00:{:02}Z", i),
+                cpu_percent: Some(50.0),
+                memory_usage_bytes: Some(100_000_000 + (i * 50_000_000)),
+                memory_limit_bytes: Some(1_073_741_824),
+                network_rx_bytes: Some(0),
+                network_tx_bytes: Some(0),
+                disk_read_bytes: Some(0),
+                disk_write_bytes: Some(0),
+            };
+            store.write_metric(sample).unwrap();
+        }
+
+        let anomalies = detect_resource_leaks(&store, &thresholds);
+        assert!(anomalies.is_empty());
+    }
+
+    // ── Dependency tests ────────────────────────────────────────────
+
+    #[test]
+    fn finds_dependencies_from_mock() {
+        let docker = crate::docker::MockDockerClient {
+            containers: vec![
+                Container {
+                    image: "api:latest".to_owned(),
+                    labels: vec!["com.docker.compose.project=myapp".to_owned()],
+                    ..test_container("api-1", "running", 0)
+                },
+                Container {
+                    image: "api:latest".to_owned(),
+                    labels: vec!["com.docker.compose.project=myapp".to_owned()],
+                    ..test_container("api-2", "running", 0)
+                },
+            ],
+            networks: vec![crate::docker::Network {
+                id: "net1".to_owned(),
+                name: "frontend-net".to_owned(),
+                driver: "bridge".to_owned(),
+                scope: "local".to_owned(),
+                containers: vec!["api-1".to_owned()],
+                labels: Vec::new(),
+            }],
+            volumes: vec![crate::docker::Volume {
+                name: "pgdata".to_owned(),
+                driver: "local".to_owned(),
+                mountpoint: Some("/data".to_owned()),
+                scope: Some("local".to_owned()),
+                labels: Vec::new(),
+            }],
+            ..Default::default()
+        };
+
+        let result = analyze_dependencies(&docker).unwrap();
+
+        let dep_kinds: Vec<String> = result
+            .rows
+            .iter()
+            .filter_map(|r| {
+                r.fields
+                    .get("dependency")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(dep_kinds.contains(&"compose_project".to_owned()));
+        assert!(dep_kinds.contains(&"network".to_owned()));
+        assert!(dep_kinds.contains(&"volume".to_owned()));
+    }
+
+    #[test]
+    fn dependencies_empty_returns_none_row() {
+        let docker = crate::docker::MockDockerClient::default();
+        let result = analyze_dependencies(&docker).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["dependency"],
+            JsonValue::String("none".to_owned())
+        );
+    }
+
+    // ── Config Drift tests ──────────────────────────────────────────
+
+    #[test]
+    fn detects_config_drift_from_snapshot() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+        store
+            .write_snapshot(crate::storage::TelemetrySnapshot {
+                timestamp: "2026-01-01T12:00:00Z".to_owned(),
+                containers: vec![Container {
+                    id: "abc".to_owned(),
+                    name: "api".to_owned(),
+                    image: "api:latest".to_owned(),
+                    status: "Up 5 minutes".to_owned(),
+                    state: "running".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec!["env=prod".to_owned()],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(1),
+                }],
+                images: Vec::new(),
+                networks: Vec::new(),
+                volumes: Vec::new(),
+            })
+            .unwrap();
+
+        let anomalies = detect_config_drift(&store).unwrap();
+        assert!(!anomalies.is_empty());
+        assert_eq!(anomalies[0].kind, "config_baseline");
+        assert_eq!(anomalies[0].container, "api");
+    }
+
+    #[test]
+    fn detects_config_drift_between_snapshots() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+
+        // Snapshot A: api v1, running
+        store
+            .write_snapshot(crate::storage::TelemetrySnapshot {
+                timestamp: "2026-01-01T12:00:00Z".to_owned(),
+                containers: vec![Container {
+                    id: "abc".to_owned(),
+                    name: "api".to_owned(),
+                    image: "api:v1".to_owned(),
+                    status: "Up 5 minutes".to_owned(),
+                    state: "running".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec!["env=prod".to_owned(), "team=backend".to_owned()],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(0),
+                }],
+                images: Vec::new(),
+                networks: Vec::new(),
+                volumes: Vec::new(),
+            })
+            .unwrap();
+
+        // Snapshot B: api v2, exited, new label, increased restarts
+        store
+            .write_snapshot(crate::storage::TelemetrySnapshot {
+                timestamp: "2026-01-01T13:00:00Z".to_owned(),
+                containers: vec![Container {
+                    id: "abc".to_owned(),
+                    name: "api".to_owned(),
+                    image: "api:v2".to_owned(),
+                    status: "Exited (1) 1 minute ago".to_owned(),
+                    state: "exited".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec!["env=prod".to_owned(), "team=infra".to_owned()],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(3),
+                }],
+                images: Vec::new(),
+                networks: Vec::new(),
+                volumes: Vec::new(),
+            })
+            .unwrap();
+
+        let anomalies = detect_config_drift(&store).unwrap();
+        let kinds: Vec<&str> = anomalies.iter().map(|a| a.kind.as_str()).collect();
+
+        assert!(kinds.contains(&"config_drift"), "should detect image change");
+        assert!(kinds.contains(&"state_change"), "should detect state change");
+        assert!(kinds.contains(&"restart_increase"), "should detect restart increase");
+        assert!(kinds.contains(&"label_drift"), "should detect label change");
+    }
+
+    #[test]
+    fn config_drift_returns_empty_when_no_changes() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+
+        // Two identical snapshots
+        let snapshot = crate::storage::TelemetrySnapshot {
+            timestamp: "2026-01-01T12:00:00Z".to_owned(),
+            containers: vec![Container {
+                id: "abc".to_owned(),
+                name: "api".to_owned(),
+                image: "api:latest".to_owned(),
+                status: "Up 5 minutes".to_owned(),
+                state: "running".to_owned(),
+                ports: Vec::new(),
+                labels: vec!["env=prod".to_owned()],
+                created_at: None,
+                started_at: None,
+                finished_at: None,
+                restart_count: Some(0),
+            }],
+            images: Vec::new(),
+            networks: Vec::new(),
+            volumes: Vec::new(),
+        };
+        store.write_snapshot(snapshot.clone()).unwrap();
+        store.write_snapshot(snapshot).unwrap();
+
+        let anomalies = detect_config_drift(&store).unwrap();
+        assert!(anomalies.is_empty(), "should be empty when no changes");
+    }
+
+    #[test]
+    fn config_drift_with_empty_store_returns_unsupported() {
+        let store = crate::storage::InMemoryTelemetryStore::default();
+        let result = detect_config_drift(&store);
+        assert!(result.is_err());
+    }
+
+    // ── Density tests ───────────────────────────────────────────────
+
+    #[test]
+    fn analyzes_density_by_image_state_and_project() {
+        let docker = crate::docker::MockDockerClient {
+            containers: vec![
+                Container {
+                    image: "nginx:latest".to_owned(),
+                    labels: vec!["com.docker.compose.project=web".to_owned()],
+                    ..test_container("web-1", "running", 0)
+                },
+                Container {
+                    image: "nginx:latest".to_owned(),
+                    labels: vec!["com.docker.compose.project=web".to_owned()],
+                    ..test_container("web-2", "running", 0)
+                },
+                Container {
+                    image: "api:latest".to_owned(),
+                    labels: vec![],
+                    ..test_container("api", "exited", 0)
+                },
+            ],
+            ..Default::default()
+        };
+
+        let result = analyze_density(&docker).unwrap();
+
+        // Should have image rows (nginx, api) + state rows (running, exited) + project rows (web, standalone) + total
+        let dimensions: Vec<String> = result
+            .rows
+            .iter()
+            .filter_map(|r| {
+                r.fields
+                    .get("dimension")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(dimensions.contains(&"image".to_owned()));
+        assert!(dimensions.contains(&"state".to_owned()));
+        assert!(dimensions.contains(&"compose_project".to_owned()));
+        assert!(dimensions.contains(&"total".to_owned()));
+
+        // Verify total
+        let total_row = result
+            .rows
+            .iter()
+            .find(|r| r.fields.get("dimension") == Some(&JsonValue::String("total".to_owned())))
+            .unwrap();
+        assert_eq!(
+            total_row.fields["container_count"],
+            JsonValue::Number(Number::from(3))
+        );
+    }
+
+    #[test]
+    fn density_with_no_containers_returns_total_zero() {
+        let docker = crate::docker::MockDockerClient::default();
+        let result = analyze_density(&docker).unwrap();
+        let total_row = result
+            .rows
+            .iter()
+            .find(|r| r.fields.get("dimension") == Some(&JsonValue::String("total".to_owned())))
+            .unwrap();
+        assert_eq!(
+            total_row.fields["container_count"],
+            JsonValue::Number(Number::from(0))
+        );
+    }
+
+    // ── Integration: new subjects from dispatcher ────────────────────
+
+    #[test]
+    fn execute_analyze_find_dependencies_from_live_data() {
+        let docker = crate::docker::MockDockerClient {
+            containers: vec![test_container("api", "running", 0)],
+            ..Default::default()
+        };
+        let metrics = crate::metrics::MockMetricsCollector {
+            samples: Vec::new(),
+        };
+
+        let query = AnalyzeQuery {
+            target: AnalysisTarget::Collection(CollectionTarget::Containers),
+            verb: AnalysisVerb::Find,
+            subject: Some("dependencies".to_owned()),
+            time: None,
+            pipeline: Vec::new(),
+        };
+
+        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        // Should have at least the "none" row
+        assert!(!result.rows.is_empty());
+    }
+
+    #[test]
+    fn execute_analyze_find_density_from_live_data() {
+        let docker = crate::docker::MockDockerClient {
+            containers: vec![test_container("api", "running", 0)],
+            ..Default::default()
+        };
+        let metrics = crate::metrics::MockMetricsCollector {
+            samples: Vec::new(),
+        };
+
+        let query = AnalyzeQuery {
+            target: AnalysisTarget::Collection(CollectionTarget::Containers),
+            verb: AnalysisVerb::Find,
+            subject: Some("density".to_owned()),
+            time: None,
+            pipeline: Vec::new(),
+        };
+
+        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        let total_row = result
+            .rows
+            .iter()
+            .find(|r| r.fields.get("dimension") == Some(&JsonValue::String("total".to_owned())))
+            .unwrap();
+        assert_eq!(
+            total_row.fields["container_count"],
+            JsonValue::Number(Number::from(1))
+        );
+    }
+
+    #[test]
+    fn execute_analyze_find_leaks_returns_unsupported_from_live() {
+        let docker = crate::docker::MockDockerClient::default();
+        let metrics = crate::metrics::MockMetricsCollector {
+            samples: Vec::new(),
+        };
+
+        let query = AnalyzeQuery {
+            target: AnalysisTarget::Collection(CollectionTarget::Containers),
+            verb: AnalysisVerb::Find,
+            subject: Some("leaks".to_owned()),
+            time: None,
+            pipeline: Vec::new(),
+        };
+
+        let result = execute_analyze(&query, &docker, &metrics);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AnalyzeError::Unsupported));
+    }
+
+    #[test]
+    fn execute_analyze_with_store_find_leaks_detects_pattern() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+        for i in 0..5 {
+            let mem = 100_000_000 + (i * 30_000_000);
+            store
+                .write_metric(MetricSample {
+                    container_id: format!("leaky_id"),
+                    container_name: "leaky".to_owned(),
+                    timestamp: format!("2026-01-01T12:00:{:02}Z", i),
+                    cpu_percent: Some(50.0),
+                    memory_usage_bytes: Some(mem),
+                    memory_limit_bytes: Some(1_073_741_824),
+                    network_rx_bytes: Some(0),
+                    network_tx_bytes: Some(0),
+                    disk_read_bytes: Some(0),
+                    disk_write_bytes: Some(0),
+                })
+                .unwrap();
+        }
+
+        let query = AnalyzeQuery {
+            target: AnalysisTarget::Collection(CollectionTarget::Containers),
+            verb: AnalysisVerb::Find,
+            subject: Some("leaks".to_owned()),
+            time: None,
+            pipeline: Vec::new(),
+        };
+
+        let result = execute_analyze_with_store(&query, &store).unwrap();
+        let kinds: Vec<String> = result
+            .rows
+            .iter()
+            .filter_map(|r| {
+                r.fields
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(kinds.contains(&"resource_leak".to_owned()));
+    }
+
+    #[test]
+    fn execute_analyze_with_store_find_drift_from_snapshot() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+        store
+            .write_snapshot(crate::storage::TelemetrySnapshot {
+                timestamp: "2026-01-01T12:00:00Z".to_owned(),
+                containers: vec![Container {
+                    id: "abc".to_owned(),
+                    name: "api".to_owned(),
+                    image: "api:latest".to_owned(),
+                    status: "Up 5m".to_owned(),
+                    state: "running".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec!["env=prod".to_owned()],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(0),
+                }],
+                images: Vec::new(),
+                networks: Vec::new(),
+                volumes: Vec::new(),
+            })
+            .unwrap();
+
+        let query = AnalyzeQuery {
+            target: AnalysisTarget::Collection(CollectionTarget::Containers),
+            verb: AnalysisVerb::Find,
+            subject: Some("drift".to_owned()),
+            time: None,
+            pipeline: Vec::new(),
+        };
+
+        let result = execute_analyze_with_store(&query, &store).unwrap();
+        let kinds: Vec<String> = result
+            .rows
+            .iter()
+            .filter_map(|r| {
+                r.fields
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(kinds.contains(&"config_baseline".to_owned()));
+    }
+
+    // ── Pre-existing tests ───────────────────────────────────────────
 
     #[test]
     fn find_anomalies_from_store_detects_deployment_errors() {

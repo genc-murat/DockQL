@@ -47,6 +47,7 @@ pub trait TelemetryStore {
         &self,
         timestamp: &str,
     ) -> Result<Option<TelemetrySnapshot>, TelemetryError>;
+    fn all_snapshots(&self) -> Result<Vec<TelemetrySnapshot>, TelemetryError>;
     fn write_alert_event(&mut self, event: AlertHistoryEvent) -> Result<(), TelemetryError>;
     fn alert_history(&self, from: &str, to: &str)
     -> Result<Vec<AlertHistoryEvent>, TelemetryError>;
@@ -120,6 +121,10 @@ impl TelemetryStore for InMemoryTelemetryStore {
             .filter(|snapshot| snapshot.timestamp.as_str() <= timestamp)
             .max_by(|left, right| left.timestamp.cmp(&right.timestamp))
             .cloned())
+    }
+
+    fn all_snapshots(&self) -> Result<Vec<TelemetrySnapshot>, TelemetryError> {
+        Ok(self.snapshots.clone())
     }
 
     fn write_alert_event(&mut self, event: AlertHistoryEvent) -> Result<(), TelemetryError> {

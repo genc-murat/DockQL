@@ -54,6 +54,64 @@ Finds commonalities between containers. This is useful for grouping related serv
 analyze containers correlate
 ```
 
+### 5. `analyze containers find dependencies`
+Maps out container dependencies across compose projects, networks, and volumes.
+
+**Outputs per dependency type:**
+- **compose_project**: Containers grouped by `com.docker.compose.project` label.
+- **network**: Containers attached to each Docker network.
+- **volume**: Detected volumes (without direct container mapping).
+
+**Example:**
+```dol
+analyze containers find dependencies
+```
+
+### 6. `analyze containers find density`
+Analyzes container distribution across images, states, and compose projects with density percentages.
+
+**Dimensions:**
+- **image**: How many containers run each image.
+- **state**: Distribution by container state (running, exited, etc.).
+- **compose_project**: Container grouping by compose project.
+- **total**: Summary row with total container count.
+
+**Example:**
+```dol
+analyze containers find density
+```
+
+### 7. `analyze containers find leaks` *(requires `--store`)*
+Detects potential memory leaks by analyzing historical metric samples. Compares the first and last memory readings per container and flags those where memory usage grew beyond a threshold (default: 20% increase).
+
+**Requirements:**
+- A telemetry store (`--store telemetry.db`) with collected metrics.
+- At least 3 metric samples per container.
+
+**Example:**
+```dol
+analyze containers find leaks
+# (requires --store)
+```
+
+### 8. `analyze containers find drift` *(requires `--store`)*
+Detects configuration drift by comparing the two most recent telemetry snapshots. Emits anomalies for any changes between snapshots.
+
+**Detected Drift Types:**
+- **config_drift**: Container image changed.
+- **state_change**: Container state changed (e.g., running → exited).
+- **restart_increase**: Restart count increased.
+- **label_drift**: Container labels added or removed.
+- **container_appeared**: New container appeared in latest snapshot.
+- **container_disappeared**: Container removed from latest snapshot.
+- **config_baseline**: Single snapshot — reports current configuration as baseline.
+
+**Example:**
+```dol
+analyze containers find drift
+# (requires --store)
+```
+
 ## Thresholds
 
 The anomaly detectors use the following default thresholds:
@@ -64,6 +122,8 @@ The anomaly detectors use the following default thresholds:
 | Memory (Usage/Limit) | 85% | 95% |
 | Restart Count | 3 | 6 |
 | Deployment Errors (`die` events) | 3 | 6 |
+| Resource Leak (memory increase) | 20% | 40% |
+| Resource Leak (min samples) | 3 | — |
 
 ## Historical Analysis
 

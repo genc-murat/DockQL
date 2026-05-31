@@ -35,7 +35,7 @@ A static semantic analysis and type checking pass that runs immediately after pa
 Produces a `LogicalPlan` from the AST, performing filter push-down optimizations (e.g., moving `where` conditions closer to the data source). The plan is displayable for the `--explain` CLI flag, which shows the execution plan without running the query.
 
 ### 4. Executor (`src/executor.rs`)
-The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `fields`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports five output formats: table, CSV, JSON, JSON-Compact (minified JSON), and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot.
+The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `fields`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports five output formats: table, CSV, JSON, JSON-Compact (minified JSON), and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot. Parser errors are displayed in ANSI red with a source context line and `^` pointer at the error column.
 
 ### 4. Data Providers
 - **Docker Client (`src/docker.rs`):** Interfaces with the Docker Engine daemon (currently via Docker CLI wrapping) to list containers, images, volumes, networks, stream events, and inspect individual containers for enriched fields (`started_at`, `finished_at`, `restart_count`).
@@ -46,7 +46,7 @@ The central coordinator that matches the AST against the requested query type (`
 A standalone asynchronous task (`tokio`) that periodically polls the Docker API and writes metrics/snapshots to the Telemetry Store.
 
 ### 6. Analysis Engine (`src/analyze.rs`)
-A deterministic rules engine that scans telemetry data for anomalies (high CPU, memory pressure, restart loops, deployment errors) and computes container health signals.
+A deterministic rules engine that scans telemetry data for anomalies (high CPU, memory pressure, restart loops, deployment errors, resource leaks) and computes container health signals. Also provides dependency analysis (compose/network/volume mapping), density analysis (distribution across images, states, projects), and config drift detection (comparing telemetry snapshots for image/state/label changes).
 
 ### 7. Expression Evaluator (`src/eval.rs`)
 A recursive expression evaluation engine that resolves `Expression` AST nodes against row data. Supports field lookups (including label dot-access like `label.env`), literal values, arithmetic (`+`, `-`, `*`, `/`, `%`), comparison operators (`=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `matches`), range checks (`between`, `is null`, `is not null`), boolean logic (`and`, `or`, `not`), and function calls (`upper`, `lower`, `length`, `trim`, `concat`, `substring`, `coalesce`). The `eval_expr` function returns `JsonValue` (any type), while `eval_bool` wraps it with truthiness checking.

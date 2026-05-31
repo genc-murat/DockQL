@@ -388,6 +388,27 @@ impl TelemetryStore for SqliteTelemetryStore {
         }
     }
 
+    fn all_snapshots(&self) -> Result<Vec<TelemetrySnapshot>, TelemetryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT data FROM snapshots ORDER BY timestamp ASC",
+            )
+            .map_err(|e| TelemetryError::Storage(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let data: String = row.get(0)?;
+                let snapshot: TelemetrySnapshot = serde_json::from_str(&data)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                Ok(snapshot)
+            })
+            .map_err(|e| TelemetryError::Storage(e.to_string()))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| TelemetryError::Storage(e.to_string()))
+    }
+
     fn write_alert_event(
         &mut self,
         event: crate::storage::AlertHistoryEvent,

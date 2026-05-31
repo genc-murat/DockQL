@@ -621,6 +621,38 @@ dol "analyze containers correlate"
 Groups containers by shared images and labels. Useful for understanding: "If
 this container fails, what else is affected?"
 
+**Analyze container dependencies:**
+
+```bash
+dol "analyze containers find dependencies"
+```
+
+Maps out compose project groupings, network attachments, and volume dependencies.
+
+**Analyze container density:**
+
+```bash
+dol "analyze containers find density"
+```
+
+Shows container distribution across images, states, and compose projects with percentages.
+
+**Detect memory leaks (requires `--store`):**
+
+```bash
+dol --store telemetry.db "analyze containers find leaks"
+```
+
+Analyzes historical metric samples to find containers with sustained memory growth (≥20%).
+
+**Detect configuration drift (requires `--store`):**
+
+```bash
+dol --store telemetry.db "analyze containers find drift"
+```
+
+Compares the two most recent telemetry snapshots and reports image/state/label/restart changes.
+
 **Identify restart loops historically:**
 
 ```bash
