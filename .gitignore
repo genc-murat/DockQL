@@ -1,1 +1,6 @@
 /target
+
+# Pandoc-generated HTML (source is .md)
+docs/*.html
+!docs/index.html
+!docs/pandoc-template.html
