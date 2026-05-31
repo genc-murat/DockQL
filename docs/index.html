@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOL — Docker Observability Language</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --muted: #8b949e;
+            --accent: #58a6ff;
+            --green: #3fb950;
+            --orange: #d29922;
+            --red: #f85149;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+        /* ── Hero ─────────────────────────────────── */
+        .hero {
+            padding: 80px 0 60px;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .hero h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, var(--accent), var(--green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero p.tagline {
+            margin-top: 16px;
+            font-size: 1.2rem;
+            color: var(--muted);
+            max-width: 640px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .hero .badges {
+            margin-top: 24px;
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .hero .badges img { height: 20px; border-radius: 4px; }
+
+        /* ── Code block ────────────────────────────── */
+        .code-block {
+            margin: 40px auto;
+            max-width: 720px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .code-block .header {
+            padding: 8px 16px;
+            background: #1c2128;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.8rem;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .code-block .header .dot {
+            width: 10px; height: 10px; border-radius: 50%;
+        }
+        .code-block .header .dot.r { background: #ff5f57; }
+        .code-block .header .dot.y { background: #ffbd2e; }
+        .code-block .header .dot.g { background: #28c840; }
+        .code-block pre {
+            padding: 16px 20px;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 0.85rem;
+            overflow-x: auto;
+            color: #c9d1d9;
+        }
+        .code-block pre .cmt { color: #8b949e; }
+        .code-block pre .kw { color: #ff7b72; }
+        .code-block pre .fn { color: #d2a8ff; }
+        .code-block pre .str { color: #a5d6ff; }
+        .code-block pre .num { color: #79c0ff; }
+        .code-block pre .op { color: #ffa657; }
+
+        /* ── Sections ──────────────────────────────── */
+        section { padding: 60px 0; }
+        section + section { border-top: 1px solid var(--border); }
+        section h2 {
+            font-size: 1.6rem;
+            font-weight: 600;
+            margin-bottom: 24px;
+        }
+        section p, section li { color: var(--muted); }
+        section p { margin-bottom: 12px; }
+        section ul {
+            list-style: none;
+            padding: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 8px;
+        }
+        section ul li {
+            padding: 10px 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        section ul li::before { content: "▸ "; color: var(--green); }
+
+        /* ── Cards ─────────────────────────────────── */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            transition: border-color .2s;
+        }
+        .card:hover { border-color: var(--accent); }
+        .card h3 {
+            font-size: 1rem;
+            margin-bottom: 8px;
+        }
+        .card p {
+            font-size: 0.85rem;
+            color: var(--muted);
+            margin: 0;
+        }
+        .card a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .card a:hover { text-decoration: underline; }
+
+        /* ── Footer ────────────────────────────────── */
+        footer {
+            text-align: center;
+            padding: 32px 0;
+            border-top: 1px solid var(--border);
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+        footer a { color: var(--accent); text-decoration: none; }
+
+        /* ── Responsive ────────────────────────────── */
+        @media (max-width: 640px) {
+            .hero h1 { font-size: 2rem; }
+            .hero { padding: 48px 0 32px; }
+            section { padding: 32px 0; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <div class="container">
+        <h1>DOL</h1>
+        <p class="tagline">
+            Docker Observability Language — a domain-specific language and CLI tool
+            for querying, observing, and analyzing Docker infrastructure.
+        </p>
+        <div class="badges">
+            <img src="https://img.shields.io/badge/Rust-1.96%2B-dea584?logo=rust" alt="Rust">
+            <img src="https://img.shields.io/github/v/release/genc-murat/DockQL?color=3fb950&logo=github" alt="Release">
+            <img src="https://img.shields.io/github/actions/workflow/status/genc-murat/DockQL/ci.yml?branch=main&label=CI" alt="CI">
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <!-- Terminal mock -->
+    <div class="code-block">
+        <div class="header">
+            <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+            <span style="margin-left:8px;">dol</span>
+        </div>
+        <pre><span class="cmt"># List running containers with high CPU</span>
+$ dol <span class="str">"observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc"</span>
+
+┌──────────────┬──────────────────┬──────┐
+│ name         │ image            │ cpu  │
+├──────────────┼──────────────────┼──────┤
+│ web-01       │ nginx:1.25       │ 92.3 │
+│ api-gateway  │ envoy:1.29       │ 87.1 │
+│ worker-03    │ python:3.12      │ 81.5 │
+└──────────────┴──────────────────┴──────┘
+
+<span class="cmt"># Stream container crash events</span>
+$ dol <span class="str">"events containers where action = die | select time, container, image"</span></pre>
+    </div>
+
+    <!-- Features -->
+    <section>
+        <h2>⚡ Features</h2>
+        <ul>
+            <li>Live container observation with filtering &amp; sorting</li>
+            <li>Real-time Docker event streaming</li>
+            <li>Historical time-travel inspection</li>
+            <li>Alerting with duration guards (print, webhook, restart)</li>
+            <li>Anomaly detection (CPU, memory, restart loops)</li>
+            <li>Persistent SQLite telemetry store</li>
+            <li>Static semantic analysis &amp; type checking</li>
+            <li>Aggregate functions (sum, count, avg, min, max)</li>
+            <li>Arithmetic expressions &amp; string functions</li>
+            <li>If/then/else pipeline branching, case/when</li>
+            <li>Interactive REPL with tab completion</li>
+            <li>Terminal dashboard (top &amp; multi-panel)</li>
+            <li>Export to InfluxDB, Loki, Prometheus</li>
+            <li>ANSI-colored table, CSV, JSON, JSONL output</li>
+        </ul>
+    </section>
+
+    <!-- Documentation -->
+    <section>
+        <h2>📖 Documentation</h2>
+        <div class="cards">
+            <div class="card">
+                <h3><a href="spec.html">Language Spec</a></h3>
+                <p>Complete DOL v0.1 specification — syntax, types, operators, pipeline nodes, and reserved keywords.</p>
+            </div>
+            <div class="card">
+                <h3><a href="architecture.html">Architecture</a></h3>
+                <p>High-level architecture overview — parser, planner, executor, storage, and component relationships.</p>
+            </div>
+            <div class="card">
+                <h3><a href="examples.html">Query Examples</a></h3>
+                <p>55 categorized examples covering observe, events, inspect, analyze, alert, aggregation, and pipeline queries.</p>
+            </div>
+            <div class="card">
+                <h3><a href="analyze.html">Analysis Docs</a></h3>
+                <p>Documentation for the deterministic anomaly detection engine — restart loops, CPU/memory pressure, deployment errors.</p>
+            </div>
+            <div class="card">
+                <h3><a href="storage.html">Storage Docs</a></h3>
+                <p>Details on the SQLite telemetry store schema, retention policies, and historical query execution.</p>
+            </div>
+            <div class="card">
+                <h3><a href="../dol/index.html">API Docs (cargo doc)</a></h3>
+                <p>Auto-generated Rust API documentation for all modules — parser, eval, executor, alerts, and more.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section>
+        <h2>🚀 Quick Start</h2>
+        <div class="code-block">
+            <div class="header">
+                <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+                <span style="margin-left:8px;">terminal</span>
+            </div>
+            <pre><span class="cmt"># Clone and build</span>
+$ git clone https://github.com/genc-murat/DockQL.git
+$ cd DockQL
+$ cargo build --release
+
+<span class="cmt"># Run a query</span>
+$ ./target/release/dol <span class="str">"observe containers"</span>
+
+<span class="cmt"># Start the interactive REPL</span>
+$ ./target/release/dol repl
+
+<span class="cmt"># Live-updating container monitor</span>
+$ ./target/release/dol top</pre>
+        </div>
+    </section>
+
+    <!-- Installation -->
+    <section>
+        <h2>📦 Installation</h2>
+        <p>Pre-built binaries are available for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64) via the <a href="https://github.com/genc-murat/DockQL/releases" style="color:var(--accent);">GitHub Releases</a> page.</p>
+        <p>Alternatively, build from source with Rust 1.85+:</p>
+        <div class="code-block" style="margin-top:12px;">
+            <pre>cargo install dol --git https://github.com/genc-murat/DockQL</pre>
+        </div>
+    </section>
+</div>
+
+<footer>
+    <div class="container">
+        <p><a href="https://github.com/genc-murat/DockQL">GitHub</a> &middot;
+        <a href="https://github.com/genc-murat/DockQL/blob/main/LICENSE">MIT License</a></p>
+        <p style="margin-top:4px;font-size:0.8rem;">DOL — Docker Observability Language</p>
+    </div>
+</footer>
+
+</body>
+</html>
