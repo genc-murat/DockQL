@@ -1,0 +1,194 @@
+/* ── DOL Dark Theme for rustdoc ────────────────────────
+   Overrides the ayu theme CSS variables to match the
+   DOL landing page dark theme (GitHub-style colors).
+   Applied via cargo doc --extend-css in the Pages workflow.
+   ──────────────────────────────────────────────────── */
+
+:root[data-theme="ayu"] {
+  /* ── Backgrounds ─────────────────────────────── */
+  --main-background-color: #0d1117;
+  --sidebar-background-color: #161b22;
+  --code-block-background-color: #1c2128;
+  --button-background-color: #161b22;
+  --search-tab-button-selected-background: #161b22 !important;
+  --table-alt-row-background-color: #1c2128;
+  --codeblock-link-background: #1c2128;
+
+  /* ── Text colors ────────────────────────────── */
+  --main-color: #e6edf3;
+  --headings-border-bottom-color: #30363d;
+  --border-color: #30363d;
+  --right-side-color: #8b949e;
+  --code-attribute-color: #8b949e;
+  --toggles-color: #8b949e;
+
+  /* ── Links ──────────────────────────────────── */
+  --link-color: #58a6ff;
+  --sidebar-link-color: #58a6ff;
+  --type-link-color: #ffa0a5;
+  --trait-link-color: #58a6ff;
+  --assoc-item-link-color: #d29922;
+  --function-link-color: #3fb950;
+  --macro-link-color: #a37acc;
+  --keyword-link-color: #58a6ff;
+  --attribute-link-color: #58a6ff;
+  --mod-link-color: #58a6ff;
+  --sidebar-current-link-background-color: rgba(88, 166, 255, 0.08);
+
+  /* ── Code highlighting ──────────────────────── */
+  --code-highlight-kw-color: #ff7b72;
+  --code-highlight-kw-2-color: #ff7b72;
+  --code-highlight-lifetime-color: #d29922;
+  --code-highlight-prelude-color: #79c0ff;
+  --code-highlight-prelude-val-color: #ffa657;
+  --code-highlight-number-color: #79c0ff;
+  --code-highlight-string-color: #a5d6ff;
+  --code-highlight-literal-color: #ffa657;
+  --code-highlight-attribute-color: #c9d1d9;
+  --code-highlight-self-color: #58a6ff;
+  --code-highlight-macro-color: #a37acc;
+  --code-highlight-question-mark-color: #ff9011;
+  --code-highlight-comment-color: #8b949e;
+  --code-highlight-doc-comment-color: #7ee787;
+
+  /* ── Scrollbar ──────────────────────────────── */
+  --scrollbar-track-background-color: #161b22;
+  --scrollbar-thumb-background-color: #30363d;
+  --scrollbar-color: #30363d #161b22;
+
+  /* ── Sidebar ────────────────────────────────── */
+  --sidebar-border-color: #30363d;
+  --sidebar-background-color-hover: rgba(255, 255, 255, 0.04);
+  --src-sidebar-background-selected: #1c2128;
+  --src-sidebar-background-hover: rgba(255, 255, 255, 0.04);
+
+  /* ── Search ─────────────────────────────────── */
+  --search-color: #e6edf3;
+  --search-input-focused-border-color: #58a6ff;
+  --search-result-link-focus-background-color: #1c2128;
+  --search-result-border-color: #30363d;
+  --search-results-alias-color: #e6edf3;
+  --search-results-grey-color: #8b949e;
+  --search-tab-button-not-selected-background: #161b22;
+  --search-tab-button-not-selected-border-top-color: #30363d;
+  --search-tab-title-count-color: #8b949e;
+  --search-error-code-background-color: #1c2128;
+
+  /* ── Settings & buttons ─────────────────────── */
+  --settings-input-color: #58a6ff;
+  --settings-input-border-color: #8b949e;
+  --settings-button-color: #e6edf3;
+  --settings-button-border-focus: #58a6ff;
+  --settings-menu-filter: invert(70%) sepia(40%) saturate(500%) hue-rotate(180deg);
+  --settings-menu-hover-filter: invert(100%);
+
+  /* ── Code blocks ────────────────────────────── */
+  --src-line-numbers-span-color: #8b949e;
+  --src-line-number-highlighted-background-color: rgba(210, 168, 255, 0.06);
+
+  /* ── Targets & highlights ───────────────────── */
+  --target-background-color: rgba(210, 168, 255, 0.06);
+  --target-border-color: #d2a8ff;
+
+  /* ── Stab / stability ───────────────────────── */
+  --stab-background-color: #21262d;
+  --stab-code-color: #e6edf3;
+
+  /* ── Crate search ───────────────────────────── */
+  --crate-search-hover-border: #58a6ff;
+
+  /* ── Misc ────────────────────────────────────── */
+  --copy-path-img-filter: invert(60%);
+  --copy-path-img-hover-filter: invert(100%);
+  --code-example-button-color: #8b949e;
+  --code-example-button-hover-color: #e6edf3;
+  --codeblock-error-hover-color: #f85149;
+  --codeblock-error-color: rgba(248, 81, 73, 0.5);
+  --codeblock-ignore-hover-color: #d29922;
+  --codeblock-ignore-color: rgba(210, 146, 34, 0.6);
+  --warning-border-color: #d29922;
+  --kbd-color: #e6edf3;
+  --kbd-background: #1c2128;
+  --kbd-box-shadow-color: #30363d;
+  --toggle-filter: invert(100%);
+  --mobile-sidebar-menu-filter: invert(100%);
+  --rust-logo-filter: drop-shadow(1px 0 0px #fff) drop-shadow(0 1px 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 -1px 0 #fff);
+  --scrape-example-toggle-line-background: #30363d;
+  --scrape-example-toggle-line-hover-background: #8b949e;
+  --scrape-example-code-line-highlight: rgba(210, 168, 255, 0.06);
+  --scrape-example-code-line-highlight-focus: rgba(210, 168, 255, 0.12);
+  --scrape-example-help-border-color: #8b949e;
+  --scrape-example-help-color: #e6edf3;
+  --scrape-example-help-hover-border-color: #58a6ff;
+  --scrape-example-help-hover-color: #58a6ff;
+  --scrape-example-code-wrapper-background-start: rgba(13, 17, 23, 1);
+  --scrape-example-code-wrapper-background-end: rgba(13, 17, 23, 0);
+  --sidebar-resizer-hover: #58a6ff;
+  --sidebar-resizer-active: #58a6ff;
+}
+
+/* ── Heading colors for ayu theme ────────────────── */
+:root[data-theme="ayu"] h1,
+:root[data-theme="ayu"] h2,
+:root[data-theme="ayu"] h3,
+:root[data-theme="ayu"] h4,
+:root[data-theme="ayu"] h5,
+:root[data-theme="ayu"] h6 {
+  color: #e6edf3;
+}
+
+/* ── Code text in docs ───────────────────────────── */
+:root[data-theme="ayu"] .docblock code {
+  color: #ffa657;
+}
+:root[data-theme="ayu"] .docblock a>code {
+  color: #58a6ff !important;
+}
+
+/* ── Code blocks ─────────────────────────────────── */
+:root[data-theme="ayu"] .code-header,
+:root[data-theme="ayu"] .docblock pre>code,
+:root[data-theme="ayu"] pre,
+:root[data-theme="ayu"] pre>code,
+:root[data-theme="ayu"] .item-info code,
+:root[data-theme="ayu"] .rustdoc.source .example-wrap {
+  color: #c9d1d9;
+}
+
+/* ── Sidebar current/hover ───────────────────────── */
+:root[data-theme="ayu"] .sidebar .current,
+:root[data-theme="ayu"] .sidebar .current a,
+:root[data-theme="ayu"] .sidebar a:hover,
+:root[data-theme="ayu"] #src-sidebar div.files>a:hover,
+:root[data-theme="ayu"] details.dir-entry summary:hover,
+:root[data-theme="ayu"] #src-sidebar div.files>a:focus,
+:root[data-theme="ayu"] details.dir-entry summary:focus,
+:root[data-theme="ayu"] #src-sidebar div.files>a.selected {
+  color: #f0f6fc;
+}
+
+/* ── Search results ──────────────────────────────── */
+:root[data-theme="ayu"] .search-results a:hover,
+:root[data-theme="ayu"] .search-results a:focus {
+  color: #e6edf3 !important;
+  background-color: #1c2128;
+}
+:root[data-theme="ayu"] .search-results a {
+  color: #58a6ff;
+}
+:root[data-theme="ayu"] .search-results a div.desc {
+  color: #8b949e;
+}
+
+/* ── Search tabs ─────────────────────────────────── */
+:root[data-theme="ayu"] #search-tabs>button.selected {
+  border-bottom: 1px solid #58a6ff !important;
+  border-top: none;
+}
+:root[data-theme="ayu"] #search-tabs>button:not(.selected) {
+  border: none;
+  background-color: transparent !important;
+}
+:root[data-theme="ayu"] #search-tabs>button:hover {
+  border-bottom: 1px solid rgba(88, 166, 255, 0.3);
+}
