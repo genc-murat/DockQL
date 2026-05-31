@@ -25,6 +25,8 @@ dol "observe containers | group by state"
 - **Multiple output formats** — table (default), CSV, JSONL, JSON, ANSI-colored table
 - **Config file** — YAML/TOML configuration from standard paths; manage with `dol config init|set|view`
 - **Interactive REPL** — `dol repl` with tab completion, history, `.watch`, `.export` commands
+- **Terminal Dashboard** — `dol top` live container monitor with auto-refresh, color-coded states, keyboard controls
+- **Multi-panel Dashboard** — `dol dashboard` with container list + live Docker events panel
 - **Shell completion** — generate completion scripts with `--completion <shell>`
 - **Batch and stream modes** — snapshots for `observe`/`inspect`, streaming for `events`/`alert`
 
@@ -218,6 +220,30 @@ REPL commands:
 - `.export <path>` — set export file path
 - `.output <fmt>` — set output format (table, json, csv, jsonl)
 
+### Terminal Dashboard
+
+```bash
+# Live-updating container monitor (top-like)
+dol top
+
+# Multi-panel dashboard with containers and events
+dol dashboard
+```
+
+`dol top` keyboard controls:
+- `↑`/`↓` or `j`/`k` — navigate rows
+- `s` — cycle sort column (name, image, state, status)
+- `d` — toggle sort direction
+- `r` — force refresh
+- `q` / Esc — quit
+
+`dol dashboard` keyboard controls:
+- `Tab` — switch panel focus
+- `r` — force refresh
+- `q` / Esc — quit
+
+Both modes auto-refresh every 2 seconds. Container states are color-coded: running (green), exited/dead (red), paused (yellow), restarting (cyan).
+
 ### Real Alert Actions
 
 When an alert fires, actions are executed immediately:
@@ -301,6 +327,8 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `--diff` | Compare results with last store snapshot |
 | `--completion <shell>` | Generate shell completion script |
 | `repl` | Start interactive REPL shell |
+| `top` | Live-updating TUI container monitor |
+| `dashboard` | Multi-panel TUI with containers and events |
 | `config init` | Create a default config file |
 | `config set <key> <value>` | Update a config value |
 | `config view` | Display current configuration |

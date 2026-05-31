@@ -4,6 +4,7 @@ pub mod ast;
 pub mod cli;
 pub mod collector;
 pub mod config;
+pub mod dashboard;
 pub mod docker;
 pub mod eval;
 pub mod events;

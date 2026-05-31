@@ -84,6 +84,13 @@ Loads DOL settings from YAML or TOML files at standard paths (`~/.config/dol/con
 ### 9. Interactive REPL (`src/repl.rs`)
 A readline-based interactive shell (`dol repl`) with tab completion for DOL keywords, command history (persisted across sessions), and REPL-specific commands (`.watch`, `.export`, `.output`, `.history`, `.help`). Supports all query types: observe, events, inspect, alert, and fields.
 
+### 10. Terminal Dashboard (`src/dashboard.rs`)
+A ratatui-based TUI module providing two modes:
+- **`dol top`**: Full-screen live-updating container table with auto-refresh (2s), color-coded states, sort controls, and keyboard navigation.
+- **`dol dashboard`**: Multi-panel view with a container list and a live Docker events panel, focus-switchable via Tab.
+
+Both modes use `crossterm` for raw terminal input and alternate screen rendering. The dashboard polls `DockerCliClient::list_containers()` and `docker events` on a 2-second interval loop without blocking the event loop.
+
 ## Data Flow: Example Pipeline
 
 When executing `observe containers where cpu > 80% | select name, cpu | sort cpu desc limit 5`:
@@ -109,3 +116,7 @@ The CLI (`src/cli.rs`) uses `clap` for argument parsing. Key flags include:
 - `--export <path>` — write output to file
 - `--host <addr>` — remote Docker daemon address
 - `--completion <shell>` — generate shell completion script
+- `repl` — interactive REPL shell
+- `top` — live-updating TUI container monitor
+- `dashboard` — multi-panel TUI with containers and events
+- `config init|set|view` — manage DOL configuration

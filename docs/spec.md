@@ -571,6 +571,8 @@ The DOL CLI supports the following flags:
 | `--diff` | Compare query results with the last store snapshot |
 | `--completion <shell>` | Generate shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
 | `repl` | Start interactive REPL shell with tab completion and history |
+| `top` | Live-updating TUI container monitor (top-like) with auto-refresh and keyboard controls |
+| `dashboard` | Multi-panel TUI dashboard with container list and live Docker events |
 | `config init` | Create a default config file at the standard config path |
 | `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`) |
 | `config view` | Display the current merged configuration |

@@ -354,3 +354,38 @@ dol config view
 
 Supported config keys: `store`, `output`, `host`, `metrics-interval`, `snapshot-interval`.
 
+## 11. Terminal Dashboard
+
+Interactive TUI monitors for live container observability.
+
+### Live Container Monitor (`dol top`)
+
+```bash
+dol top
+```
+
+Displays a full-screen table of all containers with auto-refresh every 2 seconds. Columns: NAME, IMAGE, STATE, STATUS.
+
+Keyboard controls:
+- `↑`/`↓` or `j`/`k` — navigate rows
+- `s` — cycle sort column
+- `d` — toggle sort direction
+- `r` — force refresh
+- `q` / Esc — quit
+
+Color coding: running (green), exited/dead (red), paused (yellow), restarting (cyan).
+
+### Multi-Panel Dashboard (`dol dashboard`)
+
+```bash
+dol dashboard
+```
+
+Split-screen view with containers list (top) and live Docker events (bottom). Events are polled from `docker events --until 5s`.
+
+Keyboard controls:
+- `Tab` — switch panel focus
+- `r` — force refresh
+- `q` / Esc — quit
+
+

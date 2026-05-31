@@ -8,6 +8,7 @@ use crate::{
     ast::Query,
     collector::{self, CollectorConfig},
     config::{self, ConfigAction, DolConfig},
+    dashboard,
     docker::DockerCliClient,
     events::{self, DockerCliEventSource},
     executor::{self, render_csv, render_jsonl, render_table},
@@ -95,6 +96,10 @@ pub enum CliCommand {
     },
     /// Interactive REPL shell.
     Repl,
+    /// Live-updating TUI container monitor (top-like).
+    Top,
+    /// Multi-panel dashboard with containers and events.
+    Dashboard,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -116,6 +121,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             CliCommand::Repl => {
                 return crate::repl::run_repl(&config).await;
+            }
+            CliCommand::Top => {
+                return dashboard::run_top(&config).await;
+            }
+            CliCommand::Dashboard => {
+                return dashboard::run_dashboard(&config).await;
             }
         }
     }
