@@ -35,7 +35,7 @@ jobs:
           echo '<meta http-equiv="refresh" content="0; url=./dol/index.html">' > target/doc/index.html
 
       - name: Install pandoc
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq pandoc 2>/dev/null
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pandoc
 
       - name: Convert docs markdown to HTML
         run: |
