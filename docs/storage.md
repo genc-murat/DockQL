@@ -1,13 +1,15 @@
 # DOL Historical Storage & Time Travel
 
 This document describes the historical storage layer and time-travel query
-capabilities added in Phase 8.
+capabilities added in Phase 8, along with Layer 2 enhancements (historical
+observe, diff mode, passive collection).
 
 ## Overview
 
 DOL supports persisting Docker telemetry (metrics, events, and snapshots) to
 an embedded SQLite database. Once data is collected, you can run historical
-queries to inspect the state of your Docker environment at any point in the past.
+queries to inspect the state of your Docker environment at any point in the past,
+compare container states over time, and run historical observe queries.
 
 ## Architecture
 
@@ -15,19 +17,19 @@ queries to inspect the state of your Docker environment at any point in the past
 ┌─────────────────┐     ┌──────────────────┐
 │   DOL CLI       │────▶│   Query Router   │
 └─────────────────┘     └────────┬─────────┘
+                                  │
+             ┌────────────────────┼────────────────────┐
+             ▼                    ▼                    ▼
+    ┌────────────────┐  ┌────────────────┐   ┌────────────────┐
+    │  Batch Execute │  │  Historical    │   │  Stream        │
+    │  (Docker API)  │  │  Execute       │   │  Execute       │
+    └────────────────┘  │  (SQLite)      │   └────────────────┘
+                        └────────┬───────┘
                                  │
-            ┌────────────────────┼────────────────────┐
-            ▼                    ▼                    ▼
-   ┌────────────────┐  ┌────────────────┐   ┌────────────────┐
-   │  Batch Execute │  │  Historical    │   │  Stream        │
-   │  (Docker API)  │  │  Execute       │   │  Execute       │
-   └────────────────┘  │  (SQLite)      │   └────────────────┘
-                       └────────┬───────┘
-                                │
-                       ┌────────▼───────┐
-                       │  SQLite Store  │
-                       │  (TelemetryStore)│
-                       └────────────────┘
+                        ┌────────▼───────┐
+                        │  SQLite Store  │
+                        │  (TelemetryStore)│
+                        └────────────────┘
 ```
 
 ## Storage Schema
@@ -92,12 +94,31 @@ Once you have collected data, you can query the past:
 # Inspect a container's state at a specific time
 dol --store telemetry.db "inspect container api at \"2026-01-01 12:00:00\""
 
+# Observe containers as they were 5 minutes ago
+dol --store telemetry.db "observe containers last 5m"
+
+# Observe containers at a specific time
+dol --store telemetry.db "observe containers at \"2026-01-01 12:00:00\""
+
 # Replay events in a time range
 dol --store telemetry.db 'events containers from "2026-01-01T12:00:00Z" to "2026-01-01T13:00:00Z"'
 
 # Replay events with filtering
 dol --store telemetry.db 'events containers from "2026-01-01T12:00:00Z" to "2026-01-01T13:00:00Z" where action = "die" | select time, action, container'
 ```
+
+### Diff Mode
+
+Compare current container state with the last stored snapshot to see what changed:
+
+```bash
+dol --store telemetry.db "observe containers" --diff
+```
+
+Diff output shows:
+- **Added containers** (green) — containers that appeared since the last snapshot
+- **Removed containers** (red) — containers that disappeared since the last snapshot
+- **Changed containers** — containers whose state transitioned (e.g., `running → exited`)
 
 ### Store Management
 
@@ -163,3 +184,5 @@ Two implementations exist:
 - SQLite indices on timestamp columns ensure efficient range queries.
 - The `TimeSelector::Last` variant computes a proper time window relative to
   the current time using chrono, rather than scanning all data.
+- Diff mode queries `snapshot_at_or_before` for the latest snapshot and compares
+  container IDs and states with current results.

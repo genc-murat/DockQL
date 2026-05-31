@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::ast::{
     AnalyzeQuery, AlertRule, CollectionTarget, EventsQuery, InspectQuery, ObserveQuery,
     PipelineNode, Query, SortDirection,
@@ -10,6 +12,7 @@ pub enum LogicalPlan {
     Inspect(InspectPlan),
     Analyze(AnalyzePlan),
     Alert(AlertPlan),
+    Fields(crate::ast::CollectionTarget),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +50,10 @@ pub struct AlertPlan {
 pub enum PlanStep {
     Fetch(CollectionTarget),
     Filter(crate::ast::Expression),
+    In {
+        field: String,
+        values: Vec<crate::ast::Value>,
+    },
     Select(Vec<String>),
     GroupBy(Vec<String>),
     SortBy { field: String, direction: SortDirection },
@@ -71,6 +78,86 @@ pub enum PlanError {
     GroupByWithoutAggregation,
 }
 
+impl fmt::Display for LogicalPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogicalPlan::Observe(p) => {
+                writeln!(f, "ObservePlan {{ target: {:?} }}", p.target)?;
+                for step in &p.steps {
+                    writeln!(f, "  {step}")?;
+                }
+                Ok(())
+            }
+            LogicalPlan::Events(p) => {
+                writeln!(f, "EventsPlan {{ target: {:?} }}", p.target)?;
+                for step in &p.steps {
+                    writeln!(f, "  {step}")?;
+                }
+                Ok(())
+            }
+            LogicalPlan::Inspect(p) => {
+                write!(f, "InspectPlan {{ target: {:?}, at: ", p.target.kind)?;
+                match &p.at {
+                    Some(t) => write!(f, "Some(\"{t}\")")?,
+                    None => write!(f, "None")?,
+                }
+                writeln!(f, " }}")
+            }
+            LogicalPlan::Analyze(p) => {
+                writeln!(f, "AnalyzePlan {{ verb: {:?}, subject: {:?} }}", p.verb, p.subject)?;
+                for step in &p.steps {
+                    writeln!(f, "  {step}")?;
+                }
+                Ok(())
+            }
+            LogicalPlan::Alert(p) => {
+                writeln!(f, "AlertPlan {{ condition: {:?} }}", p.rule.condition)
+            }
+            LogicalPlan::Fields(target) => {
+                writeln!(f, "FieldsPlan {{ target: {target:?} }}")
+            }
+        }
+    }
+}
+
+impl fmt::Display for PlanStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlanStep::Fetch(target) => write!(f, "Fetch({target:?})"),
+            PlanStep::Filter(_) => write!(f, "Filter(<expression>)"),
+            PlanStep::In { field, values } => {
+                write!(f, "In({field}, [")?;
+                let vals: Vec<String> = values.iter().map(|v| format!("{v:?}")).collect();
+                write!(f, "{}", vals.join(", "))?;
+                write!(f, "])")
+            }
+            PlanStep::Select(fields) => write!(f, "Select({})", fields.join(", ")),
+            PlanStep::GroupBy(fields) => write!(f, "GroupBy({})", fields.join(", ")),
+            PlanStep::SortBy { field, direction } => write!(f, "SortBy({field}, {direction:?})"),
+            PlanStep::Limit(n) => write!(f, "Limit({n})"),
+            PlanStep::Alert(msg) => write!(f, "Alert(\"{msg}\")"),
+            PlanStep::If { condition, then_branch, else_branch } => {
+                write!(f, "If({condition:?}, then=[")?;
+                for (i, step) in then_branch.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{step}")?;
+                }
+                write!(f, "]")?;
+                if let Some(else_b) = else_branch {
+                    write!(f, ", else=[")?;
+                    for (i, step) in else_b.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{step}")?;
+                    }
+                    write!(f, "]")?;
+                }
+                write!(f, ")")
+            }
+            PlanStep::Set { field, value: _ } => write!(f, "Set({field}, <value>)"),
+        }
+    }
+}
+
 pub fn plan(query: &Query) -> Result<LogicalPlan, PlanError> {
     match query {
         Query::Observe(q) => plan_observe(q),
@@ -78,6 +165,7 @@ pub fn plan(query: &Query) -> Result<LogicalPlan, PlanError> {
         Query::Inspect(q) => plan_inspect(q),
         Query::Analyze(q) => plan_analyze(q),
         Query::Alert(rule) => Ok(LogicalPlan::Alert(AlertPlan { rule: rule.clone() })),
+        Query::Fields(target) => Ok(LogicalPlan::Fields(*target)),
     }
 }
 
@@ -140,7 +228,13 @@ fn plan_analyze(query: &AnalyzeQuery) -> Result<LogicalPlan, PlanError> {
 
 fn node_to_step(node: &PipelineNode) -> PlanStep {
     match node {
-        PipelineNode::Where(expr) => PlanStep::Filter(expr.clone()),
+        PipelineNode::Where(expr) => match expr {
+            crate::ast::Expression::In { field, values } => PlanStep::In {
+                field: field.clone(),
+                values: values.clone(),
+            },
+            other => PlanStep::Filter(other.clone()),
+        },
         PipelineNode::Select(fields) => PlanStep::Select(fields.clone()),
         PipelineNode::GroupBy(fields) => PlanStep::GroupBy(fields.clone()),
         PipelineNode::SortBy { field, direction } => PlanStep::SortBy {

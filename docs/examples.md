@@ -63,10 +63,17 @@ observe containers
     | limit 3
 ```
 
-**Filter containers by label:**
+**Filter containers by label (full label string):**
 ```dol
 observe containers 
     | where labels contains "env=prod"
+    | select name, image, state
+```
+
+**Filter by individual label using dot notation:**
+```dol
+observe containers 
+    | where label.env = "prod"
     | select name, image, state
 ```
 
@@ -77,7 +84,45 @@ observe containers
     | select name, ports, image
 ```
 
-## 2. Aggregation (`group by`)
+**Regex matching on container names:**
+```dol
+observe containers 
+    | where name matches "^api-"
+    | select name, status, cpu
+```
+
+**IN operator for multiple values:**
+```dol
+observe containers 
+    | where image in ("postgres", "mysql", "redis")
+    | select name, image, state
+```
+
+## 2. Schema Introspection (`fields`)
+
+Discover which fields are available for a target type.
+
+**List all container fields:**
+```dol
+fields containers
+```
+
+**List all image fields:**
+```dol
+fields images
+```
+
+**List all network fields:**
+```dol
+fields networks
+```
+
+**List all volume fields:**
+```dol
+fields volumes
+```
+
+## 3. Aggregation (`group by`)
 
 Group rows by one or more fields. Each group gets a `count` column.
 
@@ -94,7 +139,14 @@ observe containers
     | limit 5
 ```
 
-## 3. Alerting and Monitoring (`alert`)
+**Group events by image (streaming):**
+```dol
+events containers 
+    | where action = "die" 
+    | group by image
+```
+
+## 4. Alerting and Monitoring (`alert`)
 
 Alerts run continuously and trigger actions when conditions are met for a duration.
 
@@ -122,7 +174,7 @@ observe containers
     | alert "High CPU detected"
 ```
 
-## 4. Streaming and Event History (`events`)
+## 5. Streaming and Event History (`events`)
 
 `events` lets you tap into the Docker event bus. All resource types are supported: containers, images, networks, and volumes.
 
@@ -168,9 +220,9 @@ events containers
     where action = "oom"
 ```
 
-## 5. Time Travel (`inspect ... at`)
+## 6. Time Travel (`inspect ... at` / `observe ... last`)
 
-Historical queries allow you to view the exact state of a container as it was at a specific moment in the past. Requires `--store`.
+Historical queries allow you to view the exact state of containers as they were at a specific moment in the past. Requires `--store`.
 
 **Inspect a container's current state:**
 ```dol
@@ -187,7 +239,17 @@ inspect container db-master at "2026-05-30 04:59:59Z"
 inspect image postgres:16
 ```
 
-## 6. Automated Insights (`analyze`)
+**Observe containers as they were 10 minutes ago:**
+```dol
+observe containers last 10m
+```
+
+**Observe containers at a specific point in time:**
+```dol
+observe containers at "2026-05-30 12:00:00Z"
+```
+
+## 7. Automated Insights (`analyze`)
 
 The deterministic analysis engine automatically surfaces problems without writing complex queries.
 
@@ -201,7 +263,7 @@ analyze containers find anomalies
 analyze container api-service correlate
 ```
 
-## 7. Complex Pipelines
+## 8. Complex Pipelines
 
 You can chain multiple operations together using the `|` pipe operator.
 
@@ -227,4 +289,18 @@ observe containers
 observe containers 
     | where (state = running and cpu > 60%) or restart_count > 3
     | group by image
+```
+
+**Regex filtering with field selection:**
+```dol
+observe containers 
+    | where name matches "^db-" 
+    | select name, image, state, cpu
+```
+
+**Label-based filtering with compose_project:**
+```dol
+observe containers 
+    | where label.com.docker.compose.project = "myapp"
+    | select name, compose_project, state
 ```

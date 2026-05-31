@@ -137,10 +137,14 @@ impl DockerCliClient {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let args: Vec<_> = args.into_iter().collect();
-        let command_display = format_command(&self.docker_bin, &args);
+        let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string_lossy().into_owned()).collect();
+        self.run_json_lines_str(&args)
+    }
+
+    fn run_json_lines_str(&self, args: &[String]) -> Result<Vec<Value>, DockerError> {
+        let command_display = format_command_str(&self.docker_bin, args);
         let output = Command::new(&self.docker_bin)
-            .args(&args)
+            .args(args)
             .output()
             .map_err(|source| DockerError::CommandIo {
                 command: command_display.clone(),
@@ -161,10 +165,22 @@ impl DockerCliClient {
 
 impl DockerClient for DockerCliClient {
     fn list_containers(&self) -> Result<Vec<Container>, DockerError> {
-        self.run_json_lines(["ps", "-a", "--format", "{{json .}}"])?
+        let values = self.run_json_lines(["ps", "-a", "--format", "{{json .}}"])?;
+        let mut containers: Vec<Container> = values
             .iter()
             .map(container_from_ps_json)
-            .collect()
+            .collect::<Result<_, _>>()?;
+
+        if !containers.is_empty() {
+            let ids: Vec<String> = containers.iter().map(|c| c.id.clone()).collect();
+            let mut args: Vec<String> = vec!["inspect".to_owned(), "--format".to_owned(), "{{json .}}".to_owned()];
+            args.extend(ids);
+            if let Ok(inspect_values) = self.run_json_lines_str(&args) {
+                enrich_containers_from_inspect(&mut containers, &inspect_values);
+            }
+        }
+
+        Ok(containers)
     }
 
     fn list_images(&self) -> Result<Vec<Image>, DockerError> {
@@ -245,6 +261,54 @@ fn container_from_ps_json(value: &Value) -> Result<Container, DockerError> {
     })
 }
 
+fn enrich_containers_from_inspect(containers: &mut [Container], inspect_values: &[Value]) {
+    let inspect_by_id: std::collections::HashMap<String, &Value> = inspect_values
+        .iter()
+        .filter_map(|v| {
+            let id = v.get("Id").and_then(Value::as_str).unwrap_or("").to_owned();
+            let short = &id[..12.min(id.len())];
+            Some((short.to_owned(), v))
+        })
+        .collect();
+
+    let inspect_by_name: std::collections::HashMap<String, &Value> = inspect_values
+        .iter()
+        .filter_map(|v| {
+            let name = v.get("Name").and_then(Value::as_str).unwrap_or("").trim_start_matches('/').to_owned();
+            Some((name, v))
+        })
+        .collect();
+
+    for container in containers.iter_mut() {
+            let inspect = inspect_by_id
+                .get(&container.id[..12.min(container.id.len())])
+                .or_else(|| inspect_by_name.get(&container.name))
+                .map(|v| *v);
+
+        if let Some(inspect) = inspect {
+            if container.started_at.is_none() {
+                container.started_at = inspect
+                    .pointer("/State/StartedAt")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.starts_with("0001"))
+                    .map(str::to_owned);
+            }
+            if container.finished_at.is_none() {
+                container.finished_at = inspect
+                    .pointer("/State/FinishedAt")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.starts_with("0001"))
+                    .map(str::to_owned);
+            }
+            if container.restart_count.is_none() {
+                container.restart_count = inspect
+                    .pointer("/RestartCount")
+                    .and_then(Value::as_u64);
+            }
+        }
+    }
+}
+
 fn image_from_ls_json(value: &Value) -> Result<Image, DockerError> {
     Ok(Image {
         id: get_string(value, &["ID", "Id"]),
@@ -300,15 +364,9 @@ fn split_csv(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn format_command<S>(bin: &str, args: &[S]) -> String
-where
-    S: AsRef<OsStr>,
-{
+fn format_command_str(bin: &str, args: &[String]) -> String {
     let mut parts = vec![bin.to_owned()];
-    parts.extend(
-        args.iter()
-            .map(|arg| arg.as_ref().to_string_lossy().into_owned()),
-    );
+    parts.extend(args.iter().cloned());
     parts.join(" ")
 }
 

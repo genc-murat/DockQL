@@ -11,12 +11,19 @@ dol "observe containers | group by state"
 ## Features
 
 - **Live observation** — query containers, images, networks, volumes with filtering, sorting, and aggregation
-- **Real-time events** — stream Docker events with pipeline filters
+- **Real-time events** — stream Docker events with pipeline filters and group-by aggregation
 - **Historical inspection** — inspect container state at any point in the past (requires `--store`)
+- **Historical observe** — query past container states with `observe containers last 5m`
 - **Alerting** — continuously evaluate conditions with duration guards and actions (print, webhook, restart)
 - **Analysis** — deterministic anomaly detection (CPU, memory, restart loops, deployment errors)
 - **Telemetry store** — persistent SQLite-backed storage for metrics, events, and snapshots
+- **Schema introspection** — discover available fields with `fields containers`
 - **Control flow** — `if/then/else` pipeline branching, `case/when` expressions, `set` field assignment
+- **Pattern matching** — `matches` (regex) and `in` operators for flexible filtering
+- **Diff mode** — compare current container state with the last store snapshot (`--diff`)
+- **Multiple output formats** — table (default), CSV, JSONL, JSON, ANSI-colored table
+- **Config file** — YAML/TOML configuration from standard paths
+- **Shell completion** — generate completion scripts with `--completion <shell>`
 - **Batch and stream modes** — snapshots for `observe`/`inspect`, streaming for `events`/`alert`
 
 ## Installation
@@ -79,6 +86,22 @@ dol 'observe containers \
     else if cpu > 70% then alert "Warning: High CPU"'
 ```
 
+### Output Formats
+
+```bash
+# JSON output
+dol --output json "observe containers"
+
+# CSV output
+dol --output csv "observe containers | select name, state, cpu"
+
+# JSONL (JSON Lines) output
+dol --output jsonl "events containers | limit 5"
+
+# ANSI-colored table (default when output is a terminal)
+dol "observe containers"
+```
+
 ### Background Data Collection
 
 ```bash
@@ -91,6 +114,9 @@ dol --store telemetry.db --collect --metrics-interval 30 --snapshot-interval 300
 # Inspect a container's state at a specific time
 dol --store telemetry.db 'inspect container my-app at "2025-01-01 12:00:00"'
 
+# Observe containers as they were 5 minutes ago
+dol --store telemetry.db 'observe containers last 5m'
+
 # Replay events from a time window
 dol --store telemetry.db 'events containers from "2025-05-30T10:00:00Z" to "2025-05-30T11:00:00Z"'
 
@@ -101,10 +127,61 @@ dol --store telemetry.db --store-stats
 dol --store telemetry.db --apply-retention
 ```
 
-### JSON Output
+### Diff Mode
 
 ```bash
-dol --output json "observe containers"
+# Compare current containers with the last stored snapshot
+dol --store telemetry.db "observe containers" --diff
+```
+
+### Export to File
+
+```bash
+dol --output csv --export results.csv "observe containers | select name, state"
+dol --output json --export results.json "observe containers"
+```
+
+### Explain Mode
+
+```bash
+# Show the query plan without executing
+dol --explain "observe containers | where cpu > 50% | select name, cpu"
+```
+
+### Watch Mode
+
+```bash
+# Re-run query every 5 seconds
+dol --watch 5 "observe containers | where state = running"
+```
+
+### Shell Completion
+
+```bash
+# Generate bash completion script
+dol --completion bash > /etc/bash_completion.d/dol
+
+# Generate PowerShell completion
+dol --completion powershell >> $PROFILE
+```
+
+### Config File
+
+DOL loads settings from `~/.config/dol/config.yaml`, `~/.config/dol/config.toml`, `.dolrc`, or `dol.yaml`:
+
+```yaml
+store: /path/to/telemetry.db
+output: table
+host: tcp://192.168.1.100:2375
+metrics_interval: 30
+snapshot_interval: 300
+```
+
+### Remote Host
+
+```bash
+# Connect to a remote Docker daemon
+dol --host tcp://192.168.1.100:2375 "observe containers"
 ```
 
 ## Query Language
@@ -114,6 +191,7 @@ dol --output json "observe containers"
 - `observe containers` / `images` / `networks` / `volumes`
 - `events containers` / `images` / `networks` / `volumes`
 - `inspect container <name>` / `image <name>` (with optional `at "<time>"`)
+- `fields containers` / `images` / `networks` / `volumes` (schema introspection)
 - `analyze [containers|container <name>] find [anomalies|restart_loops|deployment_errors|...]`
 - `alert when <condition> [for <duration>] then <action>`
 
@@ -140,13 +218,39 @@ dol --output json "observe containers"
 
 ### Expression Operators
 
-Comparison: `=`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `matches`
+Comparison: `=`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `matches` (regex), `in`
 Logical: `and`, `or`, `not`
 Grouping: `(`, `)`
 
+### Label Access
+
+Access individual labels using dot notation:
+
+```bash
+dol "observe containers | where label.env = production | select name, label.version"
+```
+
 ### Container Fields
 
-`id`, `name`, `image`, `status`, `state`, `ports`, `labels`, `created_at`, `cpu`, `memory`, `memory_limit`, `restart_count`, `network_rx`, `network_tx`, `disk_read`, `disk_write`
+`id`, `name`, `image`, `status`, `state`, `ports`, `labels`, `created_at`, `started_at`, `finished_at`, `cpu`, `memory`, `memory_limit`, `restart_count`, `network_rx`, `network_tx`, `disk_read`, `disk_write`, `compose_project`
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--store <path>` | Path to SQLite telemetry store |
+| `--collect` | Start background data collection |
+| `--metrics-interval <s>` | Metrics collection interval in seconds |
+| `--snapshot-interval <s>` | Snapshot collection interval in seconds |
+| `--store-stats` | Show telemetry store statistics |
+| `--apply-retention` | Apply retention policies to the store |
+| `--output <fmt>` | Output format: `table`, `json`, `csv`, `jsonl` |
+| `--export <path>` | Write output to file instead of stdout |
+| `--host <addr>` | Docker daemon host address |
+| `--watch <s>` | Re-run query every N seconds |
+| `--explain` | Show query plan without executing |
+| `--diff` | Compare results with last store snapshot |
+| `--completion <shell>` | Generate shell completion script |
 
 ## Examples
 
@@ -177,10 +281,10 @@ observe containers | if cpu > 90% then alert "Critical"
 The project follows a pipeline architecture:
 
 ```
-Docker API → Entity/Metrics/Event Sources → Parser → Planner → Executor → Table/JSON Output
+Docker API → Entity/Metrics/Event Sources → Parser → Planner → Executor → Table/CSV/JSON/JSONL Output
                                               ↑                              ↑
                                            AST nodes                    Telemetry Store
-                                                                        (SQLite)
+                                                                         (SQLite)
 ```
 
 Key modules:
@@ -196,9 +300,9 @@ Key modules:
 - **`collector`** — background daemon for telemetry collection
 - **`sqlite_store`** — persistent storage (metrics, events, snapshots, retention)
 - **`analyze`** — deterministic anomaly detection engine
+- **`config`** — YAML/TOML configuration file loader
 - **`cli`** — CLI entry point (clap)
 
 ## Specification
 
 See [`docs/spec.md`](docs/spec.md) for the full language specification and [`docs/examples.md`](docs/examples.md) for a categorized query reference.
-

@@ -86,6 +86,7 @@ impl Parser {
             Some("inspect") => self.parse_inspect(),
             Some("analyze") => self.parse_analyze(),
             Some("alert") => self.parse_alert_rule().map(Query::Alert),
+            Some("fields") => self.parse_fields(),
             Some(other) => Err(self.error_here(format!(
                 "expected query family, found `{other}`; try `observe containers`"
             ))),
@@ -189,6 +190,12 @@ impl Parser {
         }
 
         Err(self.error_here("expected alert action: `print`, `webhook`, or `restart`"))
+    }
+
+    fn parse_fields(&mut self) -> Result<Query, ParseError> {
+        self.expect_ident("fields")?;
+        let target = self.parse_collection_target()?;
+        Ok(Query::Fields(target))
     }
 
     fn parse_analysis_target(&mut self) -> Result<AnalysisTarget, ParseError> {
@@ -475,11 +482,15 @@ impl Parser {
             return Ok(expression);
         }
 
-        self.parse_comparison()
-    }
-
-    fn parse_comparison(&mut self) -> Result<Expression, ParseError> {
         let field = self.expect_identifier_like("field")?;
+
+        if self.consume_ident("in") {
+            self.expect(TokenKind::LParen, "`(`")?;
+            let values = self.parse_value_list()?;
+            self.expect(TokenKind::RParen, "`)`")?;
+            return Ok(Expression::In { field, values });
+        }
+
         let operator = self.parse_operator()?;
         let value = self.parse_value()?;
 
@@ -488,6 +499,16 @@ impl Parser {
             operator,
             value,
         })
+    }
+
+    fn parse_value_list(&mut self) -> Result<Vec<Value>, ParseError> {
+        let mut values = vec![self.parse_value()?];
+
+        while self.consume(TokenKind::Comma) {
+            values.push(self.parse_value()?);
+        }
+
+        Ok(values)
     }
 
     fn parse_operator(&mut self) -> Result<Operator, ParseError> {
@@ -1132,5 +1153,32 @@ mod tests {
         };
         let nested = else_branch.as_ref().expect("should have else branch");
         assert!(matches!(nested[0], PipelineNode::If { .. }));
+    }
+
+    #[test]
+    fn parses_in_operator() {
+        let parsed = parse("observe containers where state in (\"running\", \"restarting\")")
+            .expect("query should parse");
+        let Query::Observe(query) = parsed.query else {
+            panic!("expected observe");
+        };
+        let filter = query.filter.expect("should have filter");
+        assert!(matches!(filter, Expression::In { .. }));
+        if let Expression::In { field, values } = filter {
+            assert_eq!(field, "state");
+            assert_eq!(values.len(), 2);
+        }
+    }
+
+    #[test]
+    fn parses_fields_containers() {
+        let parsed = parse("fields containers").expect("query should parse");
+        assert!(matches!(parsed.query, Query::Fields(CollectionTarget::Containers)));
+    }
+
+    #[test]
+    fn parses_fields_images() {
+        let parsed = parse("fields images").expect("query should parse");
+        assert!(matches!(parsed.query, Query::Fields(CollectionTarget::Images)));
     }
 }

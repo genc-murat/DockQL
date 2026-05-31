@@ -201,11 +201,20 @@ where
 {
     ensure_supported_target(query.target)?;
 
+    let has_group_by = query.pipeline.iter().any(|n| matches!(n, PipelineNode::GroupBy(_)));
+    let group_fields: Option<Vec<String>> = query.pipeline.iter().find_map(|n| {
+        if let PipelineNode::GroupBy(fields) = n { Some(fields.clone()) } else { None }
+    });
+
     let mut emitted = 0_u64;
     let limit = query.pipeline.iter().find_map(|node| match node {
         PipelineNode::Limit(limit) => Some(*limit),
         _ => None,
     });
+
+    let mut group_counts: std::collections::BTreeMap<Vec<String>, u64> = std::collections::BTreeMap::new();
+    let mut group_rows: std::collections::BTreeMap<Vec<String>, Row> = std::collections::BTreeMap::new();
+    let mut rows_since_flush = 0_u64;
 
     for event in source.events()? {
         let mut row = Some(event_row(event?));
@@ -219,17 +228,64 @@ where
         let mut keep = true;
         for node in &query.pipeline {
             let current = row.take().expect("row is present while pipeline runs");
-            match apply_pipeline_node(current, node)? {
-                PipelineOutcome::Row(next_row) => row = Some(next_row),
-                PipelineOutcome::Drop => {
-                    keep = false;
-                    break;
+
+            if has_group_by {
+                match node {
+        PipelineNode::GroupBy(fields) => {
+                        let key: Vec<String> = fields.iter()
+                            .map(|f| current.fields.get(f).map(eval::render_json_cell).unwrap_or_default())
+                            .collect();
+
+                        let count = group_counts.entry(key.clone()).or_insert(0);
+                        *count += 1;
+
+                        if !group_rows.contains_key(&key) {
+                            let mut row_fields = BTreeMap::new();
+                            for f in fields {
+                                if let Some(v) = current.fields.get(f) {
+                                    row_fields.insert(f.clone(), v.clone());
+                                }
+                            }
+                            group_rows.insert(key.clone(), Row { fields: row_fields });
+                        }
+
+                        row = None;
+                        keep = false;
+                        rows_since_flush += 1;
+
+                        if rows_since_flush >= 50 {
+                            flush_grouped(group_fields.as_ref(), &mut group_counts, &mut group_rows, &mut on_row, &mut emitted, limit)?;
+                            rows_since_flush = 0;
+                            if limit.is_some_and(|l| emitted >= l) {
+                                return Ok(());
+                            }
+                        }
+                        break;
+                    }
+                    _ => {
+                        row = match apply_pipeline_node(current, node)? {
+                            PipelineOutcome::Row(next_row) => Some(next_row),
+                            PipelineOutcome::Drop => { keep = false; break; }
+                            PipelineOutcome::LimitReached => {
+                                flush_grouped(group_fields.as_ref(), &mut group_counts, &mut group_rows, &mut on_row, &mut emitted, limit)?;
+                                return Ok(());
+                            }
+                        };
+                    }
                 }
-                PipelineOutcome::LimitReached => return Ok(()),
+            } else {
+                match apply_pipeline_node(current, node)? {
+                    PipelineOutcome::Row(next_row) => row = Some(next_row),
+                    PipelineOutcome::Drop => {
+                        keep = false;
+                        break;
+                    }
+                    PipelineOutcome::LimitReached => return Ok(()),
+                }
             }
         }
 
-        if keep {
+        if keep && !has_group_by {
             on_row(row.expect("row is present after pipeline"))?;
             emitted += 1;
             if limit.is_some_and(|limit| emitted >= limit) {
@@ -238,6 +294,37 @@ where
         }
     }
 
+    if has_group_by {
+        flush_grouped(group_fields.as_ref(), &mut group_counts, &mut group_rows, &mut on_row, &mut emitted, limit)?;
+    }
+
+    Ok(())
+}
+
+fn flush_grouped<F>(
+    _group_fields: Option<&Vec<String>>,
+    group_counts: &mut std::collections::BTreeMap<Vec<String>, u64>,
+    group_rows: &mut std::collections::BTreeMap<Vec<String>, Row>,
+    on_row: &mut F,
+    emitted: &mut u64,
+    limit: Option<u64>,
+) -> Result<(), EventsError>
+where
+    F: FnMut(Row) -> Result<(), EventsError>,
+{
+    let keys: Vec<Vec<String>> = group_counts.keys().cloned().collect();
+    for key in keys {
+        if let Some(count) = group_counts.remove(&key) {
+            if let Some(mut row) = group_rows.remove(&key) {
+                row.fields.insert("count".to_owned(), serde_json::json!(count));
+                on_row(row)?;
+                *emitted += 1;
+                if limit.is_some_and(|l| *emitted >= l) {
+                    break;
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -317,7 +404,10 @@ fn apply_pipeline_node(row: Row, node: &PipelineNode) -> Result<PipelineOutcome,
         PipelineNode::Select(fields) => select_fields(row, fields).map(PipelineOutcome::Row),
         PipelineNode::Limit(0) => Ok(PipelineOutcome::LimitReached),
         PipelineNode::Limit(_) => Ok(PipelineOutcome::Row(row)),
-        PipelineNode::GroupBy(_) => Err(EventsError::UnsupportedPipeline("group by (not yet supported in streaming)")),
+        PipelineNode::GroupBy(_fields) => {
+            // In streaming, GroupBy is handled at the stream level.
+            Ok(PipelineOutcome::Row(row))
+        }
         PipelineNode::SortBy { .. } => Err(EventsError::UnsupportedPipeline("sort by")),
         PipelineNode::Alert(message) => {
             eprintln!(

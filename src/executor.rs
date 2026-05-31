@@ -1,15 +1,14 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
 };
-
-use serde::Serialize;
 use serde_json::{Number, Value as JsonValue};
 use thiserror::Error;
 
 use crate::{
     analyze::{self, AnalyzeError},
     ast::{
-        CollectionTarget, Expression, ObserveQuery, PipelineNode, Query, SortDirection,
+        CollectionTarget, DurationUnit, Expression, ObserveQuery, PipelineNode, Query,
+        SortDirection,
     },
     docker::{Container, DockerClient, DockerError, Image, MetricSample, Network, Volume},
     eval::{self, EvalError},
@@ -17,12 +16,12 @@ use crate::{
     storage::{self, TelemetryError, TelemetryStore},
 };
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
 pub struct ExecutionResult {
     pub rows: Vec<Row>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
 pub struct Row {
     pub fields: BTreeMap<String, JsonValue>,
 }
@@ -43,6 +42,8 @@ pub enum ExecutorError {
     UnsupportedPipeline(&'static str),
     #[error("{0}")]
     Eval(#[from] EvalError),
+    #[error("no store snapshot available for {0}")]
+    SnapshotNotFound(&'static str),
 }
 
 impl From<DockerError> for ExecutorError {
@@ -92,6 +93,7 @@ where
         Query::Analyze(query) => analyze::execute_analyze(query, docker, metrics)
             .map_err(ExecutorError::Analyze),
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
+        Query::Fields(target) => execute_fields(*target),
     }
 }
 
@@ -104,13 +106,99 @@ where
         Query::Events(query) if query.time.is_some() => {
             storage::historical_events(query, store).map_err(Into::into)
         }
+        Query::Observe(query) if query.time.is_some() => {
+            historical_observe(query, store)
+        }
         Query::Analyze(query) => analyze::execute_analyze_with_store(query, store)
             .map_err(ExecutorError::Analyze),
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Observe(_) => Err(ExecutorError::UnsupportedQuery("observe historical")),
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
+        Query::Fields(target) => execute_fields(*target),
     }
+}
+
+fn historical_observe<S>(query: &ObserveQuery, store: &S) -> Result<ExecutionResult, ExecutorError>
+where
+    S: TelemetryStore + ?Sized,
+{
+    use crate::ast::TimeSelector;
+
+    let timestamp = match &query.time {
+        Some(TimeSelector::Last(dur)) => {
+            let secs = match dur.unit {
+                DurationUnit::Seconds => dur.value as i64,
+                DurationUnit::Minutes => dur.value as i64 * 60,
+                DurationUnit::Hours => dur.value as i64 * 3600,
+                DurationUnit::Days => dur.value as i64 * 86400,
+            };
+            let now = chrono::Utc::now();
+            (now - chrono::Duration::seconds(secs)).to_rfc3339()
+        }
+        Some(TimeSelector::Range { from, to: _ }) => from.clone(),
+        None => return Err(ExecutorError::UnsupportedQuery("observe historical")),
+    };
+
+    let snapshot = store.snapshot_at_or_before(&timestamp)
+        .map_err(ExecutorError::Telemetry)?
+        .ok_or_else(|| ExecutorError::SnapshotNotFound("historical_observe"))?;
+
+    let mut rows: Vec<Row> = match query.target {
+        CollectionTarget::Containers => {
+            snapshot.containers.into_iter().map(|c| {
+                let mut fields = BTreeMap::new();
+                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert("id".into(), json_string(c.id));
+                fields.insert("name".into(), json_string(c.name));
+                fields.insert("image".into(), json_string(c.image));
+                fields.insert("status".into(), json_string(c.status));
+                fields.insert("state".into(), json_string(c.state));
+                fields.insert("restart_count".into(), c.restart_count.map(json_u64).unwrap_or(JsonValue::Null));
+                Row { fields }
+            }).collect()
+        }
+        CollectionTarget::Images => {
+            snapshot.images.into_iter().map(|img| {
+                let mut fields = BTreeMap::new();
+                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert("id".into(), json_string(img.id));
+                fields.insert("repository".into(), json_string(img.repository));
+                fields.insert("tag".into(), json_string(img.tag));
+                fields.insert("size".into(), json_string(img.size));
+                Row { fields }
+            }).collect()
+        }
+        CollectionTarget::Networks => {
+            snapshot.networks.into_iter().map(|n| {
+                let mut fields = BTreeMap::new();
+                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert("id".into(), json_string(n.id));
+                fields.insert("name".into(), json_string(n.name));
+                fields.insert("driver".into(), json_string(n.driver));
+                Row { fields }
+            }).collect()
+        }
+        CollectionTarget::Volumes => {
+            snapshot.volumes.into_iter().map(|v| {
+                let mut fields = BTreeMap::new();
+                fields.insert("snapshot_at".into(), JsonValue::String(snapshot.timestamp.clone()));
+                fields.insert("name".into(), json_string(v.name));
+                fields.insert("driver".into(), json_string(v.driver));
+                Row { fields }
+            }).collect()
+        }
+    };
+
+    if let Some(filter) = &query.filter {
+        rows = filter_rows(rows, filter)?;
+    }
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
 }
 
 pub fn render_table(result: &ExecutionResult) -> String {
@@ -158,6 +246,71 @@ pub fn render_table(result: &ExecutionResult) -> String {
             .map(|row| render_table_line(row, &widths)),
     );
     lines.join("\n")
+}
+
+fn execute_fields(target: CollectionTarget) -> Result<ExecutionResult, ExecutorError> {
+    let fields = field_descriptions(target);
+    let rows = fields
+        .into_iter()
+        .map(|(field, kind)| {
+            let mut map = BTreeMap::new();
+            map.insert("field".to_owned(), JsonValue::String(field));
+            map.insert("type".to_owned(), JsonValue::String(kind));
+            Row { fields: map }
+        })
+        .collect();
+    Ok(ExecutionResult { rows })
+}
+
+fn field_descriptions(target: CollectionTarget) -> Vec<(String, String)> {
+    match target {
+        CollectionTarget::Containers => vec![
+            ("id".into(), "string".into()),
+            ("name".into(), "string".into()),
+            ("image".into(), "string".into()),
+            ("status".into(), "string".into()),
+            ("state".into(), "string".into()),
+            ("ports".into(), "array".into()),
+            ("labels".into(), "array".into()),
+            ("compose_project".into(), "string".into()),
+            ("created_at".into(), "string".into()),
+            ("started_at".into(), "string".into()),
+            ("finished_at".into(), "string".into()),
+            ("restart_count".into(), "integer".into()),
+            ("cpu".into(), "float".into()),
+            ("memory".into(), "integer".into()),
+            ("memory_limit".into(), "integer".into()),
+            ("network_rx".into(), "integer".into()),
+            ("network_tx".into(), "integer".into()),
+            ("disk_read".into(), "integer".into()),
+            ("disk_write".into(), "integer".into()),
+        ],
+        CollectionTarget::Images => vec![
+            ("id".into(), "string".into()),
+            ("repository".into(), "string".into()),
+            ("name".into(), "string".into()),
+            ("tag".into(), "string".into()),
+            ("digest".into(), "string".into()),
+            ("size".into(), "string".into()),
+            ("created_at".into(), "string".into()),
+            ("labels".into(), "array".into()),
+        ],
+        CollectionTarget::Networks => vec![
+            ("id".into(), "string".into()),
+            ("name".into(), "string".into()),
+            ("driver".into(), "string".into()),
+            ("scope".into(), "string".into()),
+            ("containers".into(), "array".into()),
+            ("labels".into(), "array".into()),
+        ],
+        CollectionTarget::Volumes => vec![
+            ("name".into(), "string".into()),
+            ("driver".into(), "string".into()),
+            ("mountpoint".into(), "string".into()),
+            ("scope".into(), "string".into()),
+            ("labels".into(), "array".into()),
+        ],
+    }
 }
 
 fn execute_observe<C, M>(
@@ -281,20 +434,58 @@ fn select_fields(row: Row, fields: &[String]) -> Result<Row, ExecutorError> {
     let mut selected = BTreeMap::new();
 
     for field in fields {
-        let value = row
-            .fields
-            .get(field)
-            .ok_or_else(|| EvalError::UnsupportedField {
+        if let Some(value) = row.fields.get(field) {
+            selected.insert(field.clone(), value.clone());
+        } else if let Some(label_key) = field.strip_prefix("label.") {
+            if let Some(JsonValue::Array(items)) = row.fields.get("labels") {
+                for item in items {
+                    if let JsonValue::String(entry) = item {
+                        if let Some(eq_pos) = entry.find('=') {
+                            let key = &entry[..eq_pos];
+                            let val = &entry[eq_pos + 1..];
+                            if key == label_key {
+                                selected.insert(field.clone(), JsonValue::String(val.to_owned()));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            return Err(EvalError::UnsupportedField {
                 field: field.clone(),
-            })?;
-        selected.insert(field.clone(), value.clone());
+            }
+            .into());
+        }
     }
 
     Ok(Row { fields: selected })
 }
 
 fn sort_rows(rows: &mut [Row], field: &str, direction: SortDirection) -> Result<(), ExecutorError> {
-    if rows.iter().any(|row| !row.fields.contains_key(field)) {
+    fn resolve_sort_value(row: &Row, field: &str) -> Option<JsonValue> {
+        if let Some(v) = row.fields.get(field) {
+            return Some(v.clone());
+        }
+        if let Some(label_key) = field.strip_prefix("label.") {
+            if let Some(JsonValue::Array(items)) = row.fields.get("labels") {
+                for item in items {
+                    if let JsonValue::String(entry) = item {
+                        if let Some(eq_pos) = entry.find('=') {
+                            let key = &entry[..eq_pos];
+                            let val = &entry[eq_pos + 1..];
+                            if key == label_key {
+                                return Some(JsonValue::String(val.to_owned()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    if rows.iter().any(|row| resolve_sort_value(row, field).is_none()) {
         return Err(EvalError::UnsupportedField {
             field: field.to_owned(),
         }
@@ -302,7 +493,9 @@ fn sort_rows(rows: &mut [Row], field: &str, direction: SortDirection) -> Result<
     }
 
     rows.sort_by(|left, right| {
-        let ordering = eval::compare_json_values(&left.fields[field], &right.fields[field]);
+        let left_val = resolve_sort_value(left, field).unwrap();
+        let right_val = resolve_sort_value(right, field).unwrap();
+        let ordering = eval::compare_json_values(&left_val, &right_val);
         match direction {
             SortDirection::Asc => ordering,
             SortDirection::Desc => ordering.reverse(),
@@ -316,6 +509,16 @@ fn container_row(container: Container, samples: &HashMap<String, MetricSample>) 
         .get(&container.id)
         .or_else(|| samples.get(&container.name));
 
+    let compose_project = container.labels.iter()
+        .find_map(|label| {
+            let parts: Vec<&str> = label.splitn(2, '=').collect();
+            if parts.len() == 2 && parts[0] == "com.docker.compose.project" {
+                Some(parts[1].to_owned())
+            } else {
+                None
+            }
+        });
+
     Row::from_fields([
         ("id", json_string(container.id)),
         ("name", json_string(container.name)),
@@ -324,6 +527,7 @@ fn container_row(container: Container, samples: &HashMap<String, MetricSample>) 
         ("state", json_string(container.state)),
         ("ports", json_string_array(container.ports)),
         ("labels", json_string_array(container.labels)),
+        ("compose_project", compose_project.map(JsonValue::String).unwrap_or(JsonValue::Null)),
         ("created_at", json_option_string(container.created_at)),
         ("started_at", json_option_string(container.started_at)),
         ("finished_at", json_option_string(container.finished_at)),
@@ -438,6 +642,181 @@ fn render_table_line(values: &[String], widths: &[usize]) -> String {
         .map(|(value, width)| format!("{value:<width$}"))
         .collect::<Vec<_>>()
         .join("  ")
+}
+
+pub fn render_csv(result: &ExecutionResult) -> String {
+    if result.rows.is_empty() {
+        return String::new();
+    }
+
+    let columns: Vec<String> = result.rows[0].fields.keys().cloned().collect();
+
+    let mut lines = vec![columns.join(",")];
+
+    for row in &result.rows {
+        let values: Vec<String> = columns
+            .iter()
+            .map(|col| {
+                let val = row
+                    .fields
+                    .get(col)
+                    .map(eval::render_json_cell)
+                    .unwrap_or_default();
+                if val.contains(',') || val.contains('"') || val.contains('\n') {
+                    format!("\"{}\"", val.replace('"', "\"\""))
+                } else {
+                    val
+                }
+            })
+            .collect();
+        lines.push(values.join(","));
+    }
+
+    lines.join("\n")
+}
+
+pub fn render_jsonl(result: &ExecutionResult) -> String {
+    result
+        .rows
+        .iter()
+        .filter_map(|row| serde_json::to_string(&row).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn ansi_color(value: &str) -> &'static str {
+    match value {
+        "running" => "\x1b[32m",
+        "exited" | "dead" => "\x1b[31m",
+        "restarting" | "paused" => "\x1b[33m",
+        "created" => "\x1b[36m",
+        "critical" => "\x1b[31;1m",
+        "warning" => "\x1b[33m",
+        "ok" | "healthy" => "\x1b[32m",
+        _ => "\x1b[0m",
+    }
+}
+
+const ANSI_RESET: &str = "\x1b[0m";
+
+pub fn render_table_colored(result: &ExecutionResult) -> String {
+    if result.rows.is_empty() {
+        return "No rows".to_owned();
+    }
+
+    let columns = result.rows[0].fields.keys().cloned().collect::<Vec<_>>();
+    let mut widths = columns
+        .iter()
+        .map(|column| column.len())
+        .collect::<Vec<_>>();
+    let rendered_rows = result
+        .rows
+        .iter()
+        .map(|row| {
+            columns
+                .iter()
+                .enumerate()
+                .map(|(index, column)| {
+                    let value = row
+                        .fields
+                        .get(column)
+                        .map(eval::render_json_cell)
+                        .unwrap_or_default();
+                    widths[index] = widths[index].max(value.len());
+                    value
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let mut lines = Vec::new();
+    lines.push(render_table_line(&columns, &widths));
+
+    let header_color = "\x1b[1;37m";
+    if let Some(first) = lines.last_mut() {
+        *first = format!("{header_color}{first}{ANSI_RESET}");
+    }
+
+    lines.push(
+        widths
+            .iter()
+            .map(|width| "-".repeat(*width))
+            .collect::<Vec<_>>()
+            .join("  "),
+    );
+
+    for row in &rendered_rows {
+        let color = row.iter().find_map(|v| {
+            let c = ansi_color(v);
+            if c != "\x1b[0m" { Some(c) } else { None }
+        }).unwrap_or("\x1b[0m");
+
+        let line = render_table_line(row, &widths);
+        lines.push(format!("{color}{line}{ANSI_RESET}"));
+    }
+
+    lines.join("\n")
+}
+
+pub fn render_diff<S>(current: &ExecutionResult, store: &S) -> Result<String, ExecutorError>
+where
+    S: crate::storage::TelemetryStore + ?Sized,
+{
+    let now = chrono::Utc::now().to_rfc3339();
+    let snapshot = store.snapshot_at_or_before(&now)
+        .map_err(ExecutorError::Telemetry)?
+        .ok_or_else(|| ExecutorError::SnapshotNotFound("diff"))?;
+
+    let prev_ids: HashSet<&str> = snapshot.containers.iter().map(|c| c.id.as_str()).collect();
+    let curr_ids: HashSet<&str> = current.rows.iter()
+        .filter_map(|r| r.fields.get("id").and_then(|v| v.as_str()))
+        .collect();
+
+    let added: Vec<&str> = curr_ids.difference(&prev_ids).copied().collect();
+    let removed: Vec<&str> = prev_ids.difference(&curr_ids).copied().collect();
+    let changed: Vec<&str> = curr_ids.intersection(&prev_ids).copied().collect();
+
+    let mut lines = Vec::new();
+
+    if !added.is_empty() {
+        lines.push(format!("\x1b[32mAdded containers ({}):\x1b[0m", added.len()));
+        for id in &added {
+            if let Some(row) = current.rows.iter().find(|r| r.fields.get("id").and_then(|v| v.as_str()) == Some(id)) {
+                let name = row.fields.get("name").map(eval::render_json_cell).unwrap_or_default();
+                lines.push(format!("  \x1b[32m+ {name} ({id})\x1b[0m"));
+            }
+        }
+    }
+
+    if !removed.is_empty() {
+        lines.push(format!("\x1b[31mRemoved containers ({}):\x1b[0m", removed.len()));
+        for id in &removed {
+            if let Some(c) = snapshot.containers.iter().find(|c| c.id == *id) {
+                lines.push(format!("  \x1b[31m- {name} ({id})\x1b[0m", name = c.name));
+            }
+        }
+    }
+
+    if !changed.is_empty() {
+        lines.push(format!("Changed containers ({}):", changed.len()));
+        for id in &changed {
+            if let Some(row) = current.rows.iter().find(|r| r.fields.get("id").and_then(|v| v.as_str()) == Some(id)) {
+                let name = row.fields.get("name").map(eval::render_json_cell).unwrap_or_default();
+                let state = row.fields.get("state").map(eval::render_json_cell).unwrap_or_default();
+                if let Some(prev_c) = snapshot.containers.iter().find(|c| c.id == *id) {
+                    if prev_c.state != state {
+                        lines.push(format!("  ~ {name}: {prev} -> {state}", prev = prev_c.state));
+                    }
+                }
+            }
+        }
+    }
+
+    if added.is_empty() && removed.is_empty() {
+        lines.push("No changes detected.".to_owned());
+    }
+
+    Ok(lines.join("\n"))
 }
 
 fn json_string(value: String) -> JsonValue {
@@ -767,5 +1146,51 @@ mod tests {
                 labels: Vec::new(),
             }],
         }
+    }
+
+    #[test]
+    fn renders_csv() {
+        let result = ExecutionResult {
+            rows: vec![Row::from_fields([
+                ("name", JsonValue::String("api".to_owned())),
+                ("state", JsonValue::String("running".to_owned())),
+            ])],
+        };
+        let csv = render_csv(&result);
+        assert!(csv.contains("name,state"));
+        assert!(csv.contains("api,running"));
+    }
+
+    #[test]
+    fn renders_jsonl() {
+        let result = ExecutionResult {
+            rows: vec![Row::from_fields([
+                ("name", JsonValue::String("api".to_owned())),
+            ])],
+        };
+        let jsonl = render_jsonl(&result);
+        assert!(jsonl.contains("\"name\":\"api\""));
+    }
+
+    #[test]
+    fn label_field_access_in_pipeline() {
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | where label.role = \"api\" | select name, label.role",
+        ).expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].fields["label.role"], JsonValue::String("api".to_owned()));
+    }
+
+    #[test]
+    fn execute_fields_containers() {
+        let result = execute_fields(CollectionTarget::Containers).expect("fields should execute");
+        assert!(!result.rows.is_empty());
+        let field_names: Vec<&str> = result.rows.iter()
+            .map(|r| r.fields["field"].as_str().unwrap())
+            .collect();
+        assert!(field_names.contains(&"name"));
+        assert!(field_names.contains(&"cpu"));
     }
 }

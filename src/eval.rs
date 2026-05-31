@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -24,6 +25,7 @@ pub fn evaluate_expression(
             operator,
             value,
         } => evaluate_comparison(fields, field, *operator, value),
+        Expression::In { field, values } => evaluate_in(fields, field, values),
         Expression::And(left, right) => {
             Ok(evaluate_expression(fields, left)? && evaluate_expression(fields, right)?)
         }
@@ -34,28 +36,101 @@ pub fn evaluate_expression(
     }
 }
 
+fn resolve_field<'a>(
+    fields: &'a BTreeMap<String, JsonValue>,
+    field: &str,
+) -> Result<Cow<'a, JsonValue>, EvalError> {
+    use std::borrow::Cow;
+
+    if let Some(value) = fields.get(field) {
+        return Ok(Cow::Borrowed(value));
+    }
+
+    if let Some(label_key) = field.strip_prefix("label.") {
+        let labels = fields.get("labels").ok_or_else(|| EvalError::UnsupportedField {
+            field: field.to_owned(),
+        })?;
+
+        match labels {
+            JsonValue::Array(items) => {
+                for item in items {
+                    if let JsonValue::String(entry) = item {
+                        if let Some(eq_pos) = entry.find('=') {
+                            let key = &entry[..eq_pos];
+                            let val = &entry[eq_pos + 1..];
+                            if key == label_key {
+                                return Ok(Cow::Owned(JsonValue::String(val.to_owned())));
+                            }
+                        }
+                    }
+                }
+            }
+            JsonValue::String(s) => {
+                for entry in s.split(',') {
+                    let entry = entry.trim();
+                    if let Some(eq_pos) = entry.find('=') {
+                        let key = &entry[..eq_pos];
+                        let val = &entry[eq_pos + 1..];
+                        if key == label_key {
+                            return Ok(Cow::Owned(JsonValue::String(val.to_owned())));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        return Err(EvalError::UnsupportedField {
+            field: field.to_owned(),
+        });
+    }
+
+    fields.get(field).ok_or_else(|| EvalError::UnsupportedField {
+        field: field.to_owned(),
+    }).map(Cow::Borrowed)
+}
+
 fn evaluate_comparison(
     fields: &BTreeMap<String, JsonValue>,
     field: &str,
     operator: Operator,
     expected: &Value,
 ) -> Result<bool, EvalError> {
-    let actual = fields.get(field).ok_or_else(|| EvalError::UnsupportedField {
-        field: field.to_owned(),
-    })?;
+    let actual = resolve_field(fields, field)?;
 
     match operator {
-        Operator::Eq => Ok(json_value_eq(actual, expected)),
-        Operator::NotEq => Ok(!json_value_eq(actual, expected)),
-        Operator::Contains | Operator::Matches => {
-            json_contains(actual, expected).ok_or_else(|| EvalError::InvalidComparison {
+        Operator::Eq => Ok(json_value_eq(&actual, expected)),
+        Operator::NotEq => Ok(!json_value_eq(&actual, expected)),
+        Operator::Contains => {
+            json_contains(&actual, expected).ok_or_else(|| EvalError::InvalidComparison {
                 field: field.to_owned(),
-                operator: format!("{operator:?}"),
+                operator: "Contains".to_owned(),
             })
+        }
+        Operator::Matches => {
+            let pattern = value_as_text(expected).ok_or_else(|| EvalError::InvalidComparison {
+                field: field.to_owned(),
+                operator: "Matches".to_owned(),
+            })?;
+            let re = regex::Regex::new(&pattern).map_err(|_| EvalError::InvalidComparison {
+                field: field.to_owned(),
+                operator: "Matches (invalid regex)".to_owned(),
+            })?;
+            match &*actual {
+                JsonValue::String(s) => Ok(re.is_match(s)),
+                JsonValue::Array(values) => Ok(values.iter().any(|v| {
+                    let s = render_json_cell(v);
+                    re.is_match(&s)
+                })),
+                _ => Err(EvalError::InvalidComparison {
+                    field: field.to_owned(),
+                    operator: "Matches".to_owned(),
+                }),
+            }
         }
         Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte => {
             let actual_num =
-                json_as_f64(actual).ok_or_else(|| EvalError::InvalidComparison {
+                json_as_f64(&actual).ok_or_else(|| EvalError::InvalidComparison {
                     field: field.to_owned(),
                     operator: format!("{operator:?}"),
                 })?;
@@ -73,6 +148,22 @@ fn evaluate_comparison(
             })
         }
     }
+}
+
+fn evaluate_in(
+    fields: &BTreeMap<String, JsonValue>,
+    field: &str,
+    values: &[Value],
+) -> Result<bool, EvalError> {
+    let actual = resolve_field(fields, field)?;
+
+    for expected in values {
+        if json_value_eq(&actual, expected) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 pub fn evaluate_set_value(
@@ -300,5 +391,77 @@ mod tests {
         };
         let result = evaluate_set_value(&f, &sv).unwrap();
         assert_eq!(result, JsonValue::String("up".to_string()));
+    }
+
+    #[test]
+    fn evaluates_matches_regex() {
+        let f = fields(&[("name", "api-service-v2")]);
+        let expr = Expression::Comparison {
+            field: "name".into(),
+            operator: Operator::Matches,
+            value: Value::String("^api-.*\\d+$".into()),
+        };
+        assert!(evaluate_expression(&f, &expr).unwrap());
+    }
+
+    #[test]
+    fn evaluates_matches_regex_no_match() {
+        let f = fields(&[("name", "api-service")]);
+        let expr = Expression::Comparison {
+            field: "name".into(),
+            operator: Operator::Matches,
+            value: Value::String("^api-.*\\d+$".into()),
+        };
+        assert!(!evaluate_expression(&f, &expr).unwrap());
+    }
+
+    #[test]
+    fn evaluates_in_operator() {
+        let f = fields(&[("state", "running")]);
+        let expr = Expression::In {
+            field: "state".into(),
+            values: vec![
+                Value::String("running".into()),
+                Value::String("restarting".into()),
+            ],
+        };
+        assert!(evaluate_expression(&f, &expr).unwrap());
+    }
+
+    #[test]
+    fn evaluates_in_operator_no_match() {
+        let f = fields(&[("state", "exited")]);
+        let expr = Expression::In {
+            field: "state".into(),
+            values: vec![
+                Value::String("running".into()),
+                Value::String("restarting".into()),
+            ],
+        };
+        assert!(!evaluate_expression(&f, &expr).unwrap());
+    }
+
+    #[test]
+    fn evaluates_label_field_access() {
+        let mut f = BTreeMap::new();
+        f.insert("labels".into(), serde_json::json!(["env=prod", "tier=api"]));
+        let expr = Expression::Comparison {
+            field: "label.env".into(),
+            operator: Operator::Eq,
+            value: Value::String("prod".into()),
+        };
+        assert!(evaluate_expression(&f, &expr).unwrap());
+    }
+
+    #[test]
+    fn evaluates_label_field_no_match() {
+        let mut f = BTreeMap::new();
+        f.insert("labels".into(), serde_json::json!(["env=staging"]));
+        let expr = Expression::Comparison {
+            field: "label.env".into(),
+            operator: Operator::Eq,
+            value: Value::String("prod".into()),
+        };
+        assert!(!evaluate_expression(&f, &expr).unwrap());
     }
 }

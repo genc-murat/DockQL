@@ -7,6 +7,7 @@ pub enum Query {
     Inspect(InspectQuery),
     Analyze(AnalyzeQuery),
     Alert(AlertRule),
+    Fields(CollectionTarget),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -157,6 +158,10 @@ pub enum Expression {
         field: String,
         operator: Operator,
         value: Value,
+    },
+    In {
+        field: String,
+        values: Vec<Value>,
     },
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),

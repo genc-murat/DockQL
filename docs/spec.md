@@ -84,7 +84,20 @@ analyze containers find restart_loops last 10m
 analyze container api-service correlate events last 1h
 ```
 
-### 2.5 `alert`
+### 2.5 `fields`
+
+`fields` returns the schema (field names and types) for a given entity type. This is useful for discovery and tooling integration.
+
+Execution mode: batch.
+
+Examples:
+
+```dol
+fields containers
+fields images
+fields networks
+fields volumes
+```
 
 `alert` defines a continuously evaluated condition and an action.
 
@@ -140,6 +153,15 @@ Common container fields:
 - `network_tx`
 - `disk_read`
 - `disk_write`
+- `compose_project`
+
+Individual labels can be accessed with dot notation. For example, given a container
+with label `com.docker.compose.project=myapp`:
+
+```dol
+observe containers where label.com.docker.compose.project = "myapp"
+observe containers | where label.env = "production" | select name, label.version
+```
 
 ### 4.2 Image Fields
 
@@ -234,8 +256,10 @@ Comparison operators:
 
 String and pattern operators:
 
-- `contains`
-- `matches`
+- `contains` — substring match
+- `matches` — regex match (Rust regex syntax)
+- `in` — set membership: `field in ("a", "b", "c")` (regex)
+- `in`
 
 Boolean operators:
 
@@ -255,6 +279,8 @@ Example:
 
 ```dol
 observe containers where status = running and (cpu > 80% or memory > 90%)
+observe containers where image in ("postgres", "mysql", "redis")
+observe containers where name matches "^api-"
 ```
 
 ## 7. Time Syntax
@@ -516,5 +542,34 @@ Recommended AST split:
 - `PipelineNode`
 - `TimeSelector`
 - `AlertRule`
+
+## 17. CLI Reference
+
+The DOL CLI supports the following flags:
+
+| Flag | Description |
+|------|-------------|
+| `--store <path>` | Path to SQLite telemetry store |
+| `--collect` | Start background data collection daemon |
+| `--metrics-interval <s>` | Metrics polling interval in seconds (default: 30) |
+| `--snapshot-interval <s>` | Snapshot interval in seconds (default: 300) |
+| `--store-stats` | Display telemetry store statistics |
+| `--apply-retention` | Apply retention policies to clean old data |
+| `--output <fmt>` | Output format: `table`, `json`, `csv`, `jsonl` |
+| `--export <path>` | Write output to file instead of stdout |
+| `--host <addr>` | Docker daemon address (e.g., `tcp://192.168.1.100:2375`) |
+| `--watch <s>` | Re-run query every N seconds |
+| `--explain` | Show the logical query plan without executing |
+| `--diff` | Compare query results with the last store snapshot |
+| `--completion <shell>` | Generate shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+
+Config file support (YAML/TOML):
+
+- `~/.config/dol/config.yaml`
+- `~/.config/dol/config.toml`
+- `~/.dolrc`
+- `.dolrc`
+- `dol.yaml`
+- `dol.toml`
 
 The v0.1 grammar should be treated as the source of truth for parser tests.
