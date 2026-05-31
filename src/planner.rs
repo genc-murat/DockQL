@@ -21,6 +21,7 @@ pub enum LogicalPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservePlan {
     pub target: CollectionTarget,
+    pub join: Option<crate::ast::JoinClause>,
     pub steps: Vec<PlanStep>,
 }
 
@@ -103,6 +104,9 @@ impl fmt::Display for LogicalPlan {
         match self {
             LogicalPlan::Observe(p) => {
                 writeln!(f, "ObservePlan {{ target: {:?} }}", p.target)?;
+                if let Some(join) = &p.join {
+                    writeln!(f, "  JOIN {:?} ON ...", join.right)?;
+                }
                 for step in &p.steps {
                     writeln!(f, "  {step}")?;
                 }
@@ -244,6 +248,7 @@ fn plan_observe(query: &ObserveQuery) -> Result<LogicalPlan, PlanError> {
 
     Ok(LogicalPlan::Observe(ObservePlan {
         target: query.target,
+        join: query.join.clone(),
         steps,
     }))
 }
@@ -544,5 +549,43 @@ mod tests {
         let s = format!("{p}");
         assert!(s.contains("myapp"));
         assert!(s.contains("Services"));
+    }
+
+    #[test]
+    fn plans_observe_join_images() {
+        let q = parser::parse("observe containers join images on id = id").unwrap();
+        let p = plan(&q.query).unwrap();
+        if let LogicalPlan::Observe(op) = p {
+            assert!(op.join.is_some());
+            let join = op.join.unwrap();
+            assert_eq!(join.right, CollectionTarget::Images);
+        } else {
+            panic!("expected Observe plan, got {:?}", p);
+        }
+    }
+
+    #[test]
+    fn plans_observe_join_without_pipeline() {
+        let q = parser::parse("observe containers join networks on name = name").unwrap();
+        let p = plan(&q.query).unwrap();
+        if let LogicalPlan::Observe(op) = p {
+            assert!(op.join.is_some());
+            assert_eq!(op.steps.len(), 1);
+            assert!(matches!(
+                op.steps[0],
+                PlanStep::Fetch(CollectionTarget::Containers)
+            ));
+        } else {
+            panic!("expected Observe plan, got {:?}", p);
+        }
+    }
+
+    #[test]
+    fn observe_join_plan_display() {
+        let q = parser::parse("observe containers join images on id = id").unwrap();
+        let p = plan(&q.query).unwrap();
+        let s = format!("{p}");
+        assert!(s.contains("JOIN"));
+        assert!(s.contains("Images"));
     }
 }

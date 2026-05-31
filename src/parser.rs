@@ -166,12 +166,7 @@ impl Parser {
         // Support "observe compose <project>" syntax
         if self.consume_ident("compose") {
             let project = self.expect_identifier_like("compose project name")?;
-            let target = if self.consume_ident("services") {
-                ComposeTarget::Services
-            } else {
-                self.consume_ident("containers");
-                ComposeTarget::Containers
-            };
+            let target = self.parse_compose_target();
             let pipeline = self.parse_pipeline()?;
             return Ok(Query::Compose(crate::ast::ComposeQuery {
                 project,
@@ -182,11 +177,26 @@ impl Parser {
         let target = self.parse_collection_target()?;
         let time = self.parse_optional_time_selector()?;
         let filter = self.parse_optional_inline_where()?;
+        let join = if self.consume_ident("join") {
+            let right = self.parse_collection_target()?;
+            self.expect_ident("on")?;
+            let left_key = self.parse_arith_expression()?;
+            self.expect(TokenKind::Eq, "`=`")?;
+            let right_key = self.parse_arith_expression()?;
+            Some(crate::ast::JoinClause {
+                right,
+                left_key,
+                right_key,
+            })
+        } else {
+            None
+        };
         let pipeline = self.parse_pipeline()?;
         Ok(Query::Observe(crate::ast::ObserveQuery {
             target,
             time,
             filter,
+            join,
             pipeline,
         }))
     }
@@ -257,18 +267,28 @@ impl Parser {
     fn parse_compose(&mut self) -> Result<Query, ParseError> {
         self.expect_ident("compose")?;
         let project = self.expect_identifier_like("compose project name")?;
-        let target = if self.consume_ident("services") {
-            ComposeTarget::Services
-        } else {
-            self.consume_ident("containers");
-            ComposeTarget::Containers
-        };
+        let target = self.parse_compose_target();
         let pipeline = self.parse_pipeline()?;
         Ok(Query::Compose(crate::ast::ComposeQuery {
             project,
             target,
             pipeline,
         }))
+    }
+
+    fn parse_compose_target(&mut self) -> ComposeTarget {
+        if self.consume_ident("services") {
+            ComposeTarget::Services
+        } else if self.consume_ident("networks") {
+            ComposeTarget::Networks
+        } else if self.consume_ident("volumes") {
+            ComposeTarget::Volumes
+        } else if self.consume_ident("health") {
+            ComposeTarget::Health
+        } else {
+            self.consume_ident("containers");
+            ComposeTarget::Containers
+        }
     }
 
     fn parse_logs(&mut self) -> Result<Query, ParseError> {
@@ -1793,6 +1813,62 @@ mod tests {
     }
 
     #[test]
+    fn parses_compose_networks() {
+        let q = parse_one("compose myapp networks");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Networks);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_compose_volumes() {
+        let q = parse_one("compose myapp volumes");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Volumes);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_compose_health() {
+        let q = parse_one("compose myapp health");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Health);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_observe_compose_networks() {
+        let q = parse_one("observe compose myapp networks | select name, driver");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Networks);
+            assert_eq!(c.pipeline.len(), 1);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_observe_compose_health() {
+        let q = parse_one("observe compose myapp health");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Health);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
     fn parses_offset() {
         let q = parse_one("observe containers | sort by name asc | offset 10 | limit 5");
         let Query::Observe(ref o) = q.query else {
@@ -1809,5 +1885,44 @@ mod tests {
             panic!("expected Observe")
         };
         assert!(matches!(o.pipeline[1], PipelineNode::Having(_)));
+    }
+
+    #[test]
+    fn parses_observe_join_networks() {
+        let q = parse_one("observe containers join networks on id = containers");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        let join = o.join.as_ref().expect("expected join clause");
+        assert_eq!(join.right, CollectionTarget::Networks);
+    }
+
+    #[test]
+    fn parses_observe_join_images() {
+        let q = parse_one("observe containers join images on image = name");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        assert!(o.join.is_some());
+        assert_eq!(o.join.as_ref().unwrap().right, CollectionTarget::Images);
+    }
+
+    #[test]
+    fn parses_observe_join_with_pipeline() {
+        let q = parse_one(
+            "observe containers join networks on id = containers | select c.name, n.name",
+        );
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        assert!(o.join.is_some());
+        assert_eq!(o.pipeline.len(), 1);
+        assert!(matches!(o.pipeline[0], PipelineNode::Select(_)));
+    }
+
+    #[test]
+    fn rejects_join_without_on() {
+        let result = parse("observe containers join networks");
+        assert!(result.is_err());
     }
 }

@@ -249,50 +249,87 @@ where
 
     let compose_project_label = query.project.clone();
 
-    let mut rows: Vec<Row> = latest
-        .containers
-        .into_iter()
-        .filter(|c| {
-            c.labels.iter().any(|label| {
-                let parts: Vec<&str> = label.splitn(2, '=').collect();
-                parts.len() == 2
-                    && parts[0] == "com.docker.compose.project"
-                    && parts[1] == compose_project_label
+    let mut rows: Vec<Row> = match query.target {
+        crate::ast::ComposeTarget::Containers
+        | crate::ast::ComposeTarget::Services
+        | crate::ast::ComposeTarget::Health => latest
+            .containers
+            .into_iter()
+            .filter(|c| {
+                has_compose_label(
+                    &c.labels,
+                    "com.docker.compose.project",
+                    &compose_project_label,
+                )
             })
-        })
-        .map(|c| {
-            let mut fields = BTreeMap::new();
-            fields.insert(
-                "snapshot_at".into(),
-                JsonValue::String(latest.timestamp.clone()),
-            );
-            fields.insert("id".into(), json_string(c.id));
-            fields.insert("name".into(), json_string(c.name));
-            fields.insert("image".into(), json_string(c.image));
-            fields.insert("status".into(), json_string(c.status));
-            fields.insert("state".into(), json_string(c.state));
-            fields.insert(
-                "restart_count".into(),
-                c.restart_count.map(json_u64).unwrap_or(JsonValue::Null),
-            );
-            if query.target == crate::ast::ComposeTarget::Services {
-                let service = c
-                    .labels
-                    .iter()
-                    .find_map(|label| {
-                        let parts: Vec<&str> = label.splitn(2, '=').collect();
-                        if parts.len() == 2 && parts[0] == "com.docker.compose.service" {
-                            Some(JsonValue::String(parts[1].to_owned()))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(JsonValue::Null);
-                fields.insert("service".to_owned(), service);
-            }
-            Row { fields }
-        })
-        .collect();
+            .map(|c| {
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "snapshot_at".into(),
+                    JsonValue::String(latest.timestamp.clone()),
+                );
+                fields.insert("id".into(), json_string(c.id));
+                fields.insert("name".into(), json_string(c.name));
+                fields.insert("image".into(), json_string(c.image));
+                fields.insert("status".into(), json_string(c.status));
+                fields.insert("state".into(), json_string(c.state));
+                fields.insert(
+                    "restart_count".into(),
+                    c.restart_count.map(json_u64).unwrap_or(JsonValue::Null),
+                );
+                if matches!(
+                    query.target,
+                    crate::ast::ComposeTarget::Services | crate::ast::ComposeTarget::Health
+                ) {
+                    let service = extract_label_value(&c.labels, "com.docker.compose.service")
+                        .map(JsonValue::String)
+                        .unwrap_or(JsonValue::Null);
+                    fields.insert("service".to_owned(), service);
+                }
+                Row { fields }
+            })
+            .collect(),
+        crate::ast::ComposeTarget::Networks => latest
+            .networks
+            .into_iter()
+            .filter(|n| {
+                has_compose_label(
+                    &n.labels,
+                    "com.docker.compose.project",
+                    &compose_project_label,
+                )
+            })
+            .map(|n| {
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "snapshot_at".into(),
+                    JsonValue::String(latest.timestamp.clone()),
+                );
+                network_row_fields(n, &mut fields);
+                Row { fields }
+            })
+            .collect(),
+        crate::ast::ComposeTarget::Volumes => latest
+            .volumes
+            .into_iter()
+            .filter(|v| {
+                has_compose_label(
+                    &v.labels,
+                    "com.docker.compose.project",
+                    &compose_project_label,
+                )
+            })
+            .map(|v| {
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "snapshot_at".into(),
+                    JsonValue::String(latest.timestamp.clone()),
+                );
+                volume_row_fields(v, &mut fields);
+                Row { fields }
+            })
+            .collect(),
+    };
 
     for node in &query.pipeline {
         rows = apply_pipeline_node(rows, node)?;
@@ -348,6 +385,24 @@ pub fn render_table(result: &ExecutionResult) -> String {
     lines.join("\n")
 }
 
+fn has_compose_label(labels: &[String], label_key: &str, label_value: &str) -> bool {
+    labels.iter().any(|label| {
+        let parts: Vec<&str> = label.splitn(2, '=').collect();
+        parts.len() == 2 && parts[0] == label_key && parts[1] == label_value
+    })
+}
+
+fn extract_label_value(labels: &[String], label_key: &str) -> Option<String> {
+    labels.iter().find_map(|label| {
+        let parts: Vec<&str> = label.splitn(2, '=').collect();
+        if parts.len() == 2 && parts[0] == label_key {
+            Some(parts[1].to_owned())
+        } else {
+            None
+        }
+    })
+}
+
 fn execute_compose<C, M>(
     query: &crate::ast::ComposeQuery,
     docker: &C,
@@ -357,45 +412,69 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    let samples = latest_metrics_by_container(metrics.collect()?);
     let compose_project_label = query.project.clone();
 
-    let mut rows: Vec<Row> = docker
-        .list_containers()?
-        .into_iter()
-        .filter(|c| {
-            c.labels.iter().any(|label| {
-                let parts: Vec<&str> = label.splitn(2, '=').collect();
-                parts.len() == 2
-                    && parts[0] == "com.docker.compose.project"
-                    && parts[1] == compose_project_label
+    let mut rows: Vec<Row> = match query.target {
+        crate::ast::ComposeTarget::Containers
+        | crate::ast::ComposeTarget::Services
+        | crate::ast::ComposeTarget::Health => {
+            let samples = latest_metrics_by_container(metrics.collect()?);
+            let samples = latest_metrics_by_container(metrics.collect()?);
+            docker
+                .list_containers()?
+                .into_iter()
+                .filter(|c| {
+                    has_compose_label(
+                        &c.labels,
+                        "com.docker.compose.project",
+                        &compose_project_label,
+                    )
+                })
+                .map(|container| {
+                    let service = match query.target {
+                        crate::ast::ComposeTarget::Services | crate::ast::ComposeTarget::Health => {
+                            extract_label_value(&container.labels, "com.docker.compose.service")
+                                .map(JsonValue::String)
+                                .unwrap_or(JsonValue::Null)
+                        }
+                        _ => JsonValue::Null,
+                    };
+                    let mut row = container_row(container, &samples);
+                    if matches!(
+                        query.target,
+                        crate::ast::ComposeTarget::Services | crate::ast::ComposeTarget::Health
+                    ) {
+                        row.fields.insert("service".to_owned(), service);
+                    }
+                    row
+                })
+                .collect()
+        }
+        crate::ast::ComposeTarget::Networks => docker
+            .list_networks()?
+            .into_iter()
+            .filter(|n| {
+                has_compose_label(
+                    &n.labels,
+                    "com.docker.compose.project",
+                    &compose_project_label,
+                )
             })
-        })
-        .map(|container| {
-            let mut row = container_row(container, &samples);
-            if query.target == crate::ast::ComposeTarget::Services {
-                // Extract the service name from labels if available
-                let service = row
-                    .fields
-                    .get("labels")
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| {
-                        arr.iter().find_map(|item| {
-                            let s = item.as_str()?;
-                            let parts: Vec<&str> = s.splitn(2, '=').collect();
-                            if parts.len() == 2 && parts[0] == "com.docker.compose.service" {
-                                Some(JsonValue::String(parts[1].to_owned()))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .unwrap_or(JsonValue::Null);
-                row.fields.insert("service".to_owned(), service);
-            }
-            row
-        })
-        .collect();
+            .map(network_row)
+            .collect(),
+        crate::ast::ComposeTarget::Volumes => docker
+            .list_volumes()?
+            .into_iter()
+            .filter(|v| {
+                has_compose_label(
+                    &v.labels,
+                    "com.docker.compose.project",
+                    &compose_project_label,
+                )
+            })
+            .map(volume_row)
+            .collect(),
+    };
 
     for node in &query.pipeline {
         rows = apply_pipeline_node(rows, node)?;
@@ -525,6 +604,15 @@ fn field_descriptions(target: CollectionTarget) -> Vec<(String, String)> {
     }
 }
 
+fn target_alias(target: CollectionTarget) -> &'static str {
+    match target {
+        CollectionTarget::Containers => "c",
+        CollectionTarget::Images => "i",
+        CollectionTarget::Networks => "n",
+        CollectionTarget::Volumes => "v",
+    }
+}
+
 fn execute_observe<C, M>(
     query: &ObserveQuery,
     docker: &C,
@@ -559,6 +647,59 @@ where
             .map(volume_row)
             .collect::<Vec<_>>(),
     };
+
+    if let Some(join) = &query.join {
+        let right_alias = target_alias(join.right);
+        let right_rows: Vec<Row> = match join.right {
+            CollectionTarget::Containers => {
+                let samples = latest_metrics_by_container(metrics.collect()?);
+                docker
+                    .list_containers()?
+                    .into_iter()
+                    .map(|container| container_row(container, &samples))
+                    .collect::<Vec<_>>()
+            }
+            CollectionTarget::Images => docker
+                .list_images()?
+                .into_iter()
+                .map(image_row)
+                .collect::<Vec<_>>(),
+            CollectionTarget::Networks => docker
+                .list_networks()?
+                .into_iter()
+                .map(network_row)
+                .collect::<Vec<_>>(),
+            CollectionTarget::Volumes => docker
+                .list_volumes()?
+                .into_iter()
+                .map(volume_row)
+                .collect::<Vec<_>>(),
+        };
+
+        let left_alias = target_alias(query.target);
+        let mut joined = Vec::new();
+        for left_row in rows {
+            for right_row in &right_rows {
+                let left_val =
+                    eval::eval_expr(&left_row.fields, &join.left_key).unwrap_or(JsonValue::Null);
+                let right_val =
+                    eval::eval_expr(&right_row.fields, &join.right_key).unwrap_or(JsonValue::Null);
+                if eval::compare_json_values(&left_val, &right_val) == std::cmp::Ordering::Equal {
+                    let mut merged_fields = BTreeMap::new();
+                    for (k, v) in &left_row.fields {
+                        merged_fields.insert(format!("{left_alias}.{k}"), v.clone());
+                    }
+                    for (k, v) in &right_row.fields {
+                        merged_fields.insert(format!("{right_alias}.{k}"), v.clone());
+                    }
+                    joined.push(Row {
+                        fields: merged_fields,
+                    });
+                }
+            }
+        }
+        rows = joined;
+    }
 
     if let Some(filter) = &query.filter {
         rows = filter_rows(rows, filter)?;
@@ -833,6 +974,13 @@ fn container_row(container: Container, samples: &HashMap<String, MetricSample>) 
                 .map(json_u64)
                 .unwrap_or(JsonValue::Null),
         ),
+        (
+            "health",
+            container
+                .health
+                .map(JsonValue::String)
+                .unwrap_or(JsonValue::Null),
+        ),
     ])
 }
 
@@ -850,24 +998,32 @@ fn image_row(image: Image) -> Row {
 }
 
 fn network_row(network: Network) -> Row {
-    Row::from_fields([
-        ("id", json_string(network.id)),
-        ("name", json_string(network.name)),
-        ("driver", json_string(network.driver)),
-        ("scope", json_string(network.scope)),
-        ("containers", json_string_array(network.containers)),
-        ("labels", json_string_array(network.labels)),
-    ])
+    let mut fields = BTreeMap::new();
+    network_row_fields(network, &mut fields);
+    Row { fields }
+}
+
+fn network_row_fields(network: Network, fields: &mut BTreeMap<String, JsonValue>) {
+    fields.insert("id".into(), json_string(network.id));
+    fields.insert("name".into(), json_string(network.name));
+    fields.insert("driver".into(), json_string(network.driver));
+    fields.insert("scope".into(), json_string(network.scope));
+    fields.insert("containers".into(), json_string_array(network.containers));
+    fields.insert("labels".into(), json_string_array(network.labels));
 }
 
 fn volume_row(volume: Volume) -> Row {
-    Row::from_fields([
-        ("name", json_string(volume.name)),
-        ("driver", json_string(volume.driver)),
-        ("mountpoint", json_option_string(volume.mountpoint)),
-        ("scope", json_option_string(volume.scope)),
-        ("labels", json_string_array(volume.labels)),
-    ])
+    let mut fields = BTreeMap::new();
+    volume_row_fields(volume, &mut fields);
+    Row { fields }
+}
+
+fn volume_row_fields(volume: Volume, fields: &mut BTreeMap<String, JsonValue>) {
+    fields.insert("name".into(), json_string(volume.name));
+    fields.insert("driver".into(), json_string(volume.driver));
+    fields.insert("mountpoint".into(), json_option_string(volume.mountpoint));
+    fields.insert("scope".into(), json_option_string(volume.scope));
+    fields.insert("labels".into(), json_string_array(volume.labels));
 }
 
 impl Row {
@@ -1767,6 +1923,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: Some("healthy".to_owned()),
                 },
                 Container {
                     id: "def".to_owned(),
@@ -1783,6 +1940,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(1),
+                    health: Some("unhealthy".to_owned()),
                 },
                 Container {
                     id: "xyz".to_owned(),
@@ -1796,6 +1954,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(4),
+                    health: None,
                 },
             ],
             images: vec![Image {
@@ -1807,21 +1966,57 @@ mod tests {
                 created_at: None,
                 labels: Vec::new(),
             }],
-            networks: vec![Network {
-                id: "net".to_owned(),
-                name: "bridge".to_owned(),
-                driver: "bridge".to_owned(),
-                scope: "local".to_owned(),
-                containers: vec!["api".to_owned()],
-                labels: Vec::new(),
-            }],
-            volumes: vec![Volume {
-                name: "pgdata".to_owned(),
-                driver: "local".to_owned(),
-                mountpoint: Some("/var/lib/docker/volumes/pgdata/_data".to_owned()),
-                scope: Some("local".to_owned()),
-                labels: Vec::new(),
-            }],
+            networks: vec![
+                Network {
+                    id: "net1".to_owned(),
+                    name: "myapp_default".to_owned(),
+                    driver: "bridge".to_owned(),
+                    scope: "local".to_owned(),
+                    containers: vec!["abc".to_owned(), "def".to_owned()],
+                    labels: vec![
+                        "com.docker.compose.project=myapp".to_owned(),
+                        "com.docker.compose.network=default".to_owned(),
+                    ],
+                },
+                Network {
+                    id: "net2".to_owned(),
+                    name: "myapp_frontend".to_owned(),
+                    driver: "bridge".to_owned(),
+                    scope: "local".to_owned(),
+                    containers: vec!["abc".to_owned()],
+                    labels: vec![
+                        "com.docker.compose.project=myapp".to_owned(),
+                        "com.docker.compose.network=frontend".to_owned(),
+                    ],
+                },
+                Network {
+                    id: "net3".to_owned(),
+                    name: "bridge".to_owned(),
+                    driver: "bridge".to_owned(),
+                    scope: "local".to_owned(),
+                    containers: Vec::new(),
+                    labels: Vec::new(),
+                },
+            ],
+            volumes: vec![
+                Volume {
+                    name: "myapp_pgdata".to_owned(),
+                    driver: "local".to_owned(),
+                    mountpoint: Some("/var/lib/docker/volumes/myapp_pgdata/_data".to_owned()),
+                    scope: Some("local".to_owned()),
+                    labels: vec![
+                        "com.docker.compose.project=myapp".to_owned(),
+                        "com.docker.compose.volume=pgdata".to_owned(),
+                    ],
+                },
+                Volume {
+                    name: "pgdata".to_owned(),
+                    driver: "local".to_owned(),
+                    mountpoint: Some("/var/lib/docker/volumes/pgdata/_data".to_owned()),
+                    scope: Some("local".to_owned()),
+                    labels: Vec::new(),
+                },
+            ],
             logs: std::collections::HashMap::new(),
         }
     }
@@ -1906,6 +2101,7 @@ mod tests {
                 started_at: None,
                 finished_at: None,
                 restart_count: Some(0),
+                health: None,
             }],
             images: vec![],
             networks: vec![],
@@ -1984,6 +2180,7 @@ mod tests {
                         started_at: None,
                         finished_at: None,
                         restart_count: Some(0),
+                        health: None,
                     },
                     Container {
                         id: "h2".to_owned(),
@@ -2000,6 +2197,7 @@ mod tests {
                         started_at: None,
                         finished_at: None,
                         restart_count: Some(0),
+                        health: None,
                     },
                     Container {
                         id: "h3".to_owned(),
@@ -2013,6 +2211,7 @@ mod tests {
                         started_at: None,
                         finished_at: None,
                         restart_count: Some(0),
+                        health: None,
                     },
                 ],
                 images: vec![],
@@ -2058,6 +2257,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: None,
                 }],
                 images: vec![],
                 networks: vec![],
@@ -2095,6 +2295,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: None,
                 }],
                 images: vec![],
                 networks: vec![],
@@ -2105,6 +2306,267 @@ mod tests {
         let parsed = parser::parse("compose nonexistent").expect("query should parse");
         let result = execute_with_store(&parsed.query, &store).expect("should execute");
         assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn executes_compose_networks() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp networks").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        let names: Vec<&str> = result
+            .rows
+            .iter()
+            .map(|r| r.fields["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"myapp_default"));
+        assert!(names.contains(&"myapp_frontend"));
+        assert!(!names.contains(&"bridge"));
+    }
+
+    #[test]
+    fn executes_compose_networks_with_pipeline() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp networks | select name, driver")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert!(row.fields.contains_key("name"));
+            assert!(row.fields.contains_key("driver"));
+            assert_eq!(row.fields.len(), 2);
+        }
+    }
+
+    #[test]
+    fn executes_compose_networks_empty_for_missing_project() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose nonexistent networks").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn executes_compose_volumes() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp volumes").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("myapp_pgdata".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_volumes_with_pipeline() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp volumes | select name, driver")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("myapp_pgdata".to_owned())
+        );
+        assert_eq!(
+            result.rows[0].fields["driver"],
+            JsonValue::String("local".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_health() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp health | select name, service, health")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
+        assert_eq!(
+            api.fields["health"],
+            JsonValue::String("healthy".to_owned())
+        );
+        let db = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "db")
+            .unwrap();
+        assert_eq!(
+            db.fields["health"],
+            JsonValue::String("unhealthy".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_health_with_filter() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp health | where health = \"unhealthy\"")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("db".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_historical_compose_networks() {
+        use crate::storage::{InMemoryTelemetryStore, TelemetrySnapshot};
+
+        let mut store = InMemoryTelemetryStore::default();
+        store
+            .write_snapshot(TelemetrySnapshot {
+                timestamp: "2026-05-31T00:00:00Z".to_owned(),
+                containers: vec![],
+                images: vec![],
+                networks: vec![
+                    Network {
+                        id: "n1".to_owned(),
+                        name: "hist_default".to_owned(),
+                        driver: "bridge".to_owned(),
+                        scope: "local".to_owned(),
+                        containers: Vec::new(),
+                        labels: vec!["com.docker.compose.project=histapp".to_owned()],
+                    },
+                    Network {
+                        id: "n2".to_owned(),
+                        name: "bridge".to_owned(),
+                        driver: "bridge".to_owned(),
+                        scope: "local".to_owned(),
+                        containers: Vec::new(),
+                        labels: Vec::new(),
+                    },
+                ],
+                volumes: vec![],
+            })
+            .unwrap();
+
+        let parsed =
+            parser::parse("compose histapp networks | select name").expect("query should parse");
+        let result = execute_with_store(&parsed.query, &store).expect("should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("hist_default".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_historical_compose_volumes() {
+        use crate::storage::{InMemoryTelemetryStore, TelemetrySnapshot};
+
+        let mut store = InMemoryTelemetryStore::default();
+        store
+            .write_snapshot(TelemetrySnapshot {
+                timestamp: "2026-05-31T00:00:00Z".to_owned(),
+                containers: vec![],
+                images: vec![],
+                networks: vec![],
+                volumes: vec![Volume {
+                    name: "hist_data".to_owned(),
+                    driver: "local".to_owned(),
+                    mountpoint: None,
+                    scope: Some("local".to_owned()),
+                    labels: vec!["com.docker.compose.project=histapp".to_owned()],
+                }],
+            })
+            .unwrap();
+
+        let parsed = parser::parse("compose histapp volumes | select name, driver")
+            .expect("query should parse");
+        let result = execute_with_store(&parsed.query, &store).expect("should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("hist_data".to_owned())
+        );
+    }
+
+    fn join_mock_client() -> MockDockerClient {
+        MockDockerClient {
+            containers: vec![
+                Container {
+                    id: "i1".to_owned(),
+                    name: "web".to_owned(),
+                    image: "nginx:latest".to_owned(),
+                    status: "Up 1 hour".to_owned(),
+                    state: "running".to_owned(),
+                    ports: vec!["80/tcp".to_owned()],
+                    labels: vec![],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(0),
+                    health: None,
+                },
+                Container {
+                    id: "i2".to_owned(),
+                    name: "db".to_owned(),
+                    image: "postgres:16".to_owned(),
+                    status: "Up 2 hours".to_owned(),
+                    state: "running".to_owned(),
+                    ports: vec!["5432/tcp".to_owned()],
+                    labels: vec![],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(1),
+                    health: None,
+                },
+            ],
+            images: vec![
+                Image {
+                    id: "i1".to_owned(),
+                    repository: "nginx".to_owned(),
+                    tag: "latest".to_owned(),
+                    digest: None,
+                    size: "187MB".to_owned(),
+                    created_at: None,
+                    labels: Vec::new(),
+                },
+                Image {
+                    id: "i2".to_owned(),
+                    repository: "postgres".to_owned(),
+                    tag: "16".to_owned(),
+                    digest: None,
+                    size: "432MB".to_owned(),
+                    created_at: None,
+                    labels: Vec::new(),
+                },
+            ],
+            networks: vec![
+                Network {
+                    id: "frontend".to_owned(),
+                    name: "frontend".to_owned(),
+                    driver: "bridge".to_owned(),
+                    scope: "local".to_owned(),
+                    containers: vec!["web".to_owned()],
+                    labels: Vec::new(),
+                },
+                Network {
+                    id: "backend".to_owned(),
+                    name: "backend".to_owned(),
+                    driver: "bridge".to_owned(),
+                    scope: "local".to_owned(),
+                    containers: vec!["db".to_owned()],
+                    labels: Vec::new(),
+                },
+            ],
+            volumes: vec![Volume {
+                name: "pgdata".to_owned(),
+                driver: "local".to_owned(),
+                mountpoint: Some("/var/lib/docker/volumes/pgdata/_data".to_owned()),
+                scope: Some("local".to_owned()),
+                labels: Vec::new(),
+            }],
+            logs: std::collections::HashMap::new(),
+        }
     }
 
     fn mock_client() -> MockDockerClient {
@@ -2122,6 +2584,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: None,
                 },
                 Container {
                     id: "def".to_owned(),
@@ -2135,6 +2598,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(4),
+                    health: None,
                 },
             ],
             images: vec![Image {
@@ -2588,5 +3052,92 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("\"name\":\"a\""));
         assert!(lines[1].contains("\"name\":\"b\""));
+    }
+
+    #[test]
+    fn executes_join_images_on_id() {
+        let client = join_mock_client();
+        let parsed =
+            parser::parse("observe containers join images on id = id").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert!(row.fields.contains_key("c.id"));
+            assert!(row.fields.contains_key("i.id"));
+        }
+        let web = result
+            .rows
+            .iter()
+            .find(|r| r.fields["c.name"] == "web")
+            .unwrap();
+        assert_eq!(
+            web.fields["c.image"],
+            JsonValue::String("nginx:latest".to_owned())
+        );
+        assert_eq!(
+            web.fields["i.repository"],
+            JsonValue::String("nginx".to_owned())
+        );
+        let db = result
+            .rows
+            .iter()
+            .find(|r| r.fields["c.name"] == "db")
+            .unwrap();
+        assert_eq!(
+            db.fields["c.image"],
+            JsonValue::String("postgres:16".to_owned())
+        );
+        assert_eq!(
+            db.fields["i.repository"],
+            JsonValue::String("postgres".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_join_containers_networks_no_match() {
+        let client = join_mock_client();
+        let parsed = parser::parse("observe containers join networks on name = name")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn executes_join_with_where() {
+        let client = join_mock_client();
+        let parsed = parser::parse(
+            "observe containers join images on id = id | where c.image = \"nginx:latest\"",
+        )
+        .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["c.name"],
+            JsonValue::String("web".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_join_with_select() {
+        let client = join_mock_client();
+        let parsed =
+            parser::parse("observe containers join images on id = id | select c.name, i.name")
+                .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert_eq!(row.fields.len(), 2);
+            assert!(row.fields.contains_key("c.name"));
+            assert!(row.fields.contains_key("i.name"));
+        }
+    }
+
+    #[test]
+    fn executes_join_containers_volumes_no_match() {
+        let client = join_mock_client();
+        let parsed = parser::parse("observe containers join volumes on state = scope")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 0);
     }
 }

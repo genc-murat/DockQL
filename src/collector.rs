@@ -155,6 +155,7 @@ mod tests {
                 started_at: None,
                 finished_at: None,
                 restart_count: Some(0),
+                health: None,
             }],
             ..Default::default()
         };

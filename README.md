@@ -20,13 +20,16 @@ dol "logs container my-app tail 50"
 dol "ping"
 dol "compose myapp services"
 dol "observe compose myapp | where cpu > 80%"
+dol "compose myapp health | where health = unhealthy"
+dol "observe containers join images on id = id | select c.name, i.repository"
 dol "observe containers | group by state"
 ```
 
 ## Features
 
 - **Live observation** — query containers, images, networks, volumes with filtering, sorting, and aggregation
-- **Docker Compose** — query containers by compose project with `compose <project>` or `observe compose <project>` syntax
+- **Docker Compose** — query containers by compose project with `compose <project>` or `observe compose <project>` syntax; also query compose-scoped networks, volumes, and container health with `compose <project> networks|volumes|health`
+- **Cross-target JOIN** — merge rows from two targets on a matching key with `observe containers join images on id = id`; output fields are auto-prefixed (`c.name`, `i.repository`)
 - **Real-time events** — stream Docker events with pipeline filters and group-by aggregation
 - **Historical inspection** — inspect container state at any point in the past (requires `--store`)
 - **Historical observe** — query past container states with `observe containers last 5m`
@@ -391,7 +394,8 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 ### Targets
 
 - `observe containers` / `images` / `networks` / `volumes`
-- `compose <project> [services|containers]` — query containers in a Docker Compose project (also `observe compose <project>`)
+- `observe containers join <target> on <key> = <key>` — cross-target JOIN with auto-prefixed output fields
+- `compose <project> [services|containers|networks|volumes|health]` — query resources in a Docker Compose project (also `observe compose <project>`)
 - `events containers` / `images` / `networks` / `volumes`
 - `inspect container <name>` / `image <name>` (with optional `at "<time>"`)
 - `logs container <name> [tail <n>]` — view container logs (default: last 100 lines)
@@ -443,7 +447,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ### Container Fields
 
-`id`, `name`, `image`, `status`, `state`, `ports`, `labels`, `created_at`, `started_at`, `finished_at`, `cpu`, `memory`, `memory_limit`, `restart_count`, `network_rx`, `network_tx`, `disk_read`, `disk_write`, `compose_project` (auto-populated for Compose containers)
+`id`, `name`, `image`, `status`, `state`, `ports`, `labels`, `created_at`, `started_at`, `finished_at`, `cpu`, `memory`, `memory_limit`, `restart_count`, `network_rx`, `network_tx`, `disk_read`, `disk_write`, `compose_project` (auto-populated for Compose containers), `health` (health check status from Docker inspect)
 
 ### CLI Flags
 
@@ -476,7 +480,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ## Examples
 
-62 example queries are available in [`examples/`](examples/):
+64 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers
@@ -499,6 +503,12 @@ ping
 compose myapp
 compose myapp services
 compose myapp | where cpu > 80% | select name, cpu
+compose myapp networks
+compose myapp volumes
+compose myapp health
+compose myapp health | where health = "unhealthy" | select name, service, health
+observe containers join images on id = id
+observe containers join images on id = id | select c.name, i.repository
 analyze containers find anomalies
 alert when cpu > 85% for 2m then print High CPU
 observe containers | set severity = case when cpu > 80% then "critical" else "ok" end
@@ -537,7 +547,7 @@ Key modules:
 
 - [**Tutorial**](docs/tutorial.md) — step-by-step guide from installation to advanced pipelines
 - [**Language Specification**](docs/spec.md) — full DOL language reference
-- [**Examples**](docs/examples.md) — categorized query reference with 55+ examples
+- [**Examples**](docs/examples.md) — categorized query reference with 60+ examples
 - [**Architecture**](docs/architecture.md) — pipeline architecture and module overview
 - [**Analysis**](docs/analyze.md) — anomaly detection and automated analysis
 - [**Storage**](docs/storage.md) — telemetry store, retention, and historical queries

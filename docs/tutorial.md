@@ -322,9 +322,75 @@ dol "observe compose myapp"
 The `observe compose <project>` syntax is also supported, making it read
 consistently with other `observe` sub-queries like `observe containers`.
 
+**Compose networks:**
+
+```bash
+dol "compose myapp networks"
+```
+
+Lists Docker networks filtered by the compose project label.
+
+**Compose volumes:**
+
+```bash
+dol "compose myapp volumes | select name, driver"
+```
+
+Lists Docker volumes filtered by the compose project label.
+
+**Compose health:**
+
+```bash
+dol "compose myapp health"
+```
+
+Shows each container in the compose project with its `service` name and `health`
+status (healthy, unhealthy, starting, or none).
+
 ---
 
-## 8. Computing New Fields with `set`
+## 8. Cross-Target JOIN
+
+A JOIN merges rows from two Docker targets on a matching key. This lets you
+correlate data across containers, images, networks, and volumes in a single
+query.
+
+```bash
+dol "observe containers join images on id = id"
+```
+
+Output rows contain all fields from both targets, prefixed to avoid name
+collisions:
+
+- `c.` prefix for container fields (`c.name`, `c.image`, `c.state`)
+- `i.` prefix for image fields (`i.repository`, `i.tag`, `i.size`)
+- `n.` prefix for network fields
+- `v.` prefix for volume fields
+
+**Containers JOIN images with pipeline filtering:**
+
+```bash
+dol "observe containers join images on id = id | where c.image = 'nginx:latest' | select c.name, i.size"
+```
+
+**Containers JOIN with field selection:**
+
+```bash
+dol "observe containers join images on id = id | select c.name, c.state, i.repository, i.tag"
+```
+
+**How it works:**
+
+1. The left target (`containers`) is fetched first.
+2. For each left row, the right target (`images`) is scanned for matching rows.
+3. Match is determined by evaluating the left key and right key expressions
+   against their respective rows and comparing with `=`.
+4. Matching row pairs are merged into a single output row with prefixed fields.
+5. All downstream pipeline nodes use the prefixed field names.
+
+---
+
+## 9. Computing New Fields with `set`
 
 The `set` stage adds or overrides a field on each row — like assigning a
 variable in a loop.
@@ -375,7 +441,7 @@ dol "observe containers | set severity = case
 
 ---
 
-## 9. Filtering with String Functions
+## 10. Filtering with String Functions
 
 DOL provides several string functions for data transformation.
 
@@ -425,7 +491,7 @@ uses `'unnamed'` if both are null.
 
 ---
 
-## 10. Aggregation with `group by`
+## 11. Aggregation with `group by`
 
 Group rows by field values to see summaries.
 
@@ -475,7 +541,7 @@ grouping.
 
 ---
 
-## 11. Streaming Events
+## 12. Streaming Events
 
 `events` opens a live stream from the Docker event bus. It keeps running until
 you press Ctrl+C.
@@ -524,7 +590,7 @@ dol "events volumes | where action = 'mount'"
 
 ---
 
-## 12. Setting Up Alerts
+## 13. Setting Up Alerts
 
 Alerts run continuously, evaluating a condition and triggering an action when
 it's been true for a specified duration.
@@ -573,7 +639,7 @@ store. You can review them later with SQLite queries.
 
 ---
 
-## 13. Time Travel (Historical Queries)
+## 14. Time Travel (Historical Queries)
 
 With a telemetry store configured, you can query the past. This requires the
 background collector to be running.
@@ -616,7 +682,7 @@ dol --store telemetry.db \
 
 ---
 
-## 14. Automated Analysis
+## 15. Automated Analysis
 
 The `analyze` command runs deterministic checks across your Docker environment.
 
@@ -692,7 +758,7 @@ dol --store telemetry.db "analyze containers find restart_loops last 30m"
 
 ---
 
-## 15. Using the REPL
+## 16. Using the REPL
 
 The interactive REPL gives you a shell with tab completion, command history,
 and in-session state.
@@ -780,7 +846,7 @@ the evaluation loop timing.
 
 ---
 
-## 16. Next Steps
+## 17. Next Steps
 
 You've covered all the core DOL features. Here's what to explore next:
 
@@ -791,7 +857,7 @@ You've covered all the core DOL features. Here's what to explore next:
 | [Architecture](architecture.md) | How DOL works under the hood |
 | [Analysis Docs](analyze.md) | Anomaly detection and health scoring |
 | [Storage Docs](storage.md) | Telemetry store schema and retention |
-| [TUI Dashboard](examples.md#11-terminal-dashboard) | `dol top` and `dol dashboard` commands |
+| [TUI Dashboard](examples.md#14-terminal-dashboard) | `dol top` and `dol dashboard` commands |
 | [API Docs](https://genc-murat.github.io/DockQL/dol/index.html) | Rust API documentation (cargo doc) |
 
 **Quick tips to remember:**

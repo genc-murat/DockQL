@@ -44,6 +44,7 @@ pub struct Container {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub restart_count: Option<u64>,
+    pub health: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -396,10 +397,10 @@ fn container_from_ps_json(value: &Value) -> Result<Container, DockerError> {
         started_at: None,
         finished_at: None,
         restart_count: None,
+        health: None,
     })
 }
 
-/// Parse a single `docker inspect --format '{{json .}}' <id>` JSON object into a Container.
 fn container_from_inspect_json(value: &Value) -> Result<Container, DockerError> {
     // Labels come as an object in inspect, convert to "key=val" strings
     let labels = value
@@ -482,6 +483,10 @@ fn container_from_inspect_json(value: &Value) -> Result<Container, DockerError> 
             .filter(|s| !s.starts_with("0001"))
             .map(str::to_owned),
         restart_count: value.pointer("/RestartCount").and_then(Value::as_u64),
+        health: value
+            .pointer("/State/Health/Status")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -616,6 +621,7 @@ mod tests {
                 started_at: None,
                 finished_at: None,
                 restart_count: Some(0),
+                health: None,
             }],
             ..Default::default()
         };
@@ -642,6 +648,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: None,
                 },
                 Container {
                     id: "def456".to_owned(),
@@ -655,6 +662,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: None,
                 },
             ],
             ..Default::default()
@@ -725,6 +733,7 @@ mod tests {
                 started_at: None,
                 finished_at: None,
                 restart_count: Some(0),
+                health: None,
             }],
             ..Default::default()
         };

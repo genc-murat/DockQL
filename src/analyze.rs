@@ -1547,6 +1547,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             restart_count: Some(restarts),
+            health: None,
         }
     }
 
@@ -2049,6 +2050,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(1),
+                    health: None,
                 }],
                 images: Vec::new(),
                 networks: Vec::new(),
@@ -2082,6 +2084,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: None,
                 }],
                 images: Vec::new(),
                 networks: Vec::new(),
@@ -2105,6 +2108,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(3),
+                    health: None,
                 }],
                 images: Vec::new(),
                 networks: Vec::new(),
@@ -2149,6 +2153,7 @@ mod tests {
                 started_at: None,
                 finished_at: None,
                 restart_count: Some(0),
+                health: None,
             }],
             images: Vec::new(),
             networks: Vec::new(),
@@ -2374,6 +2379,7 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     restart_count: Some(0),
+                    health: None,
                 }],
                 images: Vec::new(),
                 networks: Vec::new(),

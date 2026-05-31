@@ -382,6 +382,7 @@ mod tests {
                 started_at: None,
                 finished_at: None,
                 restart_count: Some(1),
+                health: None,
             }],
             images: Vec::new(),
             networks: Vec::new(),

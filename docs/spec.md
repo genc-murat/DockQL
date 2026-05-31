@@ -34,12 +34,52 @@ DOL v0.1 has nine top-level query families.
 
 Execution mode: batch snapshot by default, hybrid when metric windows are requested.
 
-Examples:
+**Simple queries:**
 
 ```dol
 observe containers
 observe containers where status = running
 observe containers | where image contains "postgres" | select name, status, ports
+```
+
+**Cross-target JOIN (v0.1):**
+
+A `JOIN` clause merges rows from two targets on a matching key:
+
+```dol
+observe containers join images on image = repository
+observe containers join networks on name = name
+observe containers join volumes on scope = scope
+```
+
+Syntax:
+
+```dol
+observe <left-target> join <right-target> on <left-key> = <right-key> [ | <pipeline> ]
+```
+
+- The left target is the primary query target.
+- The right target is specified after `join`.
+- Both key expressions are evaluated against their respective target's fields
+  using bare field names (no prefix).
+- Output rows contain all fields from both targets, prefixed with an
+  auto-generated alias:
+  - `c.` for containers
+  - `i.` for images
+  - `n.` for networks
+  - `v.` for volumes
+- All downstream pipeline nodes operate on the prefixed field names.
+
+Execution: nested-loop join over all matching right-target rows for each left-target row; equality comparison via `=`.
+
+Examples:
+
+```dol
+observe containers join images on image = repository + ":" + tag
+observe containers join networks on id = id
+observe containers join images on id = id | select c.name, i.repository
+observe containers join images on id = id | where c.image = "nginx:latest"
+observe containers join volumes on state = scope
 ```
 
 ### 2.2 `events`
@@ -139,9 +179,9 @@ fields volumes
 
 ### 2.8 `compose`
 
-`compose` queries containers grouped under a Docker Compose project. It
-filters containers by the `com.docker.compose.project` label and optionally
-groups them by service name.
+`compose` queries containers, networks, or volumes grouped under a Docker
+Compose project. It filters resources by the `com.docker.compose.project`
+label.
 
 Execution mode: batch.
 
@@ -149,10 +189,12 @@ Syntax:
 
 ```dol
 compose <project>
-compose <project> services
 compose <project> containers
+compose <project> services
+compose <project> networks
+compose <project> volumes
+compose <project> health
 observe compose <project>
-observe compose <project> services
 ```
 
 - Without a target keyword, defaults to `containers` — listing all containers
@@ -161,6 +203,14 @@ observe compose <project> services
 - With `services`, each row additionally shows the `service` field extracted from the
   `com.docker.compose.service` label, allowing pipeline operations like
   `select service, name, state`.
+- With `networks`, lists all Docker networks filtered by the compose project label.
+  Supported fields: `id`, `name`, `driver`, `scope`, `containers`, `labels`.
+- With `volumes`, lists all Docker volumes filtered by the compose project label.
+  Supported fields: `name`, `driver`, `mountpoint`, `scope`, `labels`.
+- With `health`, lists containers within the compose project with their service
+  name and health status. The `health` field is extracted from the Docker
+  inspect `/State/Health/Status` endpoint. Supported fields include all
+  container fields plus `service` and `health`.
 - The `observe compose <project>` syntax is an alternative form that reads
   identically to other `observe` sub-queries.
 
@@ -169,7 +219,11 @@ Examples:
 ```dol
 compose myapp
 compose myapp services
+compose myapp networks
+compose myapp volumes
+compose myapp health
 compose myapp | where cpu > 80% | select name, cpu
+compose myapp health | where health = "unhealthy" | select name, service, health
 alert when compose_project = 'myapp' and cpu > 85% for 2m then print "High CPU"
 ```
 
@@ -239,6 +293,7 @@ Common container fields:
 - `disk_read`
 - `disk_write`
 - `compose_project`
+- `health` — health check status from Docker inspect (`/State/Health/Status`); `null` if no health check is configured
 
 Individual labels can be accessed with dot notation. For example, given a container
 with label `com.docker.compose.project=myapp`:
@@ -646,8 +701,8 @@ Reserved keywords in v0.1:
 
 ```text
 alert analyze and asc at between by case compose contains count desc distinct else end events
-false find for from group having if in inspect is last limit logs matches max min not null
-observe or offset ping restart select service services set sort sum then to true webhook when where
+false find for from group having if in inspect is join last limit logs matches max min not null
+observe of offset or ping restart select service services set sort sum then to true webhook when where
 ```
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.
@@ -675,7 +730,6 @@ observe containers | where cpu > 80% | alert "High CPU detected"
 
 These features are intentionally deferred:
 
-- Joins between targets.
 - User-defined functions.
 - Full SQL aggregation functions.
 - Distributed Docker host querying.

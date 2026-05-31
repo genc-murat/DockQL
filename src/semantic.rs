@@ -41,57 +41,7 @@ pub struct SemanticAnalyzer {
 impl SemanticAnalyzer {
     pub fn new(target: CollectionTarget) -> Self {
         let mut active_schema = BTreeMap::new();
-        // Populate base schema based on target
-        let fields = match target {
-            CollectionTarget::Containers => vec![
-                ("id", Type::String),
-                ("name", Type::String),
-                ("image", Type::String),
-                ("status", Type::String),
-                ("state", Type::String),
-                ("ports", Type::Array),
-                ("labels", Type::Array),
-                ("compose_project", Type::String),
-                ("created_at", Type::String),
-                ("started_at", Type::String),
-                ("finished_at", Type::String),
-                ("restart_count", Type::Integer),
-                ("cpu", Type::Float),
-                ("memory", Type::Integer),
-                ("memory_limit", Type::Integer),
-                ("network_rx", Type::Integer),
-                ("network_tx", Type::Integer),
-                ("disk_read", Type::Integer),
-                ("disk_write", Type::Integer),
-            ],
-            CollectionTarget::Images => vec![
-                ("id", Type::String),
-                ("repository", Type::String),
-                ("name", Type::String),
-                ("tag", Type::String),
-                ("digest", Type::String),
-                ("size", Type::String),
-                ("created_at", Type::String),
-                ("labels", Type::Array),
-            ],
-            CollectionTarget::Networks => vec![
-                ("id", Type::String),
-                ("name", Type::String),
-                ("driver", Type::String),
-                ("scope", Type::String),
-                ("containers", Type::Array),
-                ("labels", Type::Array),
-            ],
-            CollectionTarget::Volumes => vec![
-                ("name", Type::String),
-                ("driver", Type::String),
-                ("mountpoint", Type::String),
-                ("scope", Type::String),
-                ("labels", Type::Array),
-            ],
-        };
-
-        for (field, ty) in fields {
+        for (field, ty) in Self::schema_for_target(target) {
             active_schema.insert(field.to_owned(), ty);
         }
 
@@ -104,6 +54,21 @@ impl SemanticAnalyzer {
     pub fn validate_query(&mut self, query: &Query) -> Result<(), EvalError> {
         match query {
             Query::Observe(q) => {
+                if let Some(join) = &q.join {
+                    let right_schema = Self::schema_for_target(join.right);
+                    let left_alias = target_alias(self.target);
+                    let right_alias = target_alias(join.right);
+                    let original_schema =
+                        std::mem::replace(&mut self.active_schema, BTreeMap::new());
+                    for (field, ty) in original_schema {
+                        self.active_schema
+                            .insert(format!("{left_alias}.{field}"), ty);
+                    }
+                    for (field, ty) in right_schema {
+                        self.active_schema
+                            .insert(format!("{right_alias}.{field}"), ty);
+                    }
+                }
                 if let Some(filter) = &q.filter {
                     self.validate_expression(filter)?;
                 }
@@ -136,10 +101,19 @@ impl SemanticAnalyzer {
                 }
             }
             Query::Compose(q) => {
-                // When targeting services, add the 'service' field to schema
-                if q.target == crate::ast::ComposeTarget::Services {
-                    self.active_schema
-                        .insert("service".to_owned(), Type::String);
+                match q.target {
+                    crate::ast::ComposeTarget::Services => {
+                        self.active_schema
+                            .insert("service".to_owned(), Type::String);
+                    }
+                    crate::ast::ComposeTarget::Health => {
+                        self.active_schema
+                            .insert("service".to_owned(), Type::String);
+                        if !self.active_schema.contains_key("health") {
+                            self.active_schema.insert("health".to_owned(), Type::String);
+                        }
+                    }
+                    _ => {}
                 }
                 for node in &q.pipeline {
                     self.apply_pipeline_node(node)?;
@@ -390,6 +364,69 @@ impl SemanticAnalyzer {
     }
 }
 
+fn target_alias(target: CollectionTarget) -> &'static str {
+    match target {
+        CollectionTarget::Containers => "c",
+        CollectionTarget::Images => "i",
+        CollectionTarget::Networks => "n",
+        CollectionTarget::Volumes => "v",
+    }
+}
+
+impl SemanticAnalyzer {
+    fn schema_for_target(target: CollectionTarget) -> Vec<(&'static str, Type)> {
+        match target {
+            CollectionTarget::Containers => vec![
+                ("id", Type::String),
+                ("name", Type::String),
+                ("image", Type::String),
+                ("status", Type::String),
+                ("state", Type::String),
+                ("ports", Type::Array),
+                ("labels", Type::Array),
+                ("compose_project", Type::String),
+                ("created_at", Type::String),
+                ("started_at", Type::String),
+                ("finished_at", Type::String),
+                ("restart_count", Type::Integer),
+                ("cpu", Type::Float),
+                ("memory", Type::Integer),
+                ("memory_limit", Type::Integer),
+                ("network_rx", Type::Integer),
+                ("network_tx", Type::Integer),
+                ("disk_read", Type::Integer),
+                ("disk_write", Type::Integer),
+                ("health", Type::String),
+            ],
+            CollectionTarget::Images => vec![
+                ("id", Type::String),
+                ("repository", Type::String),
+                ("name", Type::String),
+                ("tag", Type::String),
+                ("digest", Type::String),
+                ("size", Type::String),
+                ("created_at", Type::String),
+                ("labels", Type::Array),
+            ],
+            CollectionTarget::Networks => vec![
+                ("id", Type::String),
+                ("name", Type::String),
+                ("driver", Type::String),
+                ("scope", Type::String),
+                ("containers", Type::Array),
+                ("labels", Type::Array),
+            ],
+            CollectionTarget::Volumes => vec![
+                ("name", Type::String),
+                ("driver", Type::String),
+                ("mountpoint", Type::String),
+                ("scope", Type::String),
+                ("labels", Type::Array),
+            ],
+        }
+    }
+}
+
 trait StartsPrefixLabel {
     fn starts_prefix_label(&self) -> bool;
 }
@@ -421,7 +458,13 @@ pub fn validate_semantics(query: &Query) -> Result<(), EvalError> {
         },
         Query::Alert(_) => CollectionTarget::Containers,
         Query::Logs(_) => CollectionTarget::Containers,
-        Query::Compose(_) => CollectionTarget::Containers,
+        Query::Compose(q) => match q.target {
+            crate::ast::ComposeTarget::Containers
+            | crate::ast::ComposeTarget::Services
+            | crate::ast::ComposeTarget::Health => CollectionTarget::Containers,
+            crate::ast::ComposeTarget::Networks => CollectionTarget::Networks,
+            crate::ast::ComposeTarget::Volumes => CollectionTarget::Volumes,
+        },
         Query::Ping => CollectionTarget::Containers,
         Query::Inspect(_) | Query::Fields(_) => return Ok(()),
     };
@@ -767,5 +810,72 @@ mod tests {
         let parsed = parser::parse("compose myapp | where state > 50").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::InvalidComparison { .. })));
+    }
+
+    #[test]
+    fn test_compose_networks_valid_fields() {
+        let parsed = parser::parse("compose myapp networks | select name, driver").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_volumes_valid_fields() {
+        let parsed = parser::parse("compose myapp volumes | select name, driver").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_health_service_and_health_fields() {
+        let parsed = parser::parse("compose myapp health | select name, service, health").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_networks_invalid_field() {
+        let parsed = parser::parse("compose myapp networks | where cpu > 50").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_compose_volumes_invalid_field() {
+        let parsed = parser::parse("compose myapp volumes | where state = \"running\"").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_join_prefixed_fields_valid() {
+        let parsed = parser::parse("observe containers join images on id = id | where c.image = \"nginx:latest\" | select c.name, i.name").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_join_prefixed_field_rejects_non_prefixed() {
+        let parsed =
+            parser::parse("observe containers join images on id = id | where name = \"web\"")
+                .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_join_where_clause_invalid_field() {
+        let parsed =
+            parser::parse("observe containers join images on id = id | where nonexistent = \"x\"")
+                .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_join_no_pipeline() {
+        let parsed = parser::parse("observe containers join images on id = id").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
     }
 }

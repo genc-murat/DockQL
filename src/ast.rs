@@ -18,7 +18,15 @@ pub struct ObserveQuery {
     pub target: CollectionTarget,
     pub time: Option<TimeSelector>,
     pub filter: Option<Expression>,
+    pub join: Option<JoinClause>,
     pub pipeline: Vec<PipelineNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct JoinClause {
+    pub right: CollectionTarget,
+    pub left_key: Expression,
+    pub right_key: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -46,6 +54,9 @@ pub struct ComposeQuery {
 pub enum ComposeTarget {
     Containers,
     Services,
+    Networks,
+    Volumes,
+    Health,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
