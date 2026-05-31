@@ -41,12 +41,17 @@ jobs:
         run: |
           for f in docs/*.md; do
             name=$(basename "$f" .md)
-            pandoc "$f" -o "target/doc/${name}.html" --from markdown --to html5 --standalone
+            [ "$name" = "pandoc-template" ] && continue
+            pandoc "$f" -o "target/doc/${name}.html" \
+              --from markdown --to html5 --standalone \
+              --template docs/pandoc-template.html
           done
 
+      - name: Copy pandoc template to output
+        run: cp docs/pandoc-template.html target/doc/ 2>/dev/null || true
+
       - name: Copy static docs assets
-        run: |
-          cp -r docs/*.html target/doc/ 2>/dev/null || true
+        run: cp docs/*.html target/doc/ 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

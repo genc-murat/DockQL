@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="$lang$" xml:lang="$lang$"$if(dir)$ dir="$dir$"$endif$>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="generator" content="pandoc" />
+$for(author-meta)$
+  <meta name="author" content="$author-meta$" />
+$endfor$
+$if(date-meta)$
+  <meta name="dcterms.date" content="$date-meta$" />
+$endif$
+$if(keywords)$
+  <meta name="keywords" content="$for(keywords)$$keywords$$sep$, $endfor$" />
+$endif$
+  <title>$if(title-prefix)$$title-prefix$ – $endif$$pagetitle$</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --orange: #d29922;
+      --red: #f85149;
+      --code-bg: #1c2128;
+      --inline-code-bg: #252b33;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 40px 24px 80px;
+    }
+    .container {
+      max-width: 880px;
+      margin: 0 auto;
+    }
+
+    /* ── Headings ───────────────────────────── */
+    h1, h2, h3, h4 { font-weight: 600; line-height: 1.3; }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    h2 {
+      font-size: 1.4rem;
+      margin-top: 36px;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    h3 { font-size: 1.1rem; margin-top: 28px; margin-bottom: 8px; }
+    h4 { font-size: 1rem; margin-top: 20px; margin-bottom: 8px; color: var(--muted); }
+
+    /* ── Text ───────────────────────────────── */
+    p { margin-bottom: 16px; }
+    strong { color: #f0f6fc; }
+    em { color: var(--muted); }
+
+    /* ── Links ──────────────────────────────── */
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Lists ──────────────────────────────── */
+    ul, ol { margin-bottom: 16px; padding-left: 24px; }
+    li { margin-bottom: 4px; }
+    ul li::marker { color: var(--green); }
+
+    /* ── Code blocks ────────────────────────── */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+      overflow-x: auto;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: #c9d1d9;
+    }
+    code {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      font-size: 0.85em;
+    }
+    :not(pre) > code {
+      background: var(--inline-code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      color: #f0f6fc;
+    }
+    pre code { background: none; padding: 0; font-size: inherit; }
+
+    /* ── Tables ─────────────────────────────── */
+    table {
+      border-collapse: collapse;
+      margin-bottom: 20px;
+      width: 100%;
+      font-size: 0.9rem;
+    }
+    th, td {
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
+    th {
+      background: var(--surface);
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+    }
+    td { color: var(--text); }
+    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    tr:hover td { background: rgba(88,166,255,0.06); }
+
+    /* ── Blockquotes ────────────────────────── */
+    blockquote {
+      border-left: 3px solid var(--accent);
+      padding: 8px 16px;
+      margin-bottom: 16px;
+      background: rgba(88,166,255,0.06);
+      border-radius: 0 6px 6px 0;
+    }
+    blockquote p { margin-bottom: 0; color: var(--muted); }
+
+    /* ── Horizontal rule ────────────────────── */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 32px 0;
+    }
+
+    /* ── Inline elements ────────────────────── */
+    abbr[title] { cursor: help; border-bottom: 1px dotted var(--muted); }
+    sub, sup { font-size: 0.75em; }
+
+    /* ── Responsive ─────────────────────────── */
+    @media (max-width: 640px) {
+      body { padding: 24px 16px 60px; }
+      h1 { font-size: 1.5rem; }
+      h2 { font-size: 1.2rem; }
+      h3 { font-size: 1rem; }
+      table { font-size: 0.8rem; }
+      th, td { padding: 6px 10px; }
+    }
+  </style>
+$for(css)$
+  <link rel="stylesheet" href="$css$" />
+$endfor$
+</head>
+<body>
+<div class="container">
+$for(include-before)$
+$include-before$
+$endfor$
+$body$
+$for(include-after)$
+$include-after$
+$endfor$
+</div>
+</body>
+</html>
