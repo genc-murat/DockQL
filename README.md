@@ -289,9 +289,9 @@ dol dashboard
 `dol dashboard` layout:
 - **Left panel**: Container list with name, CPU%, memory usage, state
 - **Right panel**: State distribution histogram + top images
-- **Bottom panel**: Live Docker events stream (polled every 5s)
+- **Bottom panel**: Live Docker events stream (real-time via the Docker events API, displayed instantly as they occur)
 
-Both modes auto-refresh every 2 seconds. Container states are color-coded: running (green), exited/dead (red), paused (yellow), restarting (cyan).
+Both modes use an event-driven refresh model — container state changes (start, die, stop, destroy, etc.) trigger an immediate update via a background `docker events` listener, with a 2-second periodic metrics poll and a 30-second fallback full refresh. Container states are color-coded: running (green), exited/dead (red), paused (yellow), restarting (cyan).
 
 ### Real Alert Actions
 

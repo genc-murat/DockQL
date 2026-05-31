@@ -375,7 +375,7 @@ Interactive TUI monitors for live container observability.
 dol top
 ```
 
-Displays a full-screen table of all containers with auto-refresh every 2 seconds. Columns: NAME, IMAGE, CPU (gauge bar), MEM (gauge bar), MEMORY (usage %), STATE, STATUS, RST (restart count). CPU and MEM gauge bars are color-coded: green (<50%), yellow (50–80%), red (>80%).
+Displays a full-screen table of all containers with event-driven auto-refresh — container state changes (start, die, stop, etc.) trigger an immediate update via a background `docker events` listener, with a 2-second periodic metrics poll and a 30-second fallback full refresh. Columns: NAME, IMAGE, CPU (gauge bar), MEM (gauge bar), MEMORY (usage %), STATE, STATUS, RST (restart count). CPU and MEM gauge bars are color-coded: green (<50%), yellow (50–80%), red (>80%).
 
 Keyboard controls:
 - `↑`/`↓` or `j`/`k` — navigate rows
@@ -397,7 +397,7 @@ dol dashboard
 Three-panel view:
 - **Left panel**: Container list with name, CPU%, memory usage, state
 - **Right panel**: State distribution histogram (running/exited/paused/other) with bar chart + top images by count
-- **Bottom panel**: Live Docker events stream (polled from `docker events --until 5s`)
+- **Bottom panel**: Live Docker events stream (real-time via a background `docker events` API listener — events appear instantly as they occur, no polling)
 
 Keyboard controls:
 - `Tab` — switch panel focus (containers / stats)

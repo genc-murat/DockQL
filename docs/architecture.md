@@ -68,7 +68,7 @@ A ratatui-based TUI module providing two modes:
 - **`dol top`**: Full-screen live-updating container table with auto-refresh (2s), color-coded states, sort controls, and keyboard navigation.
 - **`dol dashboard`**: Multi-panel view with a container list and a live Docker events panel, focus-switchable via Tab.
 
-Both modes use `crossterm` for raw terminal input and alternate screen rendering. The dashboard polls `DockerCliClient::list_containers()` and `docker events` on a 2-second interval loop without blocking the event loop.
+Both modes use `crossterm` for raw terminal input and alternate screen rendering. The dashboard spawns a background thread listening to `docker events --format "{{json .}}"` and uses an event-driven refresh model — container state changes trigger an immediate full refresh (containers + metrics), metrics are polled every 2 seconds, and a 30-second fallback timer ensures stale data is never shown if the events listener fails.
 
 ### 12. External Export Module (`src/export.rs`)
 Provides push-based integration with three external monitoring systems:
