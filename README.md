@@ -23,7 +23,7 @@ dol "observe containers | group by state"
 - **Control flow** — `if/then/else` pipeline branching, `case/when` expressions, `set` field assignment
 - **Arithmetic expressions** — compute fields with `+`, `-`, `*`, `/`, `%` (e.g., `set mem_gb = memory / 1073741824`)
 - **Aggregate functions** — `group by ... with sum/count/avg/min/max(field) as alias`
-- **String functions** — `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`
+- **String functions** — `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`
 - **Range check** — `between ... and ...`, `is null`, `is not null`
 - **Pattern matching** — `matches` (regex) and `in` operators for flexible filtering
 - **Multi-field sort** — `sort by state desc, cpu desc`
@@ -250,10 +250,10 @@ REPL commands:
 ### Terminal Dashboard
 
 ```bash
-# Live-updating container monitor (top-like)
+# Live-updating container monitor (top-like) with CPU/MEM gauge bars
 dol top
 
-# Multi-panel dashboard with containers and events
+# Multi-panel dashboard with containers, stats, and live events
 dol dashboard
 ```
 
@@ -262,12 +262,23 @@ dol dashboard
 - `s` — cycle sort column (name, image, state, status)
 - `d` — toggle sort direction
 - `r` — force refresh
+- `/` — enter filter mode (filter containers by name)
+- `h` — toggle help overlay
 - `q` / Esc — quit
 
+`dol top` displays columns: NAME, IMAGE, CPU (gauge bar), MEM (gauge bar), MEMORY (usage %), STATE, STATUS, RST (restart count). CPU and MEM bars are color-coded: green (<50%), yellow (50–80%), red (>80%).
+
 `dol dashboard` keyboard controls:
-- `Tab` — switch panel focus
+- `Tab` — switch panel focus (containers / stats)
 - `r` — force refresh
+- `c` — clear events panel
+- `h` — toggle help overlay
 - `q` / Esc — quit
+
+`dol dashboard` layout:
+- **Left panel**: Container list with name, CPU%, memory usage, state
+- **Right panel**: State distribution histogram + top images
+- **Bottom panel**: Live Docker events stream (polled every 5s)
 
 Both modes auto-refresh every 2 seconds. Container states are color-coded: running (green), exited/dead (red), paused (yellow), restarting (cyan).
 
@@ -327,7 +338,7 @@ Comparison: `=`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `matches` (regex), `in`
 Arithmetic: `+`, `-`, `*`, `/`, `%`
 Range: `between ... and ...`, `is null`, `is not null`
 Logical: `and`, `or`, `not`
-Functions: `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`
+Functions: `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`
 Grouping: `(`, `)`
 
 ### Label Access
@@ -359,20 +370,20 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `--explain` | Show query plan without executing |
 | `--diff` | Compare results with last store snapshot |
 | `--completion <shell>` | Generate shell completion script |
-| `--export-format <fmt>` | Export format for external systems: `influx`, `loki`, `prometheus` |
-| `--export-influx <url>` | Push results to InfluxDB v1 HTTP write API |
+| `--export-format <fmt>` | Export format for external systems: `influx`, `loki`, `prometheus` (used with `--export`)
+| `--export-influx <url>` | Push results to InfluxDB v1/v2 HTTP write API |
 | `--export-grafana-loki <url>` | Push results to Grafana Loki HTTP push API |
 | `--export-prometheus <url>` | Push results to Prometheus Pushgateway |
-| `repl` | Start interactive REPL shell |
-| `top` | Live-updating TUI container monitor |
-| `dashboard` | Multi-panel TUI with containers and events |
+| `repl` | Start interactive REPL shell with tab completion and history |
+| `top` | Live-updating TUI container monitor with CPU/MEM gauge bars and filter mode |
+| `dashboard` | Multi-panel TUI with container list, stats, and live events |
 | `config init` | Create a default config file |
 | `config set <key> <value>` | Update a config value |
 | `config view` | Display current configuration |
 
 ## Examples
 
-36 example queries are available in [`examples/`](examples/):
+55 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers

@@ -264,18 +264,18 @@ fn container_from_ps_json(value: &Value) -> Result<Container, DockerError> {
 fn enrich_containers_from_inspect(containers: &mut [Container], inspect_values: &[Value]) {
     let inspect_by_id: std::collections::HashMap<String, &Value> = inspect_values
         .iter()
-        .filter_map(|v| {
+        .map(|v| {
             let id = v.get("Id").and_then(Value::as_str).unwrap_or("").to_owned();
             let short = &id[..12.min(id.len())];
-            Some((short.to_owned(), v))
+            (short.to_owned(), v)
         })
         .collect();
 
     let inspect_by_name: std::collections::HashMap<String, &Value> = inspect_values
         .iter()
-        .filter_map(|v| {
+        .map(|v| {
             let name = v.get("Name").and_then(Value::as_str).unwrap_or("").trim_start_matches('/').to_owned();
-            Some((name, v))
+            (name, v)
         })
         .collect();
 
@@ -283,7 +283,7 @@ fn enrich_containers_from_inspect(containers: &mut [Container], inspect_values: 
             let inspect = inspect_by_id
                 .get(&container.id[..12.min(container.id.len())])
                 .or_else(|| inspect_by_name.get(&container.name))
-                .map(|v| *v);
+                .copied();
 
         if let Some(inspect) = inspect {
             if container.started_at.is_none() {

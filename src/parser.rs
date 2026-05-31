@@ -526,9 +526,9 @@ impl Parser {
         }
 
         // Function call: ident "(" ...
-        if let Some(Token { kind: TokenKind::Ident(name), .. }) = self.peek() {
-            if let Some(peek2) = self.tokens.get(self.cursor + 1) {
-                if matches!(peek2.kind, TokenKind::LParen) {
+        if let Some(Token { kind: TokenKind::Ident(name), .. }) = self.peek()
+            && let Some(peek2) = self.tokens.get(self.cursor + 1)
+                && matches!(peek2.kind, TokenKind::LParen) {
                     let name = name.clone();
                     self.advance(); // consume ident
                     self.advance(); // consume LParen
@@ -542,8 +542,6 @@ impl Parser {
                     self.expect(TokenKind::RParen, "`)`")?;
                     return Ok(Expression::FnCall { name, args });
                 }
-            }
-        }
 
         // Try literal value first
         if let Ok(value) = self.try_parse_value() {

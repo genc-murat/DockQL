@@ -313,7 +313,17 @@ Arithmetic expressions can be used in `set` assignments, `where` filters, `havin
 - `substring(s, start, len)` — substring extraction
 - `coalesce(a, b, ...)` — first non-null value
 
-### 6.7 Operator Precedence
+### 6.7 Coalesce Function
+
+The `coalesce()` function returns the first non-null, non-empty value from its arguments:
+
+```dol
+observe containers | set name = coalesce(label.name, name, "unknown") | select name
+```
+
+If all arguments are null or empty strings, `coalesce()` returns `null`.
+
+### 6.8 Operator Precedence
 
 Precedence, highest to lowest:
 
@@ -614,20 +624,20 @@ The DOL CLI supports the following flags:
 | `--snapshot-interval <s>` | Snapshot interval in seconds (default: 300) |
 | `--store-stats` | Display telemetry store statistics |
 | `--apply-retention` | Apply retention policies to clean old data |
-| `--output <fmt>` | Output format: `table`, `json`, `csv`, `jsonl` |
-| `--export <path>` | Write output to file instead of stdout |
-| `--host <addr>` | Docker daemon address (e.g., `tcp://192.168.1.100:2375`) |
-| `--watch <s>` | Re-run query every N seconds |
-| `--explain` | Show the logical query plan without executing |
-| `--diff` | Compare query results with the last store snapshot |
-| `--completion <shell>` | Generate shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `--output <fmt>` | Output format: `table`, `json`, `csv`, `jsonl` (default: table) |
+| `--export <path>` | Write output to file (format inferred from extension: .csv, .json, .jsonl, .table) |
 | `--export-format <fmt>` | Export file format: `influx`, `loki`, `prometheus` (used with `--export`) |
+| `--host <addr>` | Docker daemon address (e.g., `tcp://192.168.1.100:2375`) |
+| `--watch <s>` | Re-run query every N seconds (batch queries only) |
+| `--explain` | Show the logical query plan without executing |
+| `--diff` | Compare query results with the last store snapshot (requires `--store`) |
+| `--completion <shell>` | Generate shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
 | `--export-influx <url>` | Push results to InfluxDB v1/v2 HTTP write API |
 | `--export-grafana-loki <url>` | Push results to Grafana Loki HTTP push API |
 | `--export-prometheus <url>` | Push results to Prometheus Pushgateway |
 | `repl` | Start interactive REPL shell with tab completion and history |
-| `top` | Live-updating TUI container monitor (top-like) with auto-refresh and keyboard controls |
-| `dashboard` | Multi-panel TUI dashboard with container list and live Docker events |
+| `top` | Live-updating TUI container monitor (top-like) with auto-refresh, keyboard controls, CPU/MEM gauge bars, and filter mode |
+| `dashboard` | Multi-panel TUI dashboard with container list, state distribution stats, and live Docker events |
 | `config init` | Create a default config file at the standard config path |
 | `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`) |
 | `config view` | Display the current merged configuration |

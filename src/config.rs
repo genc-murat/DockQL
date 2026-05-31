@@ -3,25 +3,13 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DolConfig {
     pub store: Option<String>,
     pub output: Option<String>,
     pub metrics_interval: Option<u64>,
     pub snapshot_interval: Option<u64>,
     pub host: Option<String>,
-}
-
-impl Default for DolConfig {
-    fn default() -> Self {
-        Self {
-            store: None,
-            output: None,
-            metrics_interval: None,
-            snapshot_interval: None,
-            host: None,
-        }
-    }
 }
 
 impl DolConfig {

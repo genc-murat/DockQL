@@ -192,10 +192,12 @@ pub fn metric_sample_from_stats_json(value: &Value) -> Result<MetricSample, Metr
     })
 }
 
+#[allow(clippy::result_unit_err)]
 pub fn parse_percent(value: &str) -> Result<f64, ()> {
     value.trim().trim_end_matches('%').parse().map_err(|_| ())
 }
 
+#[allow(clippy::result_unit_err)]
 pub fn parse_usage_pair(value: &str) -> Result<(Option<u64>, Option<u64>), ()> {
     let mut parts = value.split('/').map(str::trim);
     let left = parts.next().ok_or(())?;
@@ -207,6 +209,7 @@ pub fn parse_usage_pair(value: &str) -> Result<(Option<u64>, Option<u64>), ()> {
     ))
 }
 
+#[allow(clippy::result_unit_err)]
 pub fn parse_byte_quantity(value: &str) -> Result<Option<u64>, ()> {
     let value = value.trim();
     if value.is_empty() || value == "--" {

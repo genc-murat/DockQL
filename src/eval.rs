@@ -124,21 +124,19 @@ fn eval_expr_opt(
     match expression {
         Expression::Field(field) => fields.get(field).cloned().or_else(|| {
             // Also try label.xxx access
-            if let Some(label_key) = field.strip_prefix("label.") {
-                if let Some(JsonValue::Array(items)) = fields.get("labels") {
+            if let Some(label_key) = field.strip_prefix("label.")
+                && let Some(JsonValue::Array(items)) = fields.get("labels") {
                     for item in items {
-                        if let JsonValue::String(entry) = item {
-                            if let Some(eq_pos) = entry.find('=') {
+                        if let JsonValue::String(entry) = item
+                            && let Some(eq_pos) = entry.find('=') {
                                 let key = &entry[..eq_pos];
                                 let val = &entry[eq_pos + 1..];
                                 if key == label_key {
                                     return Some(JsonValue::String(val.to_owned()));
                                 }
                             }
-                        }
                     }
                 }
-            }
             None
         }),
         Expression::Literal(value) => Some(value_to_json(value)),
@@ -282,7 +280,7 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             Ok(JsonValue::String(s.trim().to_owned()))
         }
         "concat" => {
-            let result: String = args.iter().map(|v| render_json_cell(v)).collect();
+            let result: String = args.iter().map(render_json_cell).collect();
             Ok(JsonValue::String(result))
         }
         "substring" => {
@@ -296,7 +294,7 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
         }
         "coalesce" => {
             for arg in args {
-                if !matches!(arg, JsonValue::Null) && !(arg.is_string() && arg.as_str().unwrap_or("").is_empty()) {
+                if !(matches!(arg, JsonValue::Null) || arg.is_string() && arg.as_str().unwrap_or("").is_empty()) {
                     return Ok(arg.clone());
                 }
             }
@@ -322,15 +320,14 @@ fn resolve_field<'a>(
         match labels {
             JsonValue::Array(items) => {
                 for item in items {
-                    if let JsonValue::String(entry) = item {
-                        if let Some(eq_pos) = entry.find('=') {
+                    if let JsonValue::String(entry) = item
+                        && let Some(eq_pos) = entry.find('=') {
                             let key = &entry[..eq_pos];
                             let val = &entry[eq_pos + 1..];
                             if key == label_key {
                                 return Ok(Cow::Owned(JsonValue::String(val.to_owned())));
                             }
                         }
-                    }
                 }
             }
             JsonValue::String(s) => {
@@ -497,23 +494,24 @@ pub fn render_json_cell(value: &JsonValue) -> String {
     }
 }
 
-fn cmp_expr(field: &str, op: Operator, val: Value) -> Expression {
-    Expression::Comparison {
-        left: Box::new(Expression::Field(field.to_owned())),
-        operator: op,
-        right: Box::new(Expression::Literal(val)),
-    }
-}
 
-fn in_expr(field: &str, values: Vec<Value>) -> Expression {
-    Expression::In {
-        expr: Box::new(Expression::Field(field.to_owned())),
-        values,
-    }
-}
 
 #[cfg(test)]
 mod tests {
+    fn cmp_expr(field: &str, op: Operator, val: Value) -> Expression {
+        Expression::Comparison {
+            left: Box::new(Expression::Field(field.to_owned())),
+            operator: op,
+            right: Box::new(Expression::Literal(val)),
+        }
+    }
+
+    fn in_expr(field: &str, values: Vec<Value>) -> Expression {
+        Expression::In {
+            expr: Box::new(Expression::Field(field.to_owned())),
+            values,
+        }
+    }
     use super::*;
 
     fn fields(pairs: &[(&str, &str)]) -> BTreeMap<String, JsonValue> {

@@ -144,7 +144,7 @@ where
 
     let snapshot = store.snapshot_at_or_before(&timestamp)
         .map_err(ExecutorError::Telemetry)?
-        .ok_or_else(|| ExecutorError::SnapshotNotFound("historical_observe"))?;
+        .ok_or(ExecutorError::SnapshotNotFound("historical_observe"))?;
 
     let mut rows: Vec<Row> = match query.target {
         CollectionTarget::Containers => {
@@ -459,8 +459,8 @@ fn select_fields(row: Row, fields: &[String]) -> Result<Row, ExecutorError> {
         } else if let Some(label_key) = field.strip_prefix("label.") {
             if let Some(JsonValue::Array(items)) = row.fields.get("labels") {
                 for item in items {
-                    if let JsonValue::String(entry) = item {
-                        if let Some(eq_pos) = entry.find('=') {
+                    if let JsonValue::String(entry) = item
+                        && let Some(eq_pos) = entry.find('=') {
                             let key = &entry[..eq_pos];
                             let val = &entry[eq_pos + 1..];
                             if key == label_key {
@@ -468,7 +468,6 @@ fn select_fields(row: Row, fields: &[String]) -> Result<Row, ExecutorError> {
                                 break;
                             }
                         }
-                    }
                 }
             }
         } else {
@@ -487,21 +486,19 @@ fn sort_rows(rows: &mut [Row], fields: &[(String, SortDirection)]) -> Result<(),
         if let Some(v) = row.fields.get(field) {
             return Some(v.clone());
         }
-        if let Some(label_key) = field.strip_prefix("label.") {
-            if let Some(JsonValue::Array(items)) = row.fields.get("labels") {
+        if let Some(label_key) = field.strip_prefix("label.")
+            && let Some(JsonValue::Array(items)) = row.fields.get("labels") {
                 for item in items {
-                    if let JsonValue::String(entry) = item {
-                        if let Some(eq_pos) = entry.find('=') {
+                    if let JsonValue::String(entry) = item
+                        && let Some(eq_pos) = entry.find('=') {
                             let key = &entry[..eq_pos];
                             let val = &entry[eq_pos + 1..];
                             if key == label_key {
                                 return Some(JsonValue::String(val.to_owned()));
                             }
                         }
-                    }
                 }
             }
-        }
         None
     }
 
@@ -794,7 +791,7 @@ where
     let now = chrono::Utc::now().to_rfc3339();
     let snapshot = store.snapshot_at_or_before(&now)
         .map_err(ExecutorError::Telemetry)?
-        .ok_or_else(|| ExecutorError::SnapshotNotFound("diff"))?;
+        .ok_or(ExecutorError::SnapshotNotFound("diff"))?;
 
     let prev_ids: HashSet<&str> = snapshot.containers.iter().map(|c| c.id.as_str()).collect();
     let curr_ids: HashSet<&str> = current.rows.iter()
@@ -832,11 +829,10 @@ where
             if let Some(row) = current.rows.iter().find(|r| r.fields.get("id").and_then(|v| v.as_str()) == Some(id)) {
                 let name = row.fields.get("name").map(eval::render_json_cell).unwrap_or_default();
                 let state = row.fields.get("state").map(eval::render_json_cell).unwrap_or_default();
-                if let Some(prev_c) = snapshot.containers.iter().find(|c| c.id == *id) {
-                    if prev_c.state != state {
+                if let Some(prev_c) = snapshot.containers.iter().find(|c| c.id == *id)
+                    && prev_c.state != state {
                         lines.push(format!("  ~ {name}: {prev} -> {state}", prev = prev_c.state));
                     }
-                }
             }
         }
     }

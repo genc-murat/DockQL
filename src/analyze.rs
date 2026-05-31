@@ -476,7 +476,7 @@ where
     anomalies.extend(detect_unhealthy_states(&containers));
 
     // Sort by severity (Critical first).
-    anomalies.sort_by(|a, b| severity_rank(b.severity).cmp(&severity_rank(a.severity)));
+    anomalies.sort_by_key(|a| std::cmp::Reverse(severity_rank(a.severity)));
 
     if anomalies.is_empty() {
         Ok(ExecutionResult {
@@ -530,7 +530,7 @@ where
         thresholds.deployment_error_threshold,
     ));
 
-    anomalies.sort_by(|a, b| severity_rank(b.severity).cmp(&severity_rank(a.severity)));
+    anomalies.sort_by_key(|a| std::cmp::Reverse(severity_rank(a.severity)));
 
     if anomalies.is_empty() {
         Ok(ExecutionResult {
@@ -769,7 +769,7 @@ fn build_explanation(
 
         if count >= thresholds.restart_loop_count {
             anomalies.extend(detect_restart_loops(
-                &[container.clone()],
+                std::slice::from_ref(container),
                 thresholds.restart_loop_count,
             ));
         }
@@ -830,19 +830,19 @@ fn build_explanation(
 
         // Also run metric detectors for anomalies.
         anomalies.extend(detect_high_cpu(
-            &[s.clone()],
+            std::slice::from_ref(s),
             thresholds.high_cpu_percent,
             thresholds.critical_cpu_percent,
         ));
         anomalies.extend(detect_memory_pressure(
-            &[s.clone()],
+            std::slice::from_ref(s),
             thresholds.memory_pressure_ratio,
             thresholds.critical_memory_ratio,
         ));
     }
 
     // Unhealthy state.
-    anomalies.extend(detect_unhealthy_states(&[container.clone()]));
+    anomalies.extend(detect_unhealthy_states(std::slice::from_ref(container)));
 
     ContainerExplanation {
         container: container.name.clone(),
@@ -925,7 +925,7 @@ mod tests {
             status: if state == "running" {
                 "Up 2 minutes".to_owned()
             } else {
-                format!("Exited (1) 1 minute ago")
+                "Exited (1) 1 minute ago".to_string()
             },
             state: state.to_owned(),
             ports: Vec::new(),

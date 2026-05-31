@@ -158,11 +158,10 @@ where
     for event in source.events()? {
         let mut row = Some(event_row(event?));
 
-        if let Some(filter) = &query.filter {
-            if !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)? {
+        if let Some(filter) = &query.filter
+            && !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)? {
                 continue;
             }
-        }
 
         let mut keep = true;
         for node in &query.pipeline {
@@ -219,11 +218,10 @@ where
     for event in source.events()? {
         let mut row = Some(event_row(event?));
 
-        if let Some(filter) = &query.filter {
-            if !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)? {
+        if let Some(filter) = &query.filter
+            && !eval::evaluate_expression(&row.as_ref().expect("row is present").fields, filter)? {
                 continue;
             }
-        }
 
         let mut keep = true;
         for node in &query.pipeline {
@@ -314,8 +312,8 @@ where
 {
     let keys: Vec<Vec<String>> = group_counts.keys().cloned().collect();
     for key in keys {
-        if let Some(count) = group_counts.remove(&key) {
-            if let Some(mut row) = group_rows.remove(&key) {
+        if let Some(count) = group_counts.remove(&key)
+            && let Some(mut row) = group_rows.remove(&key) {
                 row.fields.insert("count".to_owned(), serde_json::json!(count));
                 on_row(row)?;
                 *emitted += 1;
@@ -323,7 +321,6 @@ where
                     break;
                 }
             }
-        }
     }
     Ok(())
 }

@@ -364,13 +364,15 @@ Interactive TUI monitors for live container observability.
 dol top
 ```
 
-Displays a full-screen table of all containers with auto-refresh every 2 seconds. Columns: NAME, IMAGE, STATE, STATUS.
+Displays a full-screen table of all containers with auto-refresh every 2 seconds. Columns: NAME, IMAGE, CPU (gauge bar), MEM (gauge bar), MEMORY (usage %), STATE, STATUS, RST (restart count). CPU and MEM gauge bars are color-coded: green (<50%), yellow (50–80%), red (>80%).
 
 Keyboard controls:
 - `↑`/`↓` or `j`/`k` — navigate rows
-- `s` — cycle sort column
+- `s` — cycle sort column (name, image, state, status)
 - `d` — toggle sort direction
 - `r` — force refresh
+- `/` — enter filter mode (filter containers by name, case-insensitive)
+- `h` — toggle help overlay
 - `q` / Esc — quit
 
 Color coding: running (green), exited/dead (red), paused (yellow), restarting (cyan).
@@ -381,11 +383,16 @@ Color coding: running (green), exited/dead (red), paused (yellow), restarting (c
 dol dashboard
 ```
 
-Split-screen view with containers list (top) and live Docker events (bottom). Events are polled from `docker events --until 5s`.
+Three-panel view:
+- **Left panel**: Container list with name, CPU%, memory usage, state
+- **Right panel**: State distribution histogram (running/exited/paused/other) with bar chart + top images by count
+- **Bottom panel**: Live Docker events stream (polled from `docker events --until 5s`)
 
 Keyboard controls:
-- `Tab` — switch panel focus
+- `Tab` — switch panel focus (containers / stats)
 - `r` — force refresh
+- `c` — clear events panel
+- `h` — toggle help overlay
 - `q` / Esc — quit
 
 ## 12. Arithmetic Expressions
@@ -409,7 +416,7 @@ observe containers | where (memory / 1073741824) > 1 | select name, memory
 
 ## 13. String Functions
 
-Apply string transformations with `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`.
+Apply string transformations with `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`.
 
 **Normalize names to uppercase:**
 ```dol
@@ -424,6 +431,11 @@ observe containers | set label = concat(name, ":", image) | select name, label
 **Filter by name length:**
 ```dol
 observe containers | where length(name) > 10 | select name
+```
+
+**Coalesce (first non-null value):**
+```dol
+observe containers | set display_name = coalesce(label.name, name, "unknown")
 ```
 
 ## 14. Range and Null Checks

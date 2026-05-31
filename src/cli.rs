@@ -148,25 +148,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         }
     }
 
-    let output_format = cli.output.unwrap_or_else(|| {
-        if let Some(ref ext) = cli.export.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase()) {
-            match ext.as_str() {
-                "json" => OutputFormat::Json,
-                "jsonl" | "jsonlines" => OutputFormat::Jsonl,
-                "csv" => OutputFormat::Csv,
-                _ => OutputFormat::Table,
-            }
-        } else if let Some(ref out) = config.output {
-            match out.to_lowercase().as_str() {
-                "json" => OutputFormat::Json,
-                "csv" => OutputFormat::Csv,
-                "jsonl" => OutputFormat::Jsonl,
-                _ => OutputFormat::Table,
-            }
-        } else {
-            OutputFormat::Table
-        }
-    });
+    let output_format = cli.output.unwrap_or(OutputFormat::Table);
 
     if let Some(shell) = cli.completion {
         let mut cmd = Cli::command();
@@ -367,7 +349,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             .store
             .as_deref()
             .or(config.store.as_deref())
-            .map(|path| SqliteTelemetryStore::open(path))
+            .map(SqliteTelemetryStore::open)
             .transpose()?
             .map(|s| Arc::new(Mutex::new(s)));
 
@@ -379,13 +361,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 _ = interval.tick() => {
                     let samples = metrics.collect()?;
 
-                    if let Some(ref store) = store {
-                        if let Ok(mut s) = store.lock() {
+                    if let Some(ref store) = store
+                        && let Ok(mut s) = store.lock() {
                             for sample in &samples {
                                 let _ = s.write_metric(sample.clone());
                             }
                         }
-                    }
 
                     let events = evaluator.evaluate_samples(rule, &samples, std::time::Instant::now())?;
                     for event in events {
@@ -409,14 +390,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             .store
             .as_deref()
             .or(config.store.as_deref())
-            .map(|path| SqliteTelemetryStore::open(path))
+            .map(SqliteTelemetryStore::open)
             .transpose()?
             .map(|s| Arc::new(Mutex::new(s)));
 
         return events::stream_events(events_query, &source, |row| {
-            if let Some(ref store) = store {
-                if let Ok(mut s) = store.lock() {
-                    if let (Some(time), Some(action)) = (
+            if let Some(ref store) = store
+                && let Ok(mut s) = store.lock()
+                    && let (Some(time), Some(action)) = (
                         row.fields.get("time").and_then(|v| v.as_str()),
                         row.fields.get("action").and_then(|v| v.as_str()),
                     ) {
@@ -449,8 +430,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                         };
                         let _ = s.write_event(event);
                     }
-                }
-            }
 
             let result = executor::ExecutionResult { rows: vec![row] };
             match output_format {

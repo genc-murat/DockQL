@@ -70,10 +70,8 @@ where
 
         loop {
             tokio::select! {
-                _ = shutdown.changed() => {
-                    if *shutdown.borrow() {
-                        break;
-                    }
+                _ = shutdown.changed(), if *shutdown.borrow() => {
+                    break;
                 }
                 _ = metrics_interval.tick() => {
                     collect_metrics(&store, &metrics_collector);
@@ -126,11 +124,10 @@ where
         volumes,
     };
 
-    if let Ok(mut store) = store.lock() {
-        if let Err(e) = store.write_snapshot(snapshot) {
+    if let Ok(mut store) = store.lock()
+        && let Err(e) = store.write_snapshot(snapshot) {
             eprintln!("[collector] snapshot write error: {e}");
         }
-    }
 }
 
 #[cfg(test)]

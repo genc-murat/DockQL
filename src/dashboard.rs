@@ -4,7 +4,7 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 use ratatui::{Frame, Terminal};
@@ -174,8 +174,8 @@ pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
         })?;
 
         if event::poll(Duration::from_millis(2000))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            if let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc if !in_filter_mode => should_quit = true,
                         KeyCode::Char('h') if !in_filter_mode => show_help = !show_help,
@@ -223,7 +223,6 @@ pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
                         _ => {}
                     }
                 }
-            }
         } else {
             let _ = refresh_all(
                 &docker,
@@ -240,6 +239,7 @@ pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_top(
     f: &mut Frame,
     containers: &[Container],
@@ -357,7 +357,7 @@ fn draw_container_table_top(
             Cell::from(Span::styled(c.image.clone(), Style::default())),
             Cell::from(Span::styled(cpu_bar, Style::default().fg(gauge_color(cpu_pct / 100.0)))),
             Cell::from(Span::styled(mem_bar, Style::default().fg(gauge_color(mem_pct / 100.0)))),
-            Cell::from(Span::styled(format!("{mem_str}") + " " + &format!("{:5.1}%", mem_pct), Style::default().fg(gauge_color(mem_pct / 100.0)))),
+            Cell::from(Span::styled(mem_str.to_string() + " " + &format!("{:5.1}%", mem_pct), Style::default().fg(gauge_color(mem_pct / 100.0)))),
             Cell::from(Span::styled(c.state.clone(), s_style)),
             Cell::from(Span::styled(c.status.clone(), Style::default())),
             Cell::from(Span::styled(
@@ -462,8 +462,8 @@ pub async fn run_dashboard(_config: &DolConfig) -> anyhow::Result<()> {
         })?;
 
         if event::poll(Duration::from_millis(2000))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            if let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc if !show_help => should_quit = true,
                         KeyCode::Char('h') => show_help = !show_help,
@@ -482,7 +482,6 @@ pub async fn run_dashboard(_config: &DolConfig) -> anyhow::Result<()> {
                         _ => {}
                     }
                 }
-            }
         } else {
             let _ = refresh_all(
                 &docker,
@@ -510,8 +509,7 @@ fn refresh_events(events: &mut Vec<ParsedEvent>) -> Result<(), anyhow::Error> {
     if let Ok(output) = std::process::Command::new("docker")
         .args(["events", "--until", "5s", "--format", "{{json .}}"])
         .output()
-    {
-        if output.status.success() {
+        && output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines().rev() {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
@@ -561,7 +559,6 @@ fn refresh_events(events: &mut Vec<ParsedEvent>) -> Result<(), anyhow::Error> {
                 events.drain(0..events.len() - 200);
             }
         }
-    }
     Ok(())
 }
 
@@ -646,7 +643,7 @@ fn draw_dash_container_panel(
     metrics_map: &HashMap<String, MetricSample>,
     focused: bool,
 ) {
-    let rows: Vec<Row> = containers.iter().take(area.height.saturating_sub(3).max(0) as usize).map(|c| {
+    let rows: Vec<Row> = containers.iter().take(area.height.saturating_sub(3) as usize).map(|c| {
         let s_style = Style::default().fg(state_color(&c.state));
         let metric = metrics_map.get(&c.name);
         let cpu_pct = metric.and_then(|m| m.cpu_percent).unwrap_or(0.0);
@@ -709,7 +706,7 @@ fn draw_dash_stats_panel(f: &mut Frame, area: Rect, containers: &[Container], fo
         *image_counts.entry(&c.image).or_insert(0) += 1;
     }
     let mut image_vec: Vec<(&str, usize)> = image_counts.into_iter().collect();
-    image_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    image_vec.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let max_w = 14usize;
     let mut lines = vec![
@@ -723,9 +720,9 @@ fn draw_dash_stats_panel(f: &mut Frame, area: Rect, containers: &[Container], fo
         ("paused", paused, Color::Yellow),
         ("other", other, Color::Blue),
     ] {
-        let bar_w = if total > 0 { (count * max_w / total).max(1).min(max_w) } else { 0 };
+        let bar_w = if total > 0 { (count * max_w).checked_div(total).map(|v| v.max(1).min(max_w)).unwrap_or(0) } else { 0 };
         let bar = "█".repeat(bar_w);
-        let pct = if total > 0 { count * 100 / total } else { 0 };
+        let pct = if total > 0 { (count * 100).checked_div(total).unwrap_or(0) } else { 0 };
         lines.push(Line::from(vec![
             Span::styled(format!(" {label:8} "), Style::default().fg(color)),
             Span::styled(bar, Style::default().fg(color)),
@@ -750,7 +747,7 @@ fn draw_dash_events_panel(f: &mut Frame, area: Rect, events: &[ParsedEvent]) {
     let lines: Vec<Line> = events
         .iter()
         .rev()
-        .take(area.height.saturating_sub(2).max(0) as usize)
+        .take(area.height.saturating_sub(2) as usize)
         .map(|e| {
             let action_color = event_action_color(&e.action);
             Line::from(vec![
