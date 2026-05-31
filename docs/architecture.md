@@ -6,49 +6,20 @@ This document outlines the high-level architecture of the Docker Observability L
 
 DOL is designed as a pipeline that reads query strings, parses them into an Abstract Syntax Tree (AST), plans execution against underlying data sources (Docker API, metrics, SQLite store), and presents results to the user.
 
-```text
-┌─────────────────┐
-│ User Input      │ (CLI, File, Config)
-└───────┬─────────┘
-        │
-        ▼
-┌─────────────────┐
-│ Parser          │ (Recursive Descent)
-└───────┬─────────┘
-        │
-        ▼ (AST)
-┌─────────────────┐
-│ Planner         │ (Filter push-down, plan display)
-└───────┬─────────┘
-        │
-        ▼ (LogicalPlan)
-┌─────────────────┐
-│ Executor        │
-│ Dispatcher      │
-└───────┬─────────┘
-        │
-   ┌────┼──────────────────────────────┐──────────────────────────────┐
-   ▼    ▼                              ▼                              ▼
-┌───────┴───────┐              ┌───────┴───────┐              ┌───────┴───────┐
-│ Docker Client │              │ Metrics Coll. │              │ Telemetry     │
-│ (Live State)  │              │ (Live Stats)  │              │ Store         │
-└───────┬───────┘              └───────┬───────┘              └───────┬───────┘
-   │    │                              │                              │
-   │    └──────────────────────────────┼──────────────────────────────┘
-   ▼                                   ▼
-┌──────────────────────────────────────┴──────────────────────────────────────┐
-│                            Query Pipeline Engine                            │
-│         (Where, Select, Sort, Limit, GroupBy, Having, Distinct,             │
-│          Offset, Set, If/Else, Arithmetic, Function Calls)                  │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼ (ExecutionResult)
-                                ┌──────┴────────┐
-                                │ Output        │
-                                │ Formatter     │
-                                │ (Table, CSV,  │
-                                │  JSON, JSONL) │
-                                └───────────────┘
+```mermaid
+flowchart TD
+    Input["User Input (CLI, File, Config)"] --> Parser["Parser (Recursive Descent)"]
+    Parser -->|AST| Planner["Planner (Filter push-down, plan display)"]
+    Planner -->|LogicalPlan| Executor["Executor / Dispatcher"]
+
+    Executor --> DockerClient["Docker Client (Live State)"]
+    Executor --> MetricsColl["Metrics Collector (Live Stats)"]
+    Executor --> TelemetryStore["Telemetry Store (SQLite)"]
+
+    DockerClient --> Pipeline["Query Pipeline Engine (Where, Select, Sort, Limit, GroupBy, Having, Distinct, Offset, Set, If/Else, Arithmetic, Function Calls)"]
+    MetricsColl --> Pipeline
+
+    Pipeline -->|ExecutionResult| Output["Output Formatter (Table, CSV, JSON, JSONL)"]
 ```
 
 ## Core Components
