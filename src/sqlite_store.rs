@@ -391,9 +391,7 @@ impl TelemetryStore for SqliteTelemetryStore {
     fn all_snapshots(&self) -> Result<Vec<TelemetrySnapshot>, TelemetryError> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT data FROM snapshots ORDER BY timestamp ASC",
-            )
+            .prepare("SELECT data FROM snapshots ORDER BY timestamp ASC")
             .map_err(|e| TelemetryError::Storage(e.to_string()))?;
 
         let rows = stmt

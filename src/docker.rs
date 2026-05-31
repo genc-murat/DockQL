@@ -144,13 +144,14 @@ pub struct RealCommandRunner;
 impl CommandRunner for RealCommandRunner {
     fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError> {
         let command_display = format_command_str(bin, args);
-        let output = Command::new(bin)
-            .args(args)
-            .output()
-            .map_err(|source| DockerError::CommandIo {
-                command: command_display,
-                source,
-            })?;
+        let output =
+            Command::new(bin)
+                .args(args)
+                .output()
+                .map_err(|source| DockerError::CommandIo {
+                    command: command_display,
+                    source,
+                })?;
         Ok(RunOutput {
             success: output.status.success(),
             exit_code: output.status.code(),
@@ -181,10 +182,7 @@ impl DockerCliClient {
     }
 
     /// Create a client with a custom command runner (useful for testing).
-    pub fn with_runner(
-        docker_bin: impl Into<String>,
-        cmd_runner: Box<dyn CommandRunner>,
-    ) -> Self {
+    pub fn with_runner(docker_bin: impl Into<String>, cmd_runner: Box<dyn CommandRunner>) -> Self {
         Self {
             docker_bin: docker_bin.into(),
             cmd_runner,
@@ -409,9 +407,7 @@ fn container_from_inspect_json(value: &Value) -> Result<Container, DockerError> 
         .and_then(|v| v.as_object())
         .map(|obj| {
             obj.iter()
-                .map(|(k, v)| {
-                    format!("{}={}", k, v.as_str().unwrap_or(""))
-                })
+                .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or("")))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -430,14 +426,9 @@ fn container_from_inspect_json(value: &Value) -> Result<Container, DockerError> 
                         arr.unwrap()
                             .iter()
                             .map(|b| {
-                                let host_ip = b
-                                    .get("HostIp")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("");
-                                let host_port = b
-                                    .get("HostPort")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("");
+                                let host_ip = b.get("HostIp").and_then(Value::as_str).unwrap_or("");
+                                let host_port =
+                                    b.get("HostPort").and_then(Value::as_str).unwrap_or("");
                                 if host_port.is_empty() {
                                     container_port.clone()
                                 } else if host_ip.is_empty() || host_ip == "0.0.0.0" {
@@ -777,7 +768,10 @@ mod tests {
     #[test]
     fn mock_container_logs_by_id() {
         let mut logs = std::collections::HashMap::new();
-        logs.insert("abc123".to_owned(), vec!["line1".to_owned(), "line2".to_owned()]);
+        logs.insert(
+            "abc123".to_owned(),
+            vec!["line1".to_owned(), "line2".to_owned()],
+        );
 
         let client = MockDockerClient {
             containers: vec![Container {
@@ -823,13 +817,14 @@ mod tests {
     impl CommandRunner for MockCommandRunner {
         fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError> {
             let key = format_command_str(bin, args);
-            self.outputs.get(&key).cloned().ok_or_else(|| {
-                DockerError::CommandFailed {
+            self.outputs
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| DockerError::CommandFailed {
                     command: key,
                     code: None,
                     stderr: "no mock output defined for this command".to_owned(),
-                }
-            })
+                })
         }
     }
 

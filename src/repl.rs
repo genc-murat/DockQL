@@ -39,7 +39,7 @@ impl Completer for DolHelper {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
-        let        keywords = [
+        let keywords = [
             "observe",
             "events",
             "inspect",
@@ -361,10 +361,7 @@ mod tests {
         // and isn't a parse error.
         if let Err(ref e) = result {
             let msg = e.to_string();
-            assert!(
-                !msg.contains("parse"),
-                "should not be a parse error: {msg}"
-            );
+            assert!(!msg.contains("parse"), "should not be a parse error: {msg}");
         }
     }
 }

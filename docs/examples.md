@@ -187,7 +187,37 @@ success, or `status: error` with details on failure.
 ping
 ```
 
-## 6. Alerting and Monitoring (`alert`)
+## 6. Docker Compose Projects (`compose`)
+
+Query containers within a Docker Compose project. The `compose` query family
+automatically filters by the `com.docker.compose.project` label.
+
+**List all containers in a compose project:**
+```dol
+compose myapp
+```
+
+**List services (adds a `service` field):**
+```dol
+compose myapp services
+```
+
+**Use `observe compose` syntax:**
+```dol
+observe compose myapp
+```
+
+**Compose with pipeline filtering:**
+```dol
+compose myapp | where cpu > 80% | select name, service, cpu | sort cpu desc
+```
+
+**Compose with alert:**
+```dol
+alert when compose_project = 'myapp' and cpu > 85% for 2m then print "High CPU in myapp"
+```
+
+## 7. Alerting and Monitoring (`alert`)
 
 Alerts run continuously and trigger actions when conditions are met for a duration.
 
@@ -240,7 +270,7 @@ Each metrics collection cycle is individually timed out. If `docker stats` doesn
 When `--watch` is used with an alert query, the watch interval controls the
 evaluation cadence instead of the default 5-second loop.
 
-## 7. Streaming and Event History (`events`)
+## 8. Streaming and Event History (`events`)
 
 `events` lets you tap into the Docker event bus. All resource types are supported: containers, images, networks, and volumes.
 
@@ -297,7 +327,7 @@ events containers
     where action = "oom"
 ```
 
-## 8. Time Travel (`inspect ... at` / `observe ... last`)
+## 9. Time Travel (`inspect ... at` / `observe ... last`)
 
 Historical queries allow you to view the exact state of containers as they were at a specific moment in the past. Requires `--store`.
 
@@ -326,7 +356,7 @@ observe containers last 10m
 observe containers at "2026-05-30 12:00:00Z"
 ```
 
-## 9. Automated Insights (`analyze`)
+## 10. Automated Insights (`analyze`)
 
 The deterministic analysis engine automatically surfaces problems without writing complex queries.
 
@@ -360,7 +390,7 @@ analyze containers find leaks
 analyze containers find drift
 ```
 
-## 10. Complex Pipelines
+## 11. Complex Pipelines
 
 You can chain multiple operations together using the `|` pipe operator.
 Data flows from left to right through each stage.
@@ -408,7 +438,7 @@ observe containers
     | select name, compose_project, state
 ```
 
-## 11. Interactive REPL
+## 12. Interactive REPL
 
 Start an interactive shell with `dol repl`. Tab completion, command history, and REPL commands available.
 
@@ -433,7 +463,7 @@ dol> .help
 | `.export <path>` | Set export file path |
 | `.output <fmt>` | Set output format |
 
-## 12. Config Management
+## 13. Config Management
 
 Create and manage DOL configuration:
 
@@ -451,7 +481,7 @@ dol config view
 
 Supported config keys: `store`, `output`, `host`, `metrics-interval`, `snapshot-interval`.
 
-## 13. Terminal Dashboard
+## 14. Terminal Dashboard
 
 Interactive TUI monitors for live container observability.
 
@@ -492,7 +522,7 @@ Keyboard controls:
 - `h` — toggle help overlay
 - `q` / Esc — quit
 
-## 14. Arithmetic Expressions
+## 15. Arithmetic Expressions
 
 Compute new fields using arithmetic with `+`, `-`, `*`, `/`, `%`.
 
@@ -511,7 +541,7 @@ observe containers | set mem_pct = (memory / memory_limit) * 100 | select name, 
 observe containers | where (memory / 1073741824) > 1 | select name, memory
 ```
 
-## 15. String Functions
+## 16. String Functions
 
 Apply string transformations with `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`.
 
@@ -535,7 +565,7 @@ observe containers | where length(name) > 10 | select name
 observe containers | set display_name = coalesce(label.name, name, "unknown")
 ```
 
-## 16. Range and Null Checks
+## 17. Range and Null Checks
 
 **Between operator for inclusive range checks:**
 ```dol
@@ -552,7 +582,7 @@ observe containers where finished_at is not null | select name, finished_at
 observe containers where compose_project is null | select name
 ```
 
-## 17. Aggregation with Functions
+## 18. Aggregation with Functions
 
 Group by with `sum`, `count`, `avg`, `min`, `max`.
 
@@ -571,7 +601,7 @@ observe containers | group by state with count(id) as cnt | having cnt > 1
 observe containers | group by compose_project with sum(memory) as total_mem | sort by total_mem desc
 ```
 
-## 18. Multi-Field Sort
+## 19. Multi-Field Sort
 
 Sort by multiple fields with independent direction per field.
 
@@ -588,7 +618,7 @@ observe containers | sort by state desc, cpu desc | select name, state, cpu
 observe containers | sort by image asc, name asc | select name, image
 ```
 
-## 19. Distinct and Offset
+## 20. Distinct and Offset
 
 **Remove duplicate rows (distinct):**
 ```dol
@@ -603,7 +633,7 @@ observe containers | sort by name asc | offset 5 | limit 5 | select name
 > The [Tutorial](tutorial.md#5-sorting-and-limits) covers sort, limit, offset,
 > and distinct with a step-by-step progression.
 
-## 20. Inline Comments
+## 21. Inline Comments
 
 Comments start with `#` and extend to end of line.
 
@@ -613,7 +643,7 @@ observe containers          # list all containers
     | select name, image    # just these columns
 ```
 
-## 21. External Integrations
+## 22. External Integrations
 
 Push query results directly to external monitoring systems.
 

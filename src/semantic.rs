@@ -135,6 +135,16 @@ impl SemanticAnalyzer {
                     self.apply_pipeline_node(node)?;
                 }
             }
+            Query::Compose(q) => {
+                // When targeting services, add the 'service' field to schema
+                if q.target == crate::ast::ComposeTarget::Services {
+                    self.active_schema
+                        .insert("service".to_owned(), Type::String);
+                }
+                for node in &q.pipeline {
+                    self.apply_pipeline_node(node)?;
+                }
+            }
             Query::Ping => {}
             Query::Inspect(_) | Query::Fields(_) => {}
         }
@@ -411,6 +421,7 @@ pub fn validate_semantics(query: &Query) -> Result<(), EvalError> {
         },
         Query::Alert(_) => CollectionTarget::Containers,
         Query::Logs(_) => CollectionTarget::Containers,
+        Query::Compose(_) => CollectionTarget::Containers,
         Query::Ping => CollectionTarget::Containers,
         Query::Inspect(_) | Query::Fields(_) => return Ok(()),
     };
@@ -491,10 +502,8 @@ mod tests {
 
     #[test]
     fn test_if_without_else() {
-        let parsed = parser::parse(
-            "observe containers | if cpu > 90% then alert \"high\"",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if cpu > 90% then alert \"high\"").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -511,10 +520,9 @@ mod tests {
 
     #[test]
     fn test_if_function_condition() {
-        let parsed = parser::parse(
-            "observe containers | if upper(name) = \"API\" then set found = true",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if upper(name) = \"API\" then set found = true")
+                .unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -531,10 +539,9 @@ mod tests {
 
     #[test]
     fn test_if_with_select_in_branch() {
-        let parsed = parser::parse(
-            "observe containers | if state = running then select name, state, cpu",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if state = running then select name, state, cpu")
+                .unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -551,10 +558,8 @@ mod tests {
 
     #[test]
     fn test_if_with_distinct_in_branch() {
-        let parsed = parser::parse(
-            "observe containers | if state = running then distinct",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if state = running then distinct").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -613,20 +618,16 @@ mod tests {
 
     #[test]
     fn test_if_invalid_field_in_condition() {
-        let parsed = parser::parse(
-            "observe containers | if nonexistent > 50 then alert \"bad\"",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if nonexistent > 50 then alert \"bad\"").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
     }
 
     #[test]
     fn test_if_invalid_comparison_in_condition() {
-        let parsed = parser::parse(
-            "observe containers | if state > 50 then alert \"bad\"",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if state > 50 then alert \"bad\"").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::InvalidComparison { .. })));
     }
@@ -645,10 +646,9 @@ mod tests {
     #[test]
     fn test_if_select_nonexistent_in_branch() {
         // select with nonexistent field inside a branch should fail
-        let parsed = parser::parse(
-            "observe containers | if cpu > 90% then select name, nonexistent",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if cpu > 90% then select name, nonexistent")
+                .unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
     }
@@ -656,10 +656,8 @@ mod tests {
     #[test]
     fn test_if_invalid_field_in_branch() {
         // Invalid field in where inside then branch
-        let parsed = parser::parse(
-            "observe containers | if cpu > 90% then where nonexistent = 1",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if cpu > 90% then where nonexistent = 1").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
     }
@@ -667,10 +665,8 @@ mod tests {
     #[test]
     fn test_if_invalid_arithmetic_in_branch_set() {
         // Invalid arithmetic inside then branch (string + integer)
-        let parsed = parser::parse(
-            "observe containers | if cpu > 90% then set val = state + 1",
-        )
-        .unwrap();
+        let parsed =
+            parser::parse("observe containers | if cpu > 90% then set val = state + 1").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::Arithmetic(_))));
     }
@@ -721,5 +717,55 @@ mod tests {
         let parsed = parser::parse("observe volumes | select name, scope").unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_valid_query() {
+        let parsed = parser::parse("compose myapp | where cpu > 50% | select name, cpu").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_invalid_field() {
+        let parsed = parser::parse("compose myapp | where nonexistent_field = 1").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_compose_services_service_field_available() {
+        let parsed = parser::parse("compose myapp services | select name, service").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_services_where_service() {
+        let parsed = parser::parse("compose myapp services | where service = \"api\"").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_set_and_select() {
+        let parsed =
+            parser::parse("compose myapp | set tier = \"prod\" | select name, tier").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_group_by() {
+        let parsed = parser::parse("compose myapp | group by state with count(id) as cnt").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_compose_invalid_comparison() {
+        let parsed = parser::parse("compose myapp | where state > 50").unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::InvalidComparison { .. })));
     }
 }

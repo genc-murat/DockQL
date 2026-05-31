@@ -11,6 +11,7 @@ pub enum LogicalPlan {
     Events(EventsPlan),
     Inspect(InspectPlan),
     Logs(LogsPlan),
+    Compose(ComposePlan),
     Ping,
     Analyze(AnalyzePlan),
     Alert(AlertPlan),
@@ -46,6 +47,13 @@ pub struct AnalyzePlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AlertPlan {
     pub rule: AlertRule,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComposePlan {
+    pub project: String,
+    pub target: crate::ast::ComposeTarget,
+    pub steps: Vec<PlanStep>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +148,17 @@ impl fmt::Display for LogicalPlan {
                 }
                 Ok(())
             }
+            LogicalPlan::Compose(p) => {
+                writeln!(
+                    f,
+                    "ComposePlan {{ project: {}, target: {:?} }}",
+                    p.project, p.target
+                )?;
+                for step in &p.steps {
+                    writeln!(f, "  {step}")?;
+                }
+                Ok(())
+            }
             LogicalPlan::Ping => {
                 writeln!(f, "Ping {{ test Docker connectivity }}")
             }
@@ -203,6 +222,7 @@ pub fn plan(query: &Query) -> Result<LogicalPlan, PlanError> {
         Query::Inspect(q) => plan_inspect(q),
         Query::Analyze(q) => plan_analyze(q),
         Query::Alert(rule) => Ok(LogicalPlan::Alert(AlertPlan { rule: rule.clone() })),
+        Query::Compose(q) => plan_compose(q),
         Query::Logs(q) => plan_logs(q),
         Query::Ping => Ok(LogicalPlan::Ping),
         Query::Fields(target) => Ok(LogicalPlan::Fields(*target)),
@@ -266,6 +286,20 @@ fn plan_logs(query: &LogsQuery) -> Result<LogicalPlan, PlanError> {
     Ok(LogicalPlan::Logs(LogsPlan {
         container: query.container.clone(),
         tail: query.tail,
+        steps,
+    }))
+}
+
+fn plan_compose(query: &crate::ast::ComposeQuery) -> Result<LogicalPlan, PlanError> {
+    let mut steps = Vec::new();
+
+    for node in &query.pipeline {
+        steps.push(node_to_step(node));
+    }
+
+    Ok(LogicalPlan::Compose(ComposePlan {
+        project: query.project.clone(),
+        target: query.target,
         steps,
     }))
 }
@@ -461,5 +495,54 @@ mod tests {
         assert!(matches!(steps[0], PlanStep::Fetch(_)));
         assert!(matches!(steps[1], PlanStep::Filter(_)));
         assert!(matches!(steps[2], PlanStep::Select(_)));
+    }
+
+    #[test]
+    fn plans_compose_query() {
+        let q = parser::parse("compose myapp").unwrap();
+        let p = plan(&q.query).unwrap();
+        if let LogicalPlan::Compose(cp) = p {
+            assert_eq!(cp.project, "myapp");
+            assert_eq!(cp.target, crate::ast::ComposeTarget::Containers);
+            assert!(cp.steps.is_empty());
+        } else {
+            panic!("expected Compose plan, got {:?}", p);
+        }
+    }
+
+    #[test]
+    fn plans_compose_services_with_pipeline() {
+        let q =
+            parser::parse("compose myapp services | where cpu > 80% | select name, cpu").unwrap();
+        let p = plan(&q.query).unwrap();
+        if let LogicalPlan::Compose(cp) = p {
+            assert_eq!(cp.project, "myapp");
+            assert_eq!(cp.target, crate::ast::ComposeTarget::Services);
+            assert_eq!(cp.steps.len(), 2);
+        } else {
+            panic!("expected Compose plan, got {:?}", p);
+        }
+    }
+
+    #[test]
+    fn plans_compose_with_sort_limit() {
+        let q = parser::parse("compose myapp | sort by name asc | limit 5").unwrap();
+        let p = plan(&q.query).unwrap();
+        if let LogicalPlan::Compose(cp) = p {
+            assert_eq!(cp.steps.len(), 2);
+            assert!(matches!(cp.steps[0], PlanStep::SortBy { .. }));
+            assert!(matches!(cp.steps[1], PlanStep::Limit(5)));
+        } else {
+            panic!("expected Compose plan, got {:?}", p);
+        }
+    }
+
+    #[test]
+    fn compose_plan_display() {
+        let q = parser::parse("compose myapp services").unwrap();
+        let p = plan(&q.query).unwrap();
+        let s = format!("{p}");
+        assert!(s.contains("myapp"));
+        assert!(s.contains("Services"));
     }
 }

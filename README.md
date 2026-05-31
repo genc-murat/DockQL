@@ -18,12 +18,15 @@ dol "observe containers | where cpu > 80% | select name, image, cpu | sort cpu d
 dol "events containers | where action = die | limit 10"
 dol "logs container my-app tail 50"
 dol "ping"
+dol "compose myapp services"
+dol "observe compose myapp | where cpu > 80%"
 dol "observe containers | group by state"
 ```
 
 ## Features
 
 - **Live observation** — query containers, images, networks, volumes with filtering, sorting, and aggregation
+- **Docker Compose** — query containers by compose project with `compose <project>` or `observe compose <project>` syntax
 - **Real-time events** — stream Docker events with pipeline filters and group-by aggregation
 - **Historical inspection** — inspect container state at any point in the past (requires `--store`)
 - **Historical observe** — query past container states with `observe containers last 5m`
@@ -388,6 +391,7 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 ### Targets
 
 - `observe containers` / `images` / `networks` / `volumes`
+- `compose <project> [services|containers]` — query containers in a Docker Compose project (also `observe compose <project>`)
 - `events containers` / `images` / `networks` / `volumes`
 - `inspect container <name>` / `image <name>` (with optional `at "<time>"`)
 - `logs container <name> [tail <n>]` — view container logs (default: last 100 lines)
@@ -439,7 +443,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ### Container Fields
 
-`id`, `name`, `image`, `status`, `state`, `ports`, `labels`, `created_at`, `started_at`, `finished_at`, `cpu`, `memory`, `memory_limit`, `restart_count`, `network_rx`, `network_tx`, `disk_read`, `disk_write`, `compose_project`
+`id`, `name`, `image`, `status`, `state`, `ports`, `labels`, `created_at`, `started_at`, `finished_at`, `cpu`, `memory`, `memory_limit`, `restart_count`, `network_rx`, `network_tx`, `disk_read`, `disk_write`, `compose_project` (auto-populated for Compose containers)
 
 ### CLI Flags
 
@@ -472,7 +476,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ## Examples
 
-58 example queries are available in [`examples/`](examples/):
+62 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers
@@ -492,6 +496,9 @@ logs container my-app
 logs container my-app tail 50
 logs container my-app tail 200 | where message contains "error" | select line, message
 ping
+compose myapp
+compose myapp services
+compose myapp | where cpu > 80% | select name, cpu
 analyze containers find anomalies
 alert when cpu > 85% for 2m then print High CPU
 observe containers | set severity = case when cpu > 80% then "critical" else "ok" end

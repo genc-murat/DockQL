@@ -268,7 +268,7 @@ observe containers          # list all containers
 
 ---
 
-## 7. Working with Labels
+## 7. Working with Labels & Docker Compose
 
 Docker labels are key-value pairs attached to containers. DOL gives you two
 ways to work with them.
@@ -289,6 +289,9 @@ dol "observe containers | where label.com.docker.compose.project = 'myapp'"
 
 **Docker Compose projects:**
 
+The `compose_project` field is automatically populated for containers started
+by Docker Compose:
+
 ```bash
 # List all compose project names
 dol "observe containers | select name, compose_project"
@@ -296,6 +299,28 @@ dol "observe containers | select name, compose_project"
 # Filter by compose project
 dol "observe containers | where compose_project = 'myapp' | select name, state"
 ```
+
+**Dedicated `compose` query family:**
+
+DOL also has a dedicated query family for working with Compose projects.
+These queries filter containers by the compose project label automatically:
+
+```bash
+# List all containers in the 'myapp' project
+dol "compose myapp"
+
+# List services in a compose project (adds a 'service' field)
+dol "compose myapp services"
+
+# Pipeline on compose results
+dol "compose myapp | where cpu > 80% | select name, service, cpu | sort cpu desc"
+
+# Alternative syntax using 'observe compose'
+dol "observe compose myapp"
+```
+
+The `observe compose <project>` syntax is also supported, making it read
+consistently with other `observe` sub-queries like `observe containers`.
 
 ---
 

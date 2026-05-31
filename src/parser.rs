@@ -1,9 +1,10 @@
 use serde::Serialize;
 
 use crate::ast::{
-    AlertAction, AlertRule, AnalysisTarget, AnalysisVerb, BinOp, CollectionTarget, Duration,
-    DurationUnit, EventsQuery, Expression, InspectQuery, LogsQuery, Operator, PipelineNode, Query,
-    SetValue, SingularTarget, SingularTargetKind, SortDirection, TimeSelector, Value,
+    AlertAction, AlertRule, AnalysisTarget, AnalysisVerb, BinOp, CollectionTarget, ComposeTarget,
+    Duration, DurationUnit, EventsQuery, Expression, InspectQuery, LogsQuery, Operator,
+    PipelineNode, Query, SetValue, SingularTarget, SingularTargetKind, SortDirection, TimeSelector,
+    Value,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -147,6 +148,7 @@ impl Parser {
             Some("analyze") => self.parse_analyze(),
             Some("alert") => self.parse_alert_rule().map(Query::Alert),
             Some("logs") => self.parse_logs(),
+            Some("compose") => self.parse_compose(),
             Some("ping") => {
                 self.advance();
                 Ok(Query::Ping)
@@ -161,6 +163,22 @@ impl Parser {
 
     fn parse_observe(&mut self) -> Result<Query, ParseError> {
         self.expect_ident("observe")?;
+        // Support "observe compose <project>" syntax
+        if self.consume_ident("compose") {
+            let project = self.expect_identifier_like("compose project name")?;
+            let target = if self.consume_ident("services") {
+                ComposeTarget::Services
+            } else {
+                self.consume_ident("containers");
+                ComposeTarget::Containers
+            };
+            let pipeline = self.parse_pipeline()?;
+            return Ok(Query::Compose(crate::ast::ComposeQuery {
+                project,
+                target,
+                pipeline,
+            }));
+        }
         let target = self.parse_collection_target()?;
         let time = self.parse_optional_time_selector()?;
         let filter = self.parse_optional_inline_where()?;
@@ -234,6 +252,23 @@ impl Parser {
             duration,
             action,
         })
+    }
+
+    fn parse_compose(&mut self) -> Result<Query, ParseError> {
+        self.expect_ident("compose")?;
+        let project = self.expect_identifier_like("compose project name")?;
+        let target = if self.consume_ident("services") {
+            ComposeTarget::Services
+        } else {
+            self.consume_ident("containers");
+            ComposeTarget::Containers
+        };
+        let pipeline = self.parse_pipeline()?;
+        Ok(Query::Compose(crate::ast::ComposeQuery {
+            project,
+            target,
+            pipeline,
+        }))
     }
 
     fn parse_logs(&mut self) -> Result<Query, ParseError> {
@@ -1481,7 +1516,10 @@ mod tests {
         let err = parse("observe containers where").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("-->"));
-        assert!(msg.contains("^"), "error display should have a pointer: {msg}");
+        assert!(
+            msg.contains("^"),
+            "error display should have a pointer: {msg}"
+        );
         assert!(
             msg.contains("observe containers where"),
             "error display should show the source query: {msg}"
@@ -1494,7 +1532,10 @@ mod tests {
         let err = parse("observe containers | where | sort by cpu").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("-->"));
-        assert!(msg.contains("^"), "error display should have a pointer: {msg}");
+        assert!(
+            msg.contains("^"),
+            "error display should have a pointer: {msg}"
+        );
         assert!(
             msg.contains("observe containers | where | sort by cpu"),
             "error display should show the source query: {msg}"
@@ -1624,6 +1665,131 @@ mod tests {
             panic!("expected Observe")
         };
         assert!(matches!(o.pipeline[0], PipelineNode::Distinct));
+    }
+
+    #[test]
+    fn parses_compose_query() {
+        let q = parse_one("compose myapp");
+        assert!(matches!(q.query, Query::Compose(_)));
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Containers);
+            assert!(c.pipeline.is_empty());
+        }
+    }
+
+    #[test]
+    fn parses_compose_services() {
+        let q = parse_one("compose myapp services");
+        assert!(matches!(q.query, Query::Compose(_)));
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Services);
+        }
+    }
+
+    #[test]
+    fn parses_observe_compose() {
+        let q = parse_one("observe compose myapp");
+        assert!(matches!(q.query, Query::Compose(_)));
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Containers);
+        }
+    }
+
+    #[test]
+    fn parses_compose_with_pipeline() {
+        let q = parse_one("compose myapp | where cpu > 80% | select name, cpu");
+        assert!(matches!(q.query, Query::Compose(_)));
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.pipeline.len(), 2);
+        }
+    }
+
+    #[test]
+    fn parses_compose_containers_explicit() {
+        let q = parse_one("compose myapp containers");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Containers);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_observe_compose_services() {
+        let q = parse_one("observe compose myapp services");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Services);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_compose_with_sort_limit() {
+        let q = parse_one("compose myapp services | sort by name asc | limit 5");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "myapp");
+            assert_eq!(c.target, ComposeTarget::Services);
+            assert_eq!(c.pipeline.len(), 2);
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_compose_with_group_by() {
+        let q = parse_one("compose myapp | group by state with count(id) as cnt");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.pipeline.len(), 1);
+            assert!(matches!(c.pipeline[0], PipelineNode::GroupBy { .. }));
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_compose_with_where_and_select() {
+        let q = parse_one("compose myapp | where state = \"running\" | select name, image, state");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.pipeline.len(), 2);
+            assert!(matches!(c.pipeline[0], PipelineNode::Where(_)));
+            assert!(matches!(c.pipeline[1], PipelineNode::Select(_)));
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_compose_with_distinct() {
+        let q = parse_one("compose myapp | select image | distinct");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.pipeline.len(), 2);
+            assert!(matches!(c.pipeline[1], PipelineNode::Distinct));
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn parses_compose_hyphenated_project() {
+        let q = parse_one("compose my-app-v2");
+        if let Query::Compose(ref c) = q.query {
+            assert_eq!(c.project, "my-app-v2");
+        } else {
+            panic!("expected Compose");
+        }
+    }
+
+    #[test]
+    fn rejects_compose_without_project() {
+        let result = parse("compose");
+        assert!(result.is_err());
     }
 
     #[test]

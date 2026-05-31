@@ -379,13 +379,14 @@ $ dol <span class="str">"observe containers | where cpu > 80% | sort cpu desc | 
 └──────────────┴──────────────────┴──────┘
 
 <span class="cmt"># Stream container crash events</span>
-$ dol <span class="str">"events containers where action = die | select time, container, image"</span>
-
-<span class="cmt"># View container logs</span>
+$ dol <span class="str">"events containers where action = die | select time, container, image"</span>            <span class="cmt"># View container logs</span>
 $ dol <span class="str">"logs container my-app tail 50"</span>
 
 <span class="cmt"># Check Docker daemon connectivity</span>
-$ dol <span class="str">"ping"</span></pre>
+$ dol <span class="str">"ping"</span>
+
+<span class="cmt"># Query Docker Compose project containers</span>
+$ dol <span class="str">"compose myapp | where cpu > 80% | select name, cpu"</span></pre>
     </div>
 
     <!-- Features -->
@@ -398,6 +399,7 @@ $ dol <span class="str">"ping"</span></pre>
             <div class="feature-item"><span class="icon"></span>Alerting with duration guards</div>
             <div class="feature-item"><span class="icon"></span>Container log retrieval (logs)</div>
             <div class="feature-item"><span class="icon"></span>Docker daemon connectivity check (ping)</div>
+            <div class="feature-item"><span class="icon"></span>Docker Compose project queries (compose)</div>
             <div class="feature-item"><span class="icon"></span>Anomaly detection engine</div>
             <div class="feature-item"><span class="icon"></span>Persistent SQLite telemetry store</div>
             <div class="feature-item"><span class="icon"></span>Static semantic analysis &amp; type checking</div>

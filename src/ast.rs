@@ -9,6 +9,7 @@ pub enum Query {
     Alert(AlertRule),
     Fields(CollectionTarget),
     Logs(LogsQuery),
+    Compose(ComposeQuery),
     Ping,
 }
 
@@ -32,6 +33,19 @@ pub struct EventsQuery {
 pub struct InspectQuery {
     pub target: SingularTarget,
     pub at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ComposeQuery {
+    pub project: String,
+    pub target: ComposeTarget,
+    pub pipeline: Vec<PipelineNode>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+pub enum ComposeTarget {
+    Containers,
+    Services,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

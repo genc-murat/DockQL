@@ -196,25 +196,35 @@ where
     match (&query.target, &query.verb, query.subject.as_deref()) {
         // analyze containers find anomalies (default)
         (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, None)
-        | (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("anomalies")) => {
-            find_container_anomalies(docker, metrics, thresholds)
-        }
+        | (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("anomalies"),
+        ) => find_container_anomalies(docker, metrics, thresholds),
         // analyze containers find dependencies
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("dependencies")) => {
-            analyze_dependencies(docker)
-        }
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("dependencies"),
+        ) => analyze_dependencies(docker),
         // analyze containers find density
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("density")) => {
-            analyze_density(docker)
-        }
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("density"),
+        ) => analyze_density(docker),
         // analyze containers find leaks — requires store, return error
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("leaks")) => {
-            Err(AnalyzeError::Unsupported)
-        }
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("leaks"),
+        ) => Err(AnalyzeError::Unsupported),
         // analyze containers find drift — requires store, return error
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("drift")) => {
-            Err(AnalyzeError::Unsupported)
-        }
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("drift"),
+        ) => Err(AnalyzeError::Unsupported),
         // analyze containers correlate
         (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Correlate, _) => {
             correlate_containers(docker, metrics, thresholds)
@@ -246,22 +256,33 @@ where
     match (&query.target, &query.verb, query.subject.as_deref()) {
         // analyze containers find anomalies (default, from store)
         (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, None)
-        | (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("anomalies")) => {
-            find_anomalies_from_store(store, &thresholds)
-        }
+        | (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("anomalies"),
+        ) => find_anomalies_from_store(store, &thresholds),
         // analyze containers find leaks (from store)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("leaks")) => {
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("leaks"),
+        ) => {
             let anomalies = detect_resource_leaks(store, &thresholds);
             if anomalies.is_empty() {
                 Ok(ExecutionResult {
                     rows: vec![Row {
                         fields: BTreeMap::from([
                             ("severity".to_owned(), JsonValue::String("info".to_owned())),
-                            ("kind".to_owned(), JsonValue::String("no_leaks_detected".to_owned())),
+                            (
+                                "kind".to_owned(),
+                                JsonValue::String("no_leaks_detected".to_owned()),
+                            ),
                             ("container".to_owned(), JsonValue::String("*".to_owned())),
                             (
                                 "message".to_owned(),
-                                JsonValue::String("No resource leaks detected in stored data".to_owned()),
+                                JsonValue::String(
+                                    "No resource leaks detected in stored data".to_owned(),
+                                ),
                             ),
                             ("evidence".to_owned(), JsonValue::Array(Vec::new())),
                         ]),
@@ -274,7 +295,11 @@ where
             }
         }
         // analyze containers find drift (from store)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, Some("drift")) => {
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("drift"),
+        ) => {
             let anomalies = detect_config_drift(store)?;
             if anomalies.is_empty() {
                 Ok(ExecutionResult {
@@ -514,10 +539,7 @@ pub fn detect_unhealthy_states(containers: &[Container]) -> Vec<Anomaly> {
 
 /// Detect containers whose memory usage is trending upward over time,
 /// indicating a possible memory leak.
-pub fn detect_resource_leaks<S>(
-    store: &S,
-    thresholds: &AnalysisThresholds,
-) -> Vec<Anomaly>
+pub fn detect_resource_leaks<S>(store: &S, thresholds: &AnalysisThresholds) -> Vec<Anomaly>
 where
     S: TelemetryStore + ?Sized,
 {
@@ -545,7 +567,10 @@ where
         .collect();
 
     for (container_id, container_samples) in &by_container {
-        let container_name = id_to_name.get(container_id).map(|s| s.as_str()).unwrap_or(container_id.as_str());
+        let container_name = id_to_name
+            .get(container_id)
+            .map(|s| s.as_str())
+            .unwrap_or(container_id.as_str());
         if container_samples.len() < thresholds.resource_leak_min_samples as usize {
             continue;
         }
@@ -555,10 +580,7 @@ where
         sorted.sort_by_key(|s| s.timestamp.as_str());
 
         // Collect memory readings.
-        let mem_values: Vec<u64> = sorted
-            .iter()
-            .filter_map(|s| s.memory_usage_bytes)
-            .collect();
+        let mem_values: Vec<u64> = sorted.iter().filter_map(|s| s.memory_usage_bytes).collect();
 
         if mem_values.len() < 2 {
             continue;
@@ -609,9 +631,7 @@ where
 
 /// Analyze container dependencies: which containers share networks,
 /// compose projects, and images.
-pub fn analyze_dependencies<C>(
-    docker: &C,
-) -> Result<ExecutionResult, AnalyzeError>
+pub fn analyze_dependencies<C>(docker: &C) -> Result<ExecutionResult, AnalyzeError>
 where
     C: DockerClient + ?Sized,
 {
@@ -637,10 +657,7 @@ where
                 }
             })
             .unwrap_or_else(|| "standalone".to_owned());
-        by_compose
-            .entry(project)
-            .or_default()
-            .push(c.name.clone());
+        by_compose.entry(project).or_default().push(c.name.clone());
     }
 
     for (project, names) in &by_compose {
@@ -705,14 +722,8 @@ where
                     JsonValue::String("volume".to_owned()),
                 ),
                 ("key".to_owned(), JsonValue::String(v.name.clone())),
-                (
-                    "containers".to_owned(),
-                    JsonValue::Array(Vec::new()),
-                ),
-                (
-                    "count".to_owned(),
-                    JsonValue::Number(Number::from(0)),
-                ),
+                ("containers".to_owned(), JsonValue::Array(Vec::new())),
+                ("count".to_owned(), JsonValue::Number(Number::from(0))),
             ]),
         });
     }
@@ -740,9 +751,7 @@ where
 ///
 /// Compares the two most recent snapshots in the store and emits anomalies
 /// for containers whose image, state, or labels have changed.
-pub fn detect_config_drift<S>(
-    store: &S,
-) -> Result<Vec<Anomaly>, AnalyzeError>
+pub fn detect_config_drift<S>(store: &S) -> Result<Vec<Anomaly>, AnalyzeError>
 where
     S: TelemetryStore + ?Sized,
 {
@@ -919,9 +928,7 @@ where
 
 /// Analyze container density / distribution across images, states,
 /// and compose projects.
-pub fn analyze_density<C>(
-    docker: &C,
-) -> Result<ExecutionResult, AnalyzeError>
+pub fn analyze_density<C>(docker: &C) -> Result<ExecutionResult, AnalyzeError>
 where
     C: DockerClient + ?Sized,
 {
@@ -939,7 +946,11 @@ where
             .push(c.name.clone());
     }
     for (image, names) in &by_image {
-        let pct = if total > 0 { (names.len() as f64 / total as f64) * 100.0 } else { 0.0 };
+        let pct = if total > 0 {
+            (names.len() as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
         rows.push(Row {
             fields: BTreeMap::from([
                 (
@@ -962,13 +973,16 @@ where
     }
 
     // 2. By state.
-    let mut by_state: std::collections::BTreeMap<String, u64> =
-        std::collections::BTreeMap::new();
+    let mut by_state: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
     for c in &containers {
         *by_state.entry(c.state.clone()).or_default() += 1;
     }
     for (state, count) in &by_state {
-        let pct = if total > 0 { (*count as f64 / total as f64) * 100.0 } else { 0.0 };
+        let pct = if total > 0 {
+            (*count as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
         rows.push(Row {
             fields: BTreeMap::from([
                 (
@@ -1006,10 +1020,7 @@ where
                 }
             })
             .unwrap_or_else(|| "standalone".to_owned());
-        by_project
-            .entry(project)
-            .or_default()
-            .push(c.name.clone());
+        by_project.entry(project).or_default().push(c.name.clone());
     }
     for (project, names) in &by_project {
         let pct = if total > 0 {
@@ -2104,9 +2115,18 @@ mod tests {
         let anomalies = detect_config_drift(&store).unwrap();
         let kinds: Vec<&str> = anomalies.iter().map(|a| a.kind.as_str()).collect();
 
-        assert!(kinds.contains(&"config_drift"), "should detect image change");
-        assert!(kinds.contains(&"state_change"), "should detect state change");
-        assert!(kinds.contains(&"restart_increase"), "should detect restart increase");
+        assert!(
+            kinds.contains(&"config_drift"),
+            "should detect image change"
+        );
+        assert!(
+            kinds.contains(&"state_change"),
+            "should detect state change"
+        );
+        assert!(
+            kinds.contains(&"restart_increase"),
+            "should detect restart increase"
+        );
         assert!(kinds.contains(&"label_drift"), "should detect label change");
     }
 

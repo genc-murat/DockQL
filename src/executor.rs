@@ -89,6 +89,7 @@ where
         Query::Observe(query) => execute_observe(query, docker, metrics),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
+        Query::Compose(query) => execute_compose(query, docker, metrics),
         Query::Logs(query) => execute_logs(query, docker),
         Query::Ping => execute_ping(docker),
         Query::Analyze(query) => {
@@ -118,6 +119,7 @@ where
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Observe(_) => Err(ExecutorError::UnsupportedQuery("observe historical")),
+        Query::Compose(query) => historical_compose(query, store),
         Query::Logs(_) => Err(ExecutorError::UnsupportedQuery("logs")),
         Query::Ping => Err(ExecutorError::UnsupportedQuery("ping")),
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
@@ -231,6 +233,74 @@ where
     Ok(ExecutionResult { rows })
 }
 
+fn historical_compose<S>(
+    query: &crate::ast::ComposeQuery,
+    store: &S,
+) -> Result<ExecutionResult, ExecutorError>
+where
+    S: TelemetryStore + ?Sized,
+{
+    let latest = store
+        .all_snapshots()
+        .map_err(ExecutorError::Telemetry)?
+        .into_iter()
+        .last()
+        .ok_or(ExecutorError::SnapshotNotFound("historical_compose"))?;
+
+    let compose_project_label = query.project.clone();
+
+    let mut rows: Vec<Row> = latest
+        .containers
+        .into_iter()
+        .filter(|c| {
+            c.labels.iter().any(|label| {
+                let parts: Vec<&str> = label.splitn(2, '=').collect();
+                parts.len() == 2
+                    && parts[0] == "com.docker.compose.project"
+                    && parts[1] == compose_project_label
+            })
+        })
+        .map(|c| {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "snapshot_at".into(),
+                JsonValue::String(latest.timestamp.clone()),
+            );
+            fields.insert("id".into(), json_string(c.id));
+            fields.insert("name".into(), json_string(c.name));
+            fields.insert("image".into(), json_string(c.image));
+            fields.insert("status".into(), json_string(c.status));
+            fields.insert("state".into(), json_string(c.state));
+            fields.insert(
+                "restart_count".into(),
+                c.restart_count.map(json_u64).unwrap_or(JsonValue::Null),
+            );
+            if query.target == crate::ast::ComposeTarget::Services {
+                let service = c
+                    .labels
+                    .iter()
+                    .find_map(|label| {
+                        let parts: Vec<&str> = label.splitn(2, '=').collect();
+                        if parts.len() == 2 && parts[0] == "com.docker.compose.service" {
+                            Some(JsonValue::String(parts[1].to_owned()))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(JsonValue::Null);
+                fields.insert("service".to_owned(), service);
+            }
+            Row { fields }
+        })
+        .collect();
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
 pub fn render_table(result: &ExecutionResult) -> String {
     if result.rows.is_empty() {
         return "No rows".to_owned();
@@ -278,6 +348,62 @@ pub fn render_table(result: &ExecutionResult) -> String {
     lines.join("\n")
 }
 
+fn execute_compose<C, M>(
+    query: &crate::ast::ComposeQuery,
+    docker: &C,
+    metrics: &M,
+) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + ?Sized,
+    M: MetricsCollector + ?Sized,
+{
+    let samples = latest_metrics_by_container(metrics.collect()?);
+    let compose_project_label = query.project.clone();
+
+    let mut rows: Vec<Row> = docker
+        .list_containers()?
+        .into_iter()
+        .filter(|c| {
+            c.labels.iter().any(|label| {
+                let parts: Vec<&str> = label.splitn(2, '=').collect();
+                parts.len() == 2
+                    && parts[0] == "com.docker.compose.project"
+                    && parts[1] == compose_project_label
+            })
+        })
+        .map(|container| {
+            let mut row = container_row(container, &samples);
+            if query.target == crate::ast::ComposeTarget::Services {
+                // Extract the service name from labels if available
+                let service = row
+                    .fields
+                    .get("labels")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| {
+                        arr.iter().find_map(|item| {
+                            let s = item.as_str()?;
+                            let parts: Vec<&str> = s.splitn(2, '=').collect();
+                            if parts.len() == 2 && parts[0] == "com.docker.compose.service" {
+                                Some(JsonValue::String(parts[1].to_owned()))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .unwrap_or(JsonValue::Null);
+                row.fields.insert("service".to_owned(), service);
+            }
+            row
+        })
+        .collect();
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
 fn execute_logs<C>(query: &LogsQuery, docker: &C) -> Result<ExecutionResult, ExecutorError>
 where
     C: DockerClient + ?Sized,
@@ -317,7 +443,10 @@ where
 {
     let reachable = docker.ping()?;
     let mut fields = BTreeMap::new();
-    fields.insert("status".to_owned(), JsonValue::String(if reachable { "ok" } else { "error" }.to_owned()));
+    fields.insert(
+        "status".to_owned(),
+        JsonValue::String(if reachable { "ok" } else { "error" }.to_owned()),
+    );
     fields.insert(
         "message".to_owned(),
         JsonValue::String(if reachable {
@@ -457,9 +586,7 @@ fn apply_pipeline_node(mut rows: Vec<Row>, node: &PipelineNode) -> Result<Vec<Ro
             rows.truncate(*limit as usize);
             Ok(rows)
         }
-        PipelineNode::GroupBy { fields, aggregates } => {
-            Ok(group_rows(rows, fields, aggregates))
-        }
+        PipelineNode::GroupBy { fields, aggregates } => Ok(group_rows(rows, fields, aggregates)),
         PipelineNode::Having(expr) => filter_rows(rows, expr),
         PipelineNode::Distinct => {
             let mut seen = HashSet::new();
@@ -1049,11 +1176,7 @@ fn latest_metrics_by_container(samples: Vec<MetricSample>) -> HashMap<String, Me
     latest
 }
 
-fn group_rows(
-    rows: Vec<Row>,
-    group_fields: &[String],
-    aggregates: &[AggregateExpr],
-) -> Vec<Row> {
+fn group_rows(rows: Vec<Row>, group_fields: &[String], aggregates: &[AggregateExpr]) -> Vec<Row> {
     // Helper struct to accumulate state for each group
     struct GroupAcc {
         row: Row,
@@ -1150,10 +1273,8 @@ fn group_rows(
                     let alias = &agg.alias;
                     match agg.function.as_str() {
                         "count" => {
-                            row.fields.insert(
-                                alias.clone(),
-                                JsonValue::Number(Number::from(acc.count)),
-                            );
+                            row.fields
+                                .insert(alias.clone(), JsonValue::Number(Number::from(acc.count)));
                         }
                         "sum" => {
                             let val = acc.sums.get(alias).copied().unwrap_or(0.0);
@@ -1367,13 +1488,11 @@ mod tests {
                 },
             ],
         };
-        let parsed = parser::parse(
-            "observe containers | group by state with avg(cpu) as avg_cpu",
-        )
-        .expect("query should parse");
+        let parsed = parser::parse("observe containers | group by state with avg(cpu) as avg_cpu")
+            .expect("query should parse");
 
-        let result = execute_with_metrics(&parsed.query, &client, &metrics)
-            .expect("query should execute");
+        let result =
+            execute_with_metrics(&parsed.query, &client, &metrics).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let running = result
@@ -1420,10 +1539,8 @@ mod tests {
     #[test]
     fn groups_by_state_with_count_alias() {
         let client = mock_client();
-        let parsed = parser::parse(
-            "observe containers | group by state with count(id) as cnt",
-        )
-        .expect("query should parse");
+        let parsed = parser::parse("observe containers | group by state with count(id) as cnt")
+            .expect("query should parse");
 
         let result = execute(&parsed.query, &client).expect("query should execute");
 
@@ -1565,6 +1682,431 @@ mod tests {
         );
     }
 
+    #[test]
+    fn executes_compose_query() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        // Only myapp containers should be returned
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("api".to_owned())
+        );
+        assert_eq!(
+            result.rows[1].fields["name"],
+            JsonValue::String("db".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_with_pipeline() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp | select name, state, compose_project")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert_eq!(
+                row.fields["compose_project"],
+                JsonValue::String("myapp".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn executes_compose_services() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp services | select name, service")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
+        assert_eq!(
+            api.fields["service"],
+            JsonValue::String("api-service".to_owned())
+        );
+        let db = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "db")
+            .unwrap();
+        assert_eq!(
+            db.fields["service"],
+            JsonValue::String("database".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_empty_for_missing_project() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose nonexistent").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    fn compose_mock_client() -> MockDockerClient {
+        MockDockerClient {
+            containers: vec![
+                Container {
+                    id: "abc".to_owned(),
+                    name: "api".to_owned(),
+                    image: "api:latest".to_owned(),
+                    status: "Up 2 minutes".to_owned(),
+                    state: "running".to_owned(),
+                    ports: vec!["8080/tcp".to_owned()],
+                    labels: vec![
+                        "com.docker.compose.project=myapp".to_owned(),
+                        "com.docker.compose.service=api-service".to_owned(),
+                    ],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(0),
+                },
+                Container {
+                    id: "def".to_owned(),
+                    name: "db".to_owned(),
+                    image: "postgres:16".to_owned(),
+                    status: "Up 5 minutes".to_owned(),
+                    state: "running".to_owned(),
+                    ports: vec!["5432/tcp".to_owned()],
+                    labels: vec![
+                        "com.docker.compose.project=myapp".to_owned(),
+                        "com.docker.compose.service=database".to_owned(),
+                    ],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(1),
+                },
+                Container {
+                    id: "xyz".to_owned(),
+                    name: "worker".to_owned(),
+                    image: "worker:latest".to_owned(),
+                    status: "Exited (1) 1 minute ago".to_owned(),
+                    state: "exited".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec!["role=worker".to_owned()], // Not part of any compose project
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(4),
+                },
+            ],
+            images: vec![Image {
+                id: "img".to_owned(),
+                repository: "postgres".to_owned(),
+                tag: "16".to_owned(),
+                digest: None,
+                size: "432MB".to_owned(),
+                created_at: None,
+                labels: Vec::new(),
+            }],
+            networks: vec![Network {
+                id: "net".to_owned(),
+                name: "bridge".to_owned(),
+                driver: "bridge".to_owned(),
+                scope: "local".to_owned(),
+                containers: vec!["api".to_owned()],
+                labels: Vec::new(),
+            }],
+            volumes: vec![Volume {
+                name: "pgdata".to_owned(),
+                driver: "local".to_owned(),
+                mountpoint: Some("/var/lib/docker/volumes/pgdata/_data".to_owned()),
+                scope: Some("local".to_owned()),
+                labels: Vec::new(),
+            }],
+            logs: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn executes_compose_with_where_filter() {
+        let client = compose_mock_client();
+        let parsed =
+            parser::parse("compose myapp | where state = \"running\"").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert_eq!(row.fields["state"], JsonValue::String("running".to_owned()));
+        }
+    }
+
+    #[test]
+    fn executes_compose_with_sort() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp | sort by name asc").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("api".to_owned())
+        );
+        assert_eq!(
+            result.rows[1].fields["name"],
+            JsonValue::String("db".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_with_limit() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp | limit 1").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn executes_compose_with_select() {
+        let client = compose_mock_client();
+        let parsed =
+            parser::parse("compose myapp | select name, image").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert_eq!(row.fields.len(), 2);
+            assert!(row.fields.contains_key("name"));
+            assert!(row.fields.contains_key("image"));
+        }
+    }
+
+    #[test]
+    fn executes_compose_with_group_by_state() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp | group by state with count(id) as cnt")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        let running_row = result
+            .rows
+            .iter()
+            .find(|r| r.fields["state"] == JsonValue::String("running".to_owned()))
+            .unwrap();
+        assert_eq!(running_row.fields["cnt"], JsonValue::Number(2.into()));
+    }
+
+    #[test]
+    fn executes_compose_services_without_service_label() {
+        let client = MockDockerClient {
+            containers: vec![Container {
+                id: "abc".to_owned(),
+                name: "orphan".to_owned(),
+                image: "busybox:latest".to_owned(),
+                status: "Up 1 minute".to_owned(),
+                state: "running".to_owned(),
+                ports: Vec::new(),
+                labels: vec!["com.docker.compose.project=lonely".to_owned()],
+                created_at: None,
+                started_at: None,
+                finished_at: None,
+                restart_count: Some(0),
+            }],
+            images: vec![],
+            networks: vec![],
+            volumes: vec![],
+            logs: std::collections::HashMap::new(),
+        };
+        let parsed = parser::parse("compose lonely services | select name, service")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].fields["service"], JsonValue::Null);
+    }
+
+    #[test]
+    fn executes_compose_excludes_non_project_containers() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp | select name").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        let names: Vec<&str> = result
+            .rows
+            .iter()
+            .map(|r| r.fields["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"worker"));
+        assert!(names.contains(&"api"));
+        assert!(names.contains(&"db"));
+    }
+
+    #[test]
+    fn executes_compose_with_offset_and_limit() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp | sort by name asc | offset 1 | limit 1")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("db".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_with_distinct() {
+        let client = compose_mock_client();
+        let parsed =
+            parser::parse("compose myapp | select state | distinct").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["state"],
+            JsonValue::String("running".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_historical_compose_query() {
+        use crate::storage::{InMemoryTelemetryStore, TelemetrySnapshot};
+
+        let mut store = InMemoryTelemetryStore::default();
+        store
+            .write_snapshot(TelemetrySnapshot {
+                timestamp: "2026-05-31T00:00:00Z".to_owned(),
+                containers: vec![
+                    Container {
+                        id: "h1".to_owned(),
+                        name: "hist-api".to_owned(),
+                        image: "api:v1".to_owned(),
+                        status: "Up 1 hour".to_owned(),
+                        state: "running".to_owned(),
+                        ports: vec!["8080/tcp".to_owned()],
+                        labels: vec![
+                            "com.docker.compose.project=histapp".to_owned(),
+                            "com.docker.compose.service=api".to_owned(),
+                        ],
+                        created_at: None,
+                        started_at: None,
+                        finished_at: None,
+                        restart_count: Some(0),
+                    },
+                    Container {
+                        id: "h2".to_owned(),
+                        name: "hist-db".to_owned(),
+                        image: "postgres:16".to_owned(),
+                        status: "Up 1 hour".to_owned(),
+                        state: "running".to_owned(),
+                        ports: vec!["5432/tcp".to_owned()],
+                        labels: vec![
+                            "com.docker.compose.project=histapp".to_owned(),
+                            "com.docker.compose.service=db".to_owned(),
+                        ],
+                        created_at: None,
+                        started_at: None,
+                        finished_at: None,
+                        restart_count: Some(0),
+                    },
+                    Container {
+                        id: "h3".to_owned(),
+                        name: "standalone".to_owned(),
+                        image: "nginx:latest".to_owned(),
+                        status: "Up 30 minutes".to_owned(),
+                        state: "running".to_owned(),
+                        ports: Vec::new(),
+                        labels: vec![],
+                        created_at: None,
+                        started_at: None,
+                        finished_at: None,
+                        restart_count: Some(0),
+                    },
+                ],
+                images: vec![],
+                networks: vec![],
+                volumes: vec![],
+            })
+            .unwrap();
+
+        let parsed =
+            parser::parse("compose histapp | select name, state").expect("query should parse");
+        let result = execute_with_store(&parsed.query, &store).expect("should execute");
+        assert_eq!(result.rows.len(), 2);
+        let names: Vec<&str> = result
+            .rows
+            .iter()
+            .map(|r| r.fields["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"hist-api"));
+        assert!(names.contains(&"hist-db"));
+        assert!(!names.contains(&"standalone"));
+    }
+
+    #[test]
+    fn executes_historical_compose_services() {
+        use crate::storage::{InMemoryTelemetryStore, TelemetrySnapshot};
+
+        let mut store = InMemoryTelemetryStore::default();
+        store
+            .write_snapshot(TelemetrySnapshot {
+                timestamp: "2026-05-31T00:00:00Z".to_owned(),
+                containers: vec![Container {
+                    id: "h1".to_owned(),
+                    name: "web".to_owned(),
+                    image: "web:latest".to_owned(),
+                    status: "Up".to_owned(),
+                    state: "running".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec![
+                        "com.docker.compose.project=webapp".to_owned(),
+                        "com.docker.compose.service=frontend".to_owned(),
+                    ],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(0),
+                }],
+                images: vec![],
+                networks: vec![],
+                volumes: vec![],
+            })
+            .unwrap();
+
+        let parsed = parser::parse("compose webapp services | select name, service")
+            .expect("query should parse");
+        let result = execute_with_store(&parsed.query, &store).expect("should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["service"],
+            JsonValue::String("frontend".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_historical_compose_empty_for_missing_project() {
+        use crate::storage::{InMemoryTelemetryStore, TelemetrySnapshot};
+
+        let mut store = InMemoryTelemetryStore::default();
+        store
+            .write_snapshot(TelemetrySnapshot {
+                timestamp: "2026-05-31T00:00:00Z".to_owned(),
+                containers: vec![Container {
+                    id: "x".to_owned(),
+                    name: "solo".to_owned(),
+                    image: "nginx:latest".to_owned(),
+                    status: "Up".to_owned(),
+                    state: "running".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec![],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(0),
+                }],
+                images: vec![],
+                networks: vec![],
+                volumes: vec![],
+            })
+            .unwrap();
+
+        let parsed = parser::parse("compose nonexistent").expect("query should parse");
+        let result = execute_with_store(&parsed.query, &store).expect("should execute");
+        assert_eq!(result.rows.len(), 0);
+    }
+
     fn mock_client() -> MockDockerClient {
         MockDockerClient {
             containers: vec![
@@ -1692,11 +2234,22 @@ mod tests {
         // Both rows pass through (matched: priority set; unmatched: unchanged)
         assert_eq!(result.rows.len(), 2);
         // Running container has priority
-        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
         assert_eq!(api.fields["state"], JsonValue::String("running".to_owned()));
         // Exited container passes through
-        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
-        assert_eq!(worker.fields["state"], JsonValue::String("exited".to_owned()));
+        let worker = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "worker")
+            .unwrap();
+        assert_eq!(
+            worker.fields["state"],
+            JsonValue::String("exited".to_owned())
+        );
     }
 
     #[test]
@@ -1711,10 +2264,21 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
         assert_eq!(api.fields["group"], JsonValue::String("active".to_owned()));
-        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
-        assert_eq!(worker.fields["group"], JsonValue::String("stopped".to_owned()));
+        let worker = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "worker")
+            .unwrap();
+        assert_eq!(
+            worker.fields["group"],
+            JsonValue::String("stopped".to_owned())
+        );
     }
 
     #[test]
@@ -1731,10 +2295,21 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
         assert_eq!(api.fields["status"], JsonValue::String("stable".to_owned()));
-        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
-        assert_eq!(worker.fields["status"], JsonValue::String("crashed".to_owned()));
+        let worker = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "worker")
+            .unwrap();
+        assert_eq!(
+            worker.fields["status"],
+            JsonValue::String("crashed".to_owned())
+        );
     }
 
     #[test]
@@ -1751,10 +2326,21 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
         assert_eq!(api.fields["label"], JsonValue::String("up".to_owned()));
-        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
-        assert_eq!(worker.fields["label"], JsonValue::String("crashed".to_owned()));
+        let worker = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "worker")
+            .unwrap();
+        assert_eq!(
+            worker.fields["label"],
+            JsonValue::String("crashed".to_owned())
+        );
     }
 
     #[test]
@@ -1770,10 +2356,18 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
         assert_eq!(api.fields["a"], JsonValue::Number(Number::from(1)));
         assert_eq!(api.fields["b"], JsonValue::Number(Number::from(2)));
-        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        let worker = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "worker")
+            .unwrap();
         assert_eq!(worker.fields["a"], JsonValue::Number(Number::from(0)));
         assert_eq!(worker.fields["b"], JsonValue::Number(Number::from(0)));
     }
@@ -1790,9 +2384,17 @@ mod tests {
         let result = execute(&parsed.query, &client).expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
-        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        let api = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "api")
+            .unwrap();
         assert_eq!(api.fields["tier"], JsonValue::String("prod".to_owned()));
-        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        let worker = result
+            .rows
+            .iter()
+            .find(|r| r.fields["name"] == "worker")
+            .unwrap();
         assert_eq!(worker.fields["tier"], JsonValue::String("dev".to_owned()));
     }
 
@@ -1820,7 +2422,10 @@ mod tests {
         };
         let csv = render_csv(&result);
         // The csv crate should properly quote fields with commas or quotes
-        assert!(csv.contains("\"api,prod\""), "comma field should be quoted: {csv}");
+        assert!(
+            csv.contains("\"api,prod\""),
+            "comma field should be quoted: {csv}"
+        );
         assert!(
             csv.contains("\"contains \"\"quotes\"\"\""),
             "quote field should be escaped: {csv}"
@@ -1837,7 +2442,10 @@ mod tests {
         };
         let table = render_table_colored(&result);
         // Should contain ANSI color codes
-        assert!(table.contains("\x1b["), "colored output should have ANSI codes");
+        assert!(
+            table.contains("\x1b["),
+            "colored output should have ANSI codes"
+        );
         assert!(table.contains("api"));
         assert!(table.contains("running"));
     }
@@ -1906,19 +2514,31 @@ mod tests {
     fn executes_logs_query() {
         let client = {
             let mut c = mock_client();
-            c.logs.insert("abc".to_owned(), vec![
-                "line 1".to_owned(),
-                "line 2".to_owned(),
-                "line 3".to_owned(),
-            ]);
+            c.logs.insert(
+                "abc".to_owned(),
+                vec![
+                    "line 1".to_owned(),
+                    "line 2".to_owned(),
+                    "line 3".to_owned(),
+                ],
+            );
             c
         };
         let parsed = parser::parse("logs container api tail 10").expect("query should parse");
         let result = execute(&parsed.query, &client).expect("query should execute");
         assert_eq!(result.rows.len(), 3);
-        assert_eq!(result.rows[0].fields["line"], JsonValue::Number(Number::from(1)));
-        assert_eq!(result.rows[0].fields["message"], JsonValue::String("line 1".to_owned()));
-        assert_eq!(result.rows[2].fields["message"], JsonValue::String("line 3".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["line"],
+            JsonValue::Number(Number::from(1))
+        );
+        assert_eq!(
+            result.rows[0].fields["message"],
+            JsonValue::String("line 1".to_owned())
+        );
+        assert_eq!(
+            result.rows[2].fields["message"],
+            JsonValue::String("line 3".to_owned())
+        );
     }
 
     #[test]
@@ -1935,7 +2555,10 @@ mod tests {
         let parsed = parser::parse("ping").expect("query should parse");
         let result = execute(&parsed.query, &client).expect("query should execute");
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].fields["status"], JsonValue::String("ok".to_owned()));
+        assert_eq!(
+            result.rows[0].fields["status"],
+            JsonValue::String("ok".to_owned())
+        );
     }
 
     #[test]

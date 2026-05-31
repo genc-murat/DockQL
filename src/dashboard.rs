@@ -1151,7 +1151,14 @@ mod tests {
     #[test]
     fn test_is_container_state_change_false_for_other_actions() {
         for action in &[
-            "exec_create", "exec_start", "attach", "export", "pull", "push", "tag", "commit",
+            "exec_create",
+            "exec_start",
+            "attach",
+            "export",
+            "pull",
+            "push",
+            "tag",
+            "commit",
         ] {
             assert!(
                 !is_container_state_change(action),

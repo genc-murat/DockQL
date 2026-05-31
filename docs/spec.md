@@ -26,7 +26,7 @@ Version 0.1 prioritizes:
 
 ## 2. Query Families
 
-DOL v0.1 has eight top-level query families.
+DOL v0.1 has nine top-level query families.
 
 ### 2.1 `observe`
 
@@ -137,7 +137,43 @@ fields networks
 fields volumes
 ```
 
-### 2.8 `alert`
+### 2.8 `compose`
+
+`compose` queries containers grouped under a Docker Compose project. It
+filters containers by the `com.docker.compose.project` label and optionally
+groups them by service name.
+
+Execution mode: batch.
+
+Syntax:
+
+```dol
+compose <project>
+compose <project> services
+compose <project> containers
+observe compose <project>
+observe compose <project> services
+```
+
+- Without a target keyword, defaults to `containers` — listing all containers
+  in the compose project with their labels and metrics.
+- Use `containers` explicitly to make the target clear: `compose myapp containers`.
+- With `services`, each row additionally shows the `service` field extracted from the
+  `com.docker.compose.service` label, allowing pipeline operations like
+  `select service, name, state`.
+- The `observe compose <project>` syntax is an alternative form that reads
+  identically to other `observe` sub-queries.
+
+Examples:
+
+```dol
+compose myapp
+compose myapp services
+compose myapp | where cpu > 80% | select name, cpu
+alert when compose_project = 'myapp' and cpu > 85% for 2m then print "High CPU"
+```
+
+### 2.9 `alert`
 
 `alert` defines a continuously evaluated condition and an action.
 
@@ -167,6 +203,7 @@ Top-level collection targets:
 - `images`
 - `networks`
 - `volumes`
+- `compose <project>` — dynamically scoped to containers within a Docker Compose project
 
 Singular inspection targets:
 
@@ -608,9 +645,9 @@ In the CLI and REPL, error messages are displayed in ANSI **red** for visual pro
 Reserved keywords in v0.1:
 
 ```text
-alert analyze and asc at between by case contains count desc distinct else end events
+alert analyze and asc at between by case compose contains count desc distinct else end events
 false find for from group having if in inspect is last limit logs matches max min not null
-observe or offset ping restart select set sort sum then to true webhook when where
+observe or offset ping restart select service services set sort sum then to true webhook when where
 ```
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.

@@ -11,7 +11,7 @@ use crate::{
     dashboard,
     docker::DockerCliClient,
     events::{self, DockerCliEventSource},
-    executor::{self, render_csv, render_jsonl, render_table, ExecutionResult},
+    executor::{self, ExecutionResult, render_csv, render_jsonl, render_table},
     export::{self, ExportFormat},
     metrics::{DockerCliMetricsCollector, MetricsCollector},
     parser, planner,
@@ -489,81 +489,83 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             .map(|s| Arc::new(Mutex::new(s)));
 
         let (event_callback_store, event_callback_fmt) = (store.clone(), output_format);
-        let event_callback = move |row: crate::executor::Row| -> Result<(), crate::events::EventsError> {
-            if let Some(ref store) = event_callback_store
-                && let Ok(mut s) = store.lock()
-                && let (Some(time), Some(action)) = (
-                    row.fields.get("time").and_then(|v| v.as_str()),
-                    row.fields.get("action").and_then(|v| v.as_str()),
-                )
-            {
-                let event = crate::docker::DockerEvent {
-                    time: time.to_owned(),
-                    event_type: row
-                        .fields
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("container")
-                        .to_owned(),
-                    action: action.to_owned(),
-                    actor_id: row
-                        .fields
-                        .get("actor_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_owned(),
-                    container: row
-                        .fields
-                        .get("container")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_owned),
-                    image: row
-                        .fields
-                        .get("image")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_owned),
-                    attributes: Vec::new(),
-                };
-                let _ = s.write_event(event);
-            }
+        let event_callback =
+            move |row: crate::executor::Row| -> Result<(), crate::events::EventsError> {
+                if let Some(ref store) = event_callback_store
+                    && let Ok(mut s) = store.lock()
+                    && let (Some(time), Some(action)) = (
+                        row.fields.get("time").and_then(|v| v.as_str()),
+                        row.fields.get("action").and_then(|v| v.as_str()),
+                    )
+                {
+                    let event = crate::docker::DockerEvent {
+                        time: time.to_owned(),
+                        event_type: row
+                            .fields
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("container")
+                            .to_owned(),
+                        action: action.to_owned(),
+                        actor_id: row
+                            .fields
+                            .get("actor_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_owned(),
+                        container: row
+                            .fields
+                            .get("container")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                        image: row
+                            .fields
+                            .get("image")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                        attributes: Vec::new(),
+                    };
+                    let _ = s.write_event(event);
+                }
 
-            let result = ExecutionResult { rows: vec![row] };
-            match event_callback_fmt {
-                OutputFormat::Table => {
-                    println!("{}", render_table(&result));
+                let result = ExecutionResult { rows: vec![row] };
+                match event_callback_fmt {
+                    OutputFormat::Table => {
+                        println!("{}", render_table(&result));
+                    }
+                    OutputFormat::Json | OutputFormat::JsonCompact => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&result.rows[0])
+                                .map_err(crate::events::EventsError::Json)?
+                        );
+                    }
+                    OutputFormat::Csv => {
+                        let mut columns: Vec<String> =
+                            result.rows[0].fields.keys().cloned().collect();
+                        columns.sort();
+                        let vals: Vec<String> = columns
+                            .iter()
+                            .map(|c| {
+                                result.rows[0]
+                                    .fields
+                                    .get(c)
+                                    .map(crate::eval::render_json_cell)
+                                    .unwrap_or_default()
+                            })
+                            .collect();
+                        println!("{}", vals.join(","));
+                    }
+                    OutputFormat::Jsonl => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&result.rows[0])
+                                .map_err(crate::events::EventsError::Json)?
+                        );
+                    }
                 }
-                OutputFormat::Json | OutputFormat::JsonCompact => {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&result.rows[0])
-                            .map_err(crate::events::EventsError::Json)?
-                    );
-                }
-                OutputFormat::Csv => {
-                    let mut columns: Vec<String> = result.rows[0].fields.keys().cloned().collect();
-                    columns.sort();
-                    let vals: Vec<String> = columns
-                        .iter()
-                        .map(|c| {
-                            result.rows[0]
-                                .fields
-                                .get(c)
-                                .map(crate::eval::render_json_cell)
-                                .unwrap_or_default()
-                        })
-                        .collect();
-                    println!("{}", vals.join(","));
-                }
-                OutputFormat::Jsonl => {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&result.rows[0])
-                            .map_err(crate::events::EventsError::Json)?
-                    );
-                }
-            }
-            Ok(())
-        };
+                Ok(())
+            };
 
         if let Some(secs) = cli.timeout {
             // Run the synchronous stream on a blocking thread with a timeout.
@@ -692,9 +694,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         let m = DockerCliMetricsCollector::default();
         tokio::time::timeout(
             std::time::Duration::from_secs(secs),
-            tokio::task::spawn_blocking(move || {
-                executor::execute_with_metrics(&q, &d, &m)
-            }),
+            tokio::task::spawn_blocking(move || executor::execute_with_metrics(&q, &d, &m)),
         )
         .await
         .map_err(|_| anyhow::anyhow!("query timed out after {}s", secs))?
@@ -820,11 +820,9 @@ mod tests {
 
     #[test]
     fn test_needs_store_inspect_at_returns_true() {
-        let query = parser::parse(
-            "inspect container test at \"2026-01-01T00:00:00Z\"",
-        )
-        .expect("parse")
-        .query;
+        let query = parser::parse("inspect container test at \"2026-01-01T00:00:00Z\"")
+            .expect("parse")
+            .query;
         assert!(needs_store(&query));
     }
 
@@ -846,18 +844,15 @@ mod tests {
 
     #[test]
     fn test_needs_store_alert_returns_false() {
-        let query = parser::parse(
-            "alert when cpu > 80% for 30s then print \"alert\"",
-        )
-        .expect("parse")
-        .query;
+        let query = parser::parse("alert when cpu > 80% for 30s then print \"alert\"")
+            .expect("parse")
+            .query;
         assert!(!needs_store(&query));
     }
 
     #[test]
     fn test_needs_store_plain_events_returns_false() {
-        let query =
-            parser::parse("events containers").expect("parse").query;
+        let query = parser::parse("events containers").expect("parse").query;
         assert!(!needs_store(&query));
     }
 
@@ -866,7 +861,9 @@ mod tests {
         // Save original and restore after test
         let original = std::env::var("DOCKER_HOST").ok();
         // Clear it first
-        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        unsafe {
+            std::env::remove_var("DOCKER_HOST");
+        }
 
         apply_host(Some("tcp://192.168.1.100:2375"), None);
         assert_eq!(
@@ -876,42 +873,60 @@ mod tests {
 
         // Restore original
         match original {
-            Some(v) => unsafe { std::env::set_var("DOCKER_HOST", v); },
-            None => unsafe { std::env::remove_var("DOCKER_HOST"); },
+            Some(v) => unsafe {
+                std::env::set_var("DOCKER_HOST", v);
+            },
+            None => unsafe {
+                std::env::remove_var("DOCKER_HOST");
+            },
         }
     }
 
     #[test]
     fn test_apply_host_config_fallback() {
         let original = std::env::var("DOCKER_HOST").ok();
-        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        unsafe {
+            std::env::remove_var("DOCKER_HOST");
+        }
 
         // CLI host takes precedence over config host
         apply_host(Some("tcp://cli:2375"), Some("tcp://config:2375"));
         assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://cli:2375");
 
         // Without CLI host, config host is used
-        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        unsafe {
+            std::env::remove_var("DOCKER_HOST");
+        }
         apply_host(None, Some("tcp://config:2375"));
         assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://config:2375");
 
         match original {
-            Some(v) => unsafe { std::env::set_var("DOCKER_HOST", v); },
-            None => unsafe { std::env::remove_var("DOCKER_HOST"); },
+            Some(v) => unsafe {
+                std::env::set_var("DOCKER_HOST", v);
+            },
+            None => unsafe {
+                std::env::remove_var("DOCKER_HOST");
+            },
         }
     }
 
     #[test]
     fn test_apply_host_no_args_does_nothing() {
         let original = std::env::var("DOCKER_HOST").ok();
-        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        unsafe {
+            std::env::remove_var("DOCKER_HOST");
+        }
 
         apply_host(None, None);
         assert_eq!(std::env::var("DOCKER_HOST").unwrap_or_default(), "");
 
         match original {
-            Some(v) => unsafe { std::env::set_var("DOCKER_HOST", v); },
-            None => unsafe { std::env::remove_var("DOCKER_HOST"); },
+            Some(v) => unsafe {
+                std::env::set_var("DOCKER_HOST", v);
+            },
+            None => unsafe {
+                std::env::remove_var("DOCKER_HOST");
+            },
         }
     }
 
@@ -920,7 +935,10 @@ mod tests {
         // Verify the enum has all expected variants
         assert!(matches!(OutputFormat::Table, OutputFormat::Table));
         assert!(matches!(OutputFormat::Json, OutputFormat::Json));
-        assert!(matches!(OutputFormat::JsonCompact, OutputFormat::JsonCompact));
+        assert!(matches!(
+            OutputFormat::JsonCompact,
+            OutputFormat::JsonCompact
+        ));
         assert!(matches!(OutputFormat::Csv, OutputFormat::Csv));
         assert!(matches!(OutputFormat::Jsonl, OutputFormat::Jsonl));
     }
@@ -961,13 +979,12 @@ mod tests {
         };
 
         // Watch loop runs indefinitely; use timeout to verify no panic
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            run(cli),
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), run(cli)).await;
 
-        assert!(result.is_err(), "watch+alert loop should run until timeout (no docker)");
+        assert!(
+            result.is_err(),
+            "watch+alert loop should run until timeout (no docker)"
+        );
     }
 
     #[tokio::test]
@@ -997,13 +1014,12 @@ mod tests {
 
         // With --timeout, the collect() call uses spawn_blocking inside the watch loop.
         // Without docker, metrics collection fails and prints error, loop continues.
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            run(cli),
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), run(cli)).await;
 
-        assert!(result.is_err(), "watch+alert with timeout should still loop indefinitely");
+        assert!(
+            result.is_err(),
+            "watch+alert with timeout should still loop indefinitely"
+        );
     }
 
     #[tokio::test]
@@ -1032,13 +1048,11 @@ mod tests {
         };
 
         // Dedicated alert loop also runs indefinitely
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            run(cli),
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), run(cli)).await;
 
-        assert!(result.is_err(), "dedicated alert loop should run until timeout (no docker)");
+        assert!(
+            result.is_err(),
+            "dedicated alert loop should run until timeout (no docker)"
+        );
     }
 }
-
