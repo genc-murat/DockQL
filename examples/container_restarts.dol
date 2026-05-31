@@ -1,0 +1,3 @@
+events containers 
+| where action = "restart" 
+| select time, container, image

@@ -1,0 +1,8 @@
+observe containers 
+| set severity = case 
+    when cpu > 80% then "critical"
+    when cpu > 50% then "warning"
+    else "ok"
+  end
+| select name, image, cpu, severity
+| sort by severity desc

@@ -1,0 +1,4 @@
+observe containers 
+| group by image
+| sort by count desc
+| limit 5

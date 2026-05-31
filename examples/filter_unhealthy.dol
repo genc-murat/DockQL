@@ -1,0 +1,9 @@
+observe containers 
+| set health = case 
+    when state = running and cpu < 50% then "healthy"
+    when state = running and cpu < 80% then "degraded"
+    when state = running then "stressed"
+    else "down"
+  end
+| where health != "healthy"
+| select name, state, cpu, health

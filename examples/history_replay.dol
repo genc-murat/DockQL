@@ -1,0 +1,5 @@
+events containers 
+from "2026-05-30T00:00:00Z" 
+to "2026-05-30T23:59:59Z" 
+where action = "die" 
+| select time, container, exit_code

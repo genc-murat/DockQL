@@ -1,0 +1,3 @@
+observe containers 
+| where ports contains "443"
+| select name, ports, image

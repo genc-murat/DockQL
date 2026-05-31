@@ -1,0 +1,7 @@
+observe containers 
+| set memory_label = case 
+    when memory > 500000000 then "high"
+    when memory > 100000000 then "medium"
+    else "low"
+  end
+| group by memory_label

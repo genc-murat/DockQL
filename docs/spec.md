@@ -1,0 +1,520 @@
+# Docker Observability Language v0.1 Specification
+
+Status: draft v0.1
+
+DOL is a domain-specific language for querying, observing, and analyzing Docker infrastructure. Version 0.1 intentionally defines a small, implementable core that can be parsed into a typed AST and executed by a Rust CLI.
+
+## 1. Design Goals
+
+DOL treats Docker as a live data system:
+
+- Docker entities are query targets.
+- Container metrics are time-oriented records.
+- Docker events are streams.
+- Alerts are continuously evaluated queries.
+- Historical inspection is a query over stored telemetry.
+
+DOL improves the day-to-day workflow where users otherwise combine `docker ps`, `docker stats`, `docker events`, shell scripts, Prometheus queries, and dashboard tools. The language does not replace Prometheus or Grafana; it provides a Docker-native query surface that can later export to those systems.
+
+Version 0.1 prioritizes:
+
+- Simple syntax.
+- Strong parser boundaries.
+- Streaming support.
+- A realistic Rust implementation path.
+- Deterministic behavior before AI-assisted insights.
+
+## 2. Query Families
+
+DOL v0.1 has five top-level query families.
+
+### 2.1 `observe`
+
+`observe` reads the current state of Docker entities and optionally enriches containers with current metrics.
+
+Execution mode: batch snapshot by default, hybrid when metric windows are requested.
+
+Examples:
+
+```dol
+observe containers
+observe containers where status = running
+observe containers | where image contains "postgres" | select name, status, ports
+```
+
+### 2.2 `events`
+
+`events` subscribes to Docker event streams or reads historical events when a time range is present.
+
+Execution mode: stream by default, historical when `last`, `from`, or `to` is present and a telemetry store is configured.
+
+Examples:
+
+```dol
+events containers
+events containers where action = "die"
+events containers | where action = "restart" | select time, container, image
+```
+
+### 2.3 `inspect`
+
+`inspect` reads a detailed entity snapshot. With `at`, it reads a historical snapshot from storage.
+
+Execution mode: batch for current inspection, historical for `at`.
+
+Examples:
+
+```dol
+inspect container api-service
+inspect image postgres:16
+inspect container api-service at "2026-01-01 12:00:00"
+```
+
+### 2.4 `analyze`
+
+`analyze` runs deterministic analysis over current or stored Docker telemetry.
+
+Execution mode: batch or historical depending on time qualifiers.
+
+Examples:
+
+```dol
+analyze containers find anomalies
+analyze containers find restart_loops last 10m
+analyze container api-service correlate events last 1h
+```
+
+### 2.5 `alert`
+
+`alert` defines a continuously evaluated condition and an action.
+
+Execution mode: stream or scheduled evaluation loop.
+
+Examples:
+
+```dol
+alert when cpu > 85% for 2m then print "High CPU"
+alert when restart_count > 3 for 5m then print "Restart loop detected"
+alert when memory > 90% for 1m then webhook "http://localhost:9000/hooks/docker"
+```
+
+## 3. Targets
+
+Top-level collection targets:
+
+- `containers`
+- `images`
+- `networks`
+- `volumes`
+
+Singular inspection targets:
+
+- `container <name-or-id>`
+- `image <name-or-id>`
+- `network <name-or-id>`
+- `volume <name-or-id>`
+
+Target names are case-sensitive when they refer to Docker names or IDs. DOL keywords are lowercase in v0.1.
+
+## 4. Fields
+
+### 4.1 Container Fields
+
+Common container fields:
+
+- `id`
+- `name`
+- `image`
+- `status`
+- `state`
+- `ports`
+- `labels`
+- `created_at`
+- `started_at`
+- `finished_at`
+- `restart_count`
+- `cpu`
+- `memory`
+- `memory_limit`
+- `network_rx`
+- `network_tx`
+- `disk_read`
+- `disk_write`
+
+### 4.2 Image Fields
+
+Common image fields:
+
+- `id`
+- `repository`
+- `tag`
+- `digest`
+- `size`
+- `created_at`
+- `labels`
+
+### 4.3 Network Fields
+
+Common network fields:
+
+- `id`
+- `name`
+- `driver`
+- `scope`
+- `containers`
+- `labels`
+
+### 4.4 Volume Fields
+
+Common volume fields:
+
+- `name`
+- `driver`
+- `mountpoint`
+- `scope`
+- `labels`
+
+### 4.5 Event Fields
+
+Common event fields:
+
+- `time`
+- `type`
+- `action`
+- `actor_id`
+- `container`
+- `image`
+- `attributes`
+
+## 4.6 Dynamic Fields via `set`
+
+The `set` pipeline node adds or overrides a field on each row. The value can be:
+
+- A **literal**: `set tier = "prod"`
+- An **if/else expression**: `set health = if state = running then "up" else "down"`
+- A **case/when expression**: `set severity = case when cpu > 80% then "critical" else "ok" end`
+
+Examples:
+
+```dol
+observe containers | set tier = "prod"
+observe containers | set health = if state = running then "up" else "down"
+observe containers | set severity = case
+    when cpu > 80% then "critical"
+    when cpu > 50% then "warning"
+    else "ok"
+  end | select name, severity
+```
+
+## 5. Literals and Types
+
+DOL v0.1 supports these literal types:
+
+- String: `"api-service"`
+- Bare identifier: `running`, `api-service`, `postgres`
+- Integer: `42`
+- Float: `0.75`
+- Percentage: `85%`
+- Duration: `30s`, `5m`, `1h`, `2d`
+- Timestamp string: `"2026-01-01 12:00:00"`
+- Boolean: `true`, `false`
+
+Bare identifiers are accepted for simple values in filters, but strings are recommended when a value contains punctuation, spaces, or mixed case.
+
+## 6. Operators
+
+Comparison operators:
+
+- `=`
+- `!=`
+- `>`
+- `<`
+- `>=`
+- `<=`
+
+String and pattern operators:
+
+- `contains`
+- `matches`
+
+Boolean operators:
+
+- `and`
+- `or`
+- `not`
+
+Precedence, highest to lowest:
+
+1. Parentheses: `( ... )`
+2. `not`
+3. Comparison, `contains`, `matches`
+4. `and`
+5. `or`
+
+Example:
+
+```dol
+observe containers where status = running and (cpu > 80% or memory > 90%)
+```
+
+## 7. Time Syntax
+
+DOL v0.1 supports relative windows and point-in-time inspection.
+
+Relative windows:
+
+```dol
+last 5m
+last 1h
+last 2d
+```
+
+Point-in-time:
+
+```dol
+at "2026-01-01 12:00:00"
+```
+
+Historical ranges are reserved for v0.2 but may be accepted by the parser in v0.1 as experimental:
+
+```dol
+from "2026-01-01 12:00:00" to "2026-01-01 13:00:00"
+```
+
+Time semantics:
+
+- Without a time clause, `observe` reads the current Docker snapshot.
+- Without a time clause, `events` opens a live stream.
+- `last <duration>` means the interval ending at query evaluation time.
+- `at <timestamp>` means the nearest stored snapshot at or before that timestamp.
+- Timestamps are interpreted in the local runtime timezone unless a timezone suffix is provided in a future version.
+
+## 8. Pipeline Syntax
+
+Pipelines transform query output from left to right.
+
+Supported pipeline nodes:
+
+- `where <expression>`
+- `select <field-list>`
+- `group by <field-list>`
+- `sort by <field> [asc|desc]`
+- `limit <integer>`
+- `alert <string>`
+- `set <field> = <value-expr>`
+- `if <condition> then <pipeline-node> [else if <condition> then <pipeline-node>] [else <pipeline-node>]`
+
+Examples:
+
+```dol
+observe containers | where cpu > 80% | select name, cpu, memory
+observe images | sort by size desc | limit 10
+events containers | where action = "die" | group by image
+```
+
+Pipeline rules:
+
+- The first expression must be a query family such as `observe containers`.
+- Each pipe receives rows or events from the previous stage.
+- `where` filters records.
+- `select` changes output shape.
+- `group by` aggregates records by field values. Aggregation functions are reserved for v0.2.
+- `sort by` requires finite input; for streams it is only valid after a finite time window.
+- `limit` stops after N records.
+- `alert` inside a pipeline emits an alert when a record reaches that stage.
+- `set <field> = <value>` adds or overrides a field on each row.
+- `if <condition> then <nodes> [else <nodes>]` conditionally applies nested pipeline nodes.
+
+Examples:
+
+```dol
+observe containers | where cpu > 80% | select name, cpu, memory
+observe images | sort by size desc | limit 10
+events containers | where action = "die" | group by image
+observe containers | set health = if state = running then "healthy" else "unhealthy"
+observe containers | if cpu > 90% then alert "Critical CPU" else alert "OK"
+observe containers | set severity = case when cpu > 80% then "critical" else "ok" end
+```
+
+## 10. Execution Semantics
+
+### 10.1 Batch Queries
+
+Batch queries consume finite input and return finite output.
+
+Batch examples:
+
+```dol
+observe containers
+observe images | sort by size desc | limit 5
+inspect container api-service
+```
+
+Batch execution steps:
+
+1. Parse query into AST.
+2. Build logical plan.
+3. Read Docker snapshot or stored snapshot.
+4. Apply filters and pipeline stages.
+5. Render output as table or JSON.
+
+### 10.2 Stream Queries
+
+Stream queries consume unbounded input and keep running until cancelled.
+
+Stream examples:
+
+```dol
+events containers
+events containers | where action = "die"
+alert when cpu > 85% for 2m then print "High CPU"
+```
+
+Stream execution rules:
+
+- Stream output is record-by-record.
+- `limit` may terminate a stream after N matching records.
+- `sort by` is invalid on unbounded streams unless a finite window is present.
+- Alerts keep state per entity when evaluating `for <duration>`.
+- Ctrl+C should cancel stream execution cleanly.
+
+### 10.3 Hybrid Queries
+
+Hybrid queries combine a current Docker snapshot with recent metric samples.
+
+Examples:
+
+```dol
+observe containers last 5m
+observe containers | where cpu > 80%
+analyze containers find anomalies last 1h
+```
+
+Hybrid execution rules:
+
+- Entity metadata comes from Docker or the most recent stored snapshot.
+- Metric fields may come from the metrics collector or telemetry store.
+- Windowed metrics use samples whose timestamps are inside the requested interval.
+
+### 10.4 Historical Queries
+
+Historical queries require a telemetry store.
+
+Examples:
+
+```dol
+inspect container api-service at "2026-01-01 12:00:00"
+events containers last 1h
+analyze container api-service correlate events last 1h
+```
+
+Historical execution rules:
+
+- If no telemetry store is configured, return a clear unsupported error.
+- `at` selects the nearest snapshot at or before the timestamp.
+- `last` selects all matching records in the window ending at execution time.
+- Historical results must include source timestamps in JSON output.
+
+## 11. Consistency Model
+
+DOL v0.1 uses best-effort consistency:
+
+- Docker snapshots are point-in-time approximations.
+- Metrics may lag entity metadata.
+- Events are ordered by Docker event timestamp when available.
+- For live streams, delivery is at-least-once from the DOL process perspective.
+- Exact-once alert delivery is not guaranteed in v0.1.
+
+The implementation should preserve timestamps and raw Docker IDs so users can reconcile output with Docker itself.
+
+## 12. Error Semantics
+
+Parser errors should include:
+
+- Query text position when available.
+- Expected token or construct.
+- A short repair hint.
+
+Runtime errors should distinguish:
+
+- Docker connection failure.
+- Unsupported target.
+- Unsupported field.
+- Unsupported pipeline node for execution mode.
+- Missing telemetry store.
+- Alert action failure.
+
+Examples:
+
+```text
+parse error at column 20: expected expression after `where`
+runtime error: `sort by` requires finite input; add `last 5m` or `limit`
+runtime error: historical query requires a telemetry store
+```
+
+## 13. Reserved Keywords
+
+Reserved keywords in v0.1:
+
+```text
+alert analyze and asc at by case contains desc end else events false find for from
+group if inspect last limit matches not observe or restart select set sort then to
+true webhook when where
+```
+
+Docker names that conflict with reserved keywords must be quoted as strings when used as values.
+
+## 14. MVP Acceptance Query Set
+
+The parser and executor should prioritize these queries first:
+
+```dol
+observe containers
+observe containers where status = running
+observe containers | where image contains "postgres" | select name, status
+observe images | sort by size desc | limit 10
+events containers where action = "die"
+events containers | where action = "restart" | select time, container, image
+inspect container api-service
+inspect container api-service at "2026-01-01 12:00:00"
+analyze containers find anomalies
+analyze containers find restart_loops last 10m
+alert when cpu > 85% for 2m then print "High CPU"
+observe containers | where cpu > 80% | alert "High CPU detected"
+```
+
+## 15. Out of Scope for v0.1
+
+These features are intentionally deferred:
+
+- Joins between targets.
+- User-defined functions.
+- Full SQL aggregation functions.
+- Distributed Docker host querying.
+- Kubernetes targets.
+- Automatic remediation without explicit user opt-in.
+- AI-generated decisions that are not backed by deterministic signals.
+
+## 16. Implementation Notes for Faz 2
+
+Parser phase should start with:
+
+1. `observe containers`
+2. Inline `where`
+3. Pipe `where`
+4. `select`, `sort by`, `limit`
+5. `events containers`
+6. `inspect container <value>`
+7. `alert when ... then print ...`
+
+Recommended AST split:
+
+- `Query`
+- `Target`
+- `Expression`
+- `Value`
+- `PipelineNode`
+- `TimeSelector`
+- `AlertRule`
+
+The v0.1 grammar should be treated as the source of truth for parser tests.

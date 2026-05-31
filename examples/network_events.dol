@@ -1,0 +1,3 @@
+events networks 
+| where action = "connect"
+| select time, actor_id

@@ -1,0 +1,4 @@
+observe containers 
+| where memory > 500000000 and state = running
+| select name, memory, memory_limit
+| sort by memory desc

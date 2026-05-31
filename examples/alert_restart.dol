@@ -1,0 +1,2 @@
+alert when restart_count > 5 for 3m 
+then restart container api-service

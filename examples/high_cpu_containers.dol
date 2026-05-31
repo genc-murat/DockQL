@@ -1,0 +1,4 @@
+observe containers 
+| where cpu > 80% 
+| select name, image, cpu, memory
+| sort by cpu desc

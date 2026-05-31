@@ -1,0 +1,5 @@
+observe containers 
+| where image contains "mysql" or image contains "postgres"
+| select name, image, cpu, memory
+| sort by memory desc
+| limit 3

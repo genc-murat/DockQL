@@ -1,0 +1,3 @@
+observe containers 
+| where image contains "postgres" 
+| select name, status, ports

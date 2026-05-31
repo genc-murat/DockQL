@@ -1,0 +1,4 @@
+observe containers 
+where status = "running" and cpu > 80%
+| select name, image, cpu, memory
+| sort by cpu desc

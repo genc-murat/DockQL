@@ -1,0 +1,3 @@
+observe containers 
+| where labels contains "env=prod"
+| select name, image, state

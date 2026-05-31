@@ -1,0 +1,2 @@
+alert when name contains "worker" and memory > 90% for 5m
+then webhook "https://alerts.mycompany.com/hooks/memory"

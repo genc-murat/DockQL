@@ -1,0 +1,2 @@
+observe networks
+| select name, driver, scope

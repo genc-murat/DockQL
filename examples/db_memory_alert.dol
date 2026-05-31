@@ -1,0 +1,2 @@
+alert when name contains "db" and memory_percent > 90% for 5m
+then print "Database container is experiencing critical memory pressure"

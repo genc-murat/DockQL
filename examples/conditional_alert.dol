@@ -1,0 +1,3 @@
+observe containers 
+| if cpu > 90% then alert "Critical CPU detected"
+  else if cpu > 70% then alert "Warning: High CPU"

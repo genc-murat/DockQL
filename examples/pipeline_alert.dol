@@ -1,0 +1,3 @@
+observe containers 
+| where cpu > 80% 
+| alert "High CPU detected"
