@@ -1676,6 +1676,126 @@ mod tests {
         assert!(field_names.contains(&"cpu"));
     }
 
+    // ── if branching ──────────────────────────────────────────────
+
+    #[test]
+    fn if_without_else_passes_through() {
+        // No else branch — unmatched rows pass through unchanged, matched rows get set
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | if state = running then set priority = \"high\" | select name, state",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        // Both rows pass through (matched: priority set; unmatched: unchanged)
+        assert_eq!(result.rows.len(), 2);
+        // Running container has priority
+        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        assert_eq!(api.fields["state"], JsonValue::String("running".to_owned()));
+        // Exited container passes through
+        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        assert_eq!(worker.fields["state"], JsonValue::String("exited".to_owned()));
+    }
+
+    #[test]
+    fn else_if_chain() {
+        // else-if chaining with three conditions
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | if state = running then set group = \"active\" else if state = exited then set group = \"stopped\" else set group = \"other\" | select name, state, group",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        assert_eq!(api.fields["group"], JsonValue::String("active".to_owned()));
+        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        assert_eq!(worker.fields["group"], JsonValue::String("stopped".to_owned()));
+    }
+
+    #[test]
+    fn nested_if_in_then() {
+        // Nested if inside the then branch of an outer if
+        // api: restart_count=0 -> outer else -> set status = "stable"
+        // worker: restart_count=4 -> outer then -> inner if state=exited -> set status = "crashed"
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | if restart_count > 0 then if state = \"exited\" then set status = \"crashed\" else set status = \"restarting\" else set status = \"stable\" | select name, state, status",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        assert_eq!(api.fields["status"], JsonValue::String("stable".to_owned()));
+        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        assert_eq!(worker.fields["status"], JsonValue::String("crashed".to_owned()));
+    }
+
+    #[test]
+    fn nested_if_in_else() {
+        // Nested if inside the else branch (else-if with additional nesting in the if)
+        // api: state=running -> outer then -> set label = "up"
+        // worker: state=exited -> outer else -> inner if restart_count>0 -> set label = "crashed"
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | if state = running then set label = \"up\" else if restart_count > 0 then set label = \"crashed\" else set label = \"down\" | select name, state, label",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        assert_eq!(api.fields["label"], JsonValue::String("up".to_owned()));
+        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        assert_eq!(worker.fields["label"], JsonValue::String("crashed".to_owned()));
+    }
+
+    #[test]
+    fn multiple_nodes_in_branches() {
+        // Multiple pipeline nodes in both then and else branches
+        // then: set a=1, set b=2
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | if state = running then set a = 1 | set b = 2 else set a = 0 | set b = 0 | select name, state, a, b",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        assert_eq!(api.fields["a"], JsonValue::Number(Number::from(1)));
+        assert_eq!(api.fields["b"], JsonValue::Number(Number::from(2)));
+        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        assert_eq!(worker.fields["a"], JsonValue::Number(Number::from(0)));
+        assert_eq!(worker.fields["b"], JsonValue::Number(Number::from(0)));
+    }
+
+    #[test]
+    fn if_with_set_in_both_branches() {
+        // Set different values in then vs else
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | if state = running then set tier = \"prod\" else set tier = \"dev\" | select name, state, tier",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let api = result.rows.iter().find(|r| r.fields["name"] == "api").unwrap();
+        assert_eq!(api.fields["tier"], JsonValue::String("prod".to_owned()));
+        let worker = result.rows.iter().find(|r| r.fields["name"] == "worker").unwrap();
+        assert_eq!(worker.fields["tier"], JsonValue::String("dev".to_owned()));
+    }
+
     // ── Render helpers ──────────────────────────────────────────
 
     #[test]

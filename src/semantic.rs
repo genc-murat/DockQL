@@ -252,7 +252,7 @@ impl SemanticAnalyzer {
             Expression::FnCall { name, args } => {
                 // Check if function exists
                 match name.as_str() {
-                    "upper" | "lower" | "trim" | "length" | "concat" | "substring" => {
+                    "upper" | "lower" | "trim" | "length" | "concat" | "substring" | "coalesce" => {
                         for arg in args {
                             self.infer_expr_type(arg)?;
                         }
@@ -485,6 +485,205 @@ mod tests {
         .unwrap();
         let res = validate_semantics(&parsed.query);
         assert!(res.is_ok());
+    }
+
+    // ── Comprehensive if-branching tests ──
+
+    #[test]
+    fn test_if_without_else() {
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then alert \"high\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_complex_condition() {
+        let parsed = parser::parse(
+            "observe containers | if cpu > 80% and memory > 500 then alert \"high\" else alert \"low\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_function_condition() {
+        let parsed = parser::parse(
+            "observe containers | if upper(name) = \"API\" then set found = true",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_else_if_chain() {
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then alert \"critical\" else if cpu > 70% then alert \"warning\" else alert \"ok\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_with_select_in_branch() {
+        let parsed = parser::parse(
+            "observe containers | if state = running then select name, state, cpu",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_with_sort_limit_in_branch() {
+        let parsed = parser::parse(
+            "observe containers | if state = running then sort by cpu desc | limit 10",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_with_distinct_in_branch() {
+        let parsed = parser::parse(
+            "observe containers | if state = running then distinct",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_multiple_if_nodes() {
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then alert \"high\" | if memory > 500 then alert \"high_mem\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_with_expr_set_in_branch() {
+        let parsed = parser::parse(
+            "observe containers | if state = running then set val = restart_count + 1 else set val = restart_count",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_with_where_in_branch() {
+        let parsed = parser::parse(
+            "observe containers | if state = running then where cpu > 80% | select name, cpu",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_nested_if_inside_then() {
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then if memory > 500 then alert \"high\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_nested_if_inside_else() {
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then set critical = true else if memory > 500 then set high_mem = true",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    // ── Invalid if-branching tests ──
+
+    #[test]
+    fn test_if_invalid_field_in_condition() {
+        let parsed = parser::parse(
+            "observe containers | if nonexistent > 50 then alert \"bad\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_if_invalid_comparison_in_condition() {
+        let parsed = parser::parse(
+            "observe containers | if state > 50 then alert \"bad\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::InvalidComparison { .. })));
+    }
+
+    #[test]
+    fn test_if_set_then_select_in_same_branch() {
+        // set + select within the same then branch should work
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then set tier = \"high\" | select name, tier",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_if_select_nonexistent_in_branch() {
+        // select with nonexistent field inside a branch should fail
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then select name, nonexistent",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_if_invalid_field_in_branch() {
+        // Invalid field in where inside then branch
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then where nonexistent = 1",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn test_if_invalid_arithmetic_in_branch_set() {
+        // Invalid arithmetic inside then branch (string + integer)
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then set val = state + 1",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::Arithmetic(_))));
+    }
+
+    #[test]
+    fn test_if_unknown_function_in_branch_where() {
+        // Unknown function inside else branch
+        let parsed = parser::parse(
+            "observe containers | if cpu > 90% then alert \"high\" else where bogus_fn(name) = \"x\"",
+        )
+        .unwrap();
+        let res = validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnknownFunction { .. })));
     }
 
     #[test]
