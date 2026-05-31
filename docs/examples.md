@@ -161,10 +161,16 @@ alert when name contains "worker" and memory > 90% for 5m
 then webhook "https://alerts.mycompany.com/hooks/memory"
 ```
 
-**Auto-restart a container on restart loop (dry-run):**
+**Auto-restart a container on restart loop:**
 ```dol
 alert when restart_count > 5 for 3m 
 then restart container api-service
+```
+
+**Alert with real webhook POST:**
+```dol
+alert when cpu > 85% for 2m 
+then webhook "https://hooks.example.com/alert"
 ```
 
 **Inline alert in a pipeline:**
@@ -304,3 +310,47 @@ observe containers
     | where label.com.docker.compose.project = "myapp"
     | select name, compose_project, state
 ```
+
+## 9. Interactive REPL
+
+Start an interactive shell with `dol repl`. Tab completion, command history, and REPL commands available.
+
+```text
+$ dol repl
+DOL REPL — type .help for commands, Ctrl+C or .exit to quit
+
+dol> observe containers | where cpu > 50% | select name, cpu
+dol> .watch 3
+dol> events containers | where action = die
+dol> .help
+```
+
+### REPL Commands
+
+| Command | Description |
+|---------|-------------|
+| `.help` | Show available commands |
+| `.exit` / `.quit` | Exit the REPL |
+| `.history` | Show command history |
+| `.watch <secs>` | Re-run last query every N seconds |
+| `.export <path>` | Set export file path |
+| `.output <fmt>` | Set output format |
+
+## 10. Config Management
+
+Create and manage DOL configuration:
+
+```bash
+# Create a default config file
+dol config init
+
+# Set a config value
+dol config set store ~/dol.db
+dol config set host tcp://192.168.1.100:2375
+
+# View current config
+dol config view
+```
+
+Supported config keys: `store`, `output`, `host`, `metrics-interval`, `snapshot-interval`.
+

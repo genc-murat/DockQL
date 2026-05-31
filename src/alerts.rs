@@ -25,8 +25,8 @@ pub struct AlertEvent {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub enum AlertActionPlan {
     Print { message: String },
-    Webhook { url: String },
-    RestartDryRun { target: String },
+    Webhook { url: String, executed: bool },
+    Restart { target: String, executed: bool },
 }
 
 #[derive(Debug, Error)]
@@ -35,6 +35,10 @@ pub enum AlertError {
     Metrics(#[from] MetricsError),
     #[error("{0}")]
     Eval(#[from] EvalError),
+    #[error("HTTP request failed: {0}")]
+    Http(String),
+    #[error("Docker restart failed: {0}")]
+    Restart(String),
 }
 
 #[derive(Debug, Default)]
@@ -70,7 +74,7 @@ impl AlertEvaluator {
             let required = rule.duration.map(duration_to_std).unwrap_or_default();
 
             if elapsed >= required {
-                events.push(alert_event(rule, sample));
+                events.push(alert_event(rule, sample)?);
             }
         }
 
@@ -98,17 +102,31 @@ pub fn render_alert_event(event: &AlertEvent) -> String {
                 event.container_name, event.container_id, message
             )
         }
-        AlertActionPlan::Webhook { url } => {
-            format!(
-                "{} [{}]: would POST alert to {}",
-                event.container_name, event.container_id, url
-            )
+        AlertActionPlan::Webhook { url, executed } => {
+            if *executed {
+                format!(
+                    "{} [{}]: POSTED alert to {}",
+                    event.container_name, event.container_id, url
+                )
+            } else {
+                format!(
+                    "{} [{}]: FAILED to POST alert to {}",
+                    event.container_name, event.container_id, url
+                )
+            }
         }
-        AlertActionPlan::RestartDryRun { target } => {
-            format!(
-                "{} [{}]: would restart {} (dry-run)",
-                event.container_name, event.container_id, target
-            )
+        AlertActionPlan::Restart { target, executed } => {
+            if *executed {
+                format!(
+                    "{} [{}]: RESTARTED {}",
+                    event.container_name, event.container_id, target
+                )
+            } else {
+                format!(
+                    "{} [{}]: FAILED to restart {}",
+                    event.container_name, event.container_id, target
+                )
+            }
         }
     }
 }
@@ -123,31 +141,101 @@ pub fn duration_to_std(duration: Duration) -> StdDuration {
     StdDuration::from_secs(seconds)
 }
 
-fn alert_event(rule: &AlertRule, sample: &MetricSample) -> AlertEvent {
+fn alert_event(rule: &AlertRule, sample: &MetricSample) -> Result<AlertEvent, AlertError> {
     let action = match &rule.action {
         AlertAction::Print(message) => AlertActionPlan::Print {
             message: message.clone(),
         },
-        AlertAction::Webhook(url) => AlertActionPlan::Webhook { url: url.clone() },
-        AlertAction::Restart(target) => AlertActionPlan::RestartDryRun {
-            target: format!("{:?} {}", target.kind, target.value),
-        },
+        AlertAction::Webhook(url) => {
+            let executed = execute_webhook(url);
+            AlertActionPlan::Webhook {
+                url: url.clone(),
+                executed,
+            }
+        }
+        AlertAction::Restart(target) => {
+            let target_str = format!("{:?} {}", target.kind, target.value);
+            let executed = execute_restart(&target_str);
+            AlertActionPlan::Restart {
+                target: target_str,
+                executed,
+            }
+        }
     };
     let message = render_action_message(&action);
 
-    AlertEvent {
+    Ok(AlertEvent {
         container_id: sample.container_id.clone(),
         container_name: sample.container_name.clone(),
         message,
         action,
+    })
+}
+
+fn execute_webhook(url: &str) -> bool {
+    let rt = tokio::runtime::Runtime::new();
+    match rt {
+        Ok(runtime) => {
+            match runtime.block_on(async {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()?;
+                let resp = client.post(url).send().await?;
+                Ok::<_, reqwest::Error>(resp.status().is_success())
+            }) {
+                Ok(success) => success,
+                Err(e) => {
+                    eprintln!("Webhook POST failed: {e}");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to create runtime for webhook: {e}");
+            false
+        }
+    }
+}
+
+fn execute_restart(target: &str) -> bool {
+    let target = target.trim();
+    let output = std::process::Command::new("docker")
+        .args(["restart", target])
+        .output();
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                true
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                eprintln!("docker restart failed: {stderr}");
+                false
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to execute docker restart: {e}");
+            false
+        }
     }
 }
 
 fn render_action_message(action: &AlertActionPlan) -> String {
     match action {
         AlertActionPlan::Print { message } => message.clone(),
-        AlertActionPlan::Webhook { url } => format!("webhook alert queued for {url}"),
-        AlertActionPlan::RestartDryRun { target } => format!("restart dry-run for {target}"),
+        AlertActionPlan::Webhook { url, executed } => {
+            if *executed {
+                format!("webhook alert sent to {url}")
+            } else {
+                format!("webhook alert FAILED for {url}")
+            }
+        }
+        AlertActionPlan::Restart { target, executed } => {
+            if *executed {
+                format!("restarted {target}")
+            } else {
+                format!("restart FAILED for {target}")
+            }
+        }
     }
 }
 
@@ -295,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn plans_webhook_and_restart_as_safe_actions() {
+    fn plans_webhook_and_restart_as_actions() {
         let webhook = alert_rule("alert when cpu > 80% then webhook \"http://localhost/hook\"");
         let restart = alert_rule("alert when cpu > 80% then restart container api");
         let collector = MockMetricsCollector {
@@ -311,7 +399,7 @@ mod tests {
         ));
         assert!(matches!(
             restart_events[0].action,
-            AlertActionPlan::RestartDryRun { .. }
+            AlertActionPlan::Restart { .. }
         ));
     }
 

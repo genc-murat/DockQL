@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use clap::{CommandFactory, Parser, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 use crate::{
     alerts::{self, AlertEvaluator},
     ast::Query,
     collector::{self, CollectorConfig},
-    config::DolConfig,
+    config::{self, ConfigAction, DolConfig},
     docker::DockerCliClient,
     events::{self, DockerCliEventSource},
     executor::{self, render_csv, render_jsonl, render_table},
@@ -26,7 +26,7 @@ use crate::{
     subcommand_negates_reqs = true
 )]
 pub struct Cli {
-    /// DOL query to execute.
+    /// DOL query to execute (positional).
     pub query: Option<String>,
 
     /// Output format: table, json, csv, jsonl.
@@ -80,6 +80,21 @@ pub struct Cli {
     /// Compare current state with the last store snapshot (requires --store).
     #[arg(long)]
     pub diff: bool,
+
+    /// Subcommand (config, repl).
+    #[command(subcommand)]
+    pub command: Option<CliCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CliCommand {
+    /// Manage DOL configuration.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Interactive REPL shell.
+    Repl,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -92,6 +107,18 @@ pub enum OutputFormat {
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let config = DolConfig::load();
+
+    // Handle subcommands.
+    if let Some(cmd) = &cli.command {
+        match cmd {
+            CliCommand::Config { action } => {
+                return config::execute_config(action.clone());
+            }
+            CliCommand::Repl => {
+                return crate::repl::run_repl(&config).await;
+            }
+        }
+    }
 
     let output_format = cli.output.unwrap_or_else(|| {
         if let Some(ref ext) = cli.export.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase()) {
@@ -468,6 +495,7 @@ mod tests {
             host: None,
             completion: None,
             diff: false,
+            command: None,
         };
 
         let error = run(cli).await.unwrap_err();
@@ -492,6 +520,7 @@ mod tests {
             host: None,
             completion: None,
             diff: false,
+            command: None,
         };
 
         let error = run(cli).await.unwrap_err();

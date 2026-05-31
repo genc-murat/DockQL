@@ -103,12 +103,20 @@ fields volumes
 
 Execution mode: stream or scheduled evaluation loop.
 
+Alert actions are executed in real time:
+- **print**: Outputs a formatted message to stdout.
+- **webhook**: Sends an HTTP POST to the specified URL. Requires network access.
+- **restart**: Runs `docker restart <container>` to restart the target container.
+
+When `--store` is active, all fired alerts are persisted to the `alert_history` table for audit and review.
+
 Examples:
 
 ```dol
 alert when cpu > 85% for 2m then print "High CPU"
 alert when restart_count > 3 for 5m then print "Restart loop detected"
 alert when memory > 90% for 1m then webhook "http://localhost:9000/hooks/docker"
+alert when restart_count > 5 for 3m then restart container api-service
 ```
 
 ## 3. Targets
@@ -562,6 +570,21 @@ The DOL CLI supports the following flags:
 | `--explain` | Show the logical query plan without executing |
 | `--diff` | Compare query results with the last store snapshot |
 | `--completion <shell>` | Generate shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `repl` | Start interactive REPL shell with tab completion and history |
+| `config init` | Create a default config file at the standard config path |
+| `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`) |
+| `config view` | Display the current merged configuration |
+
+Additional REPL commands (within `dol repl`):
+
+| REPL Command | Description |
+|--------------|-------------|
+| `.help` | Show available REPL commands |
+| `.exit` / `.quit` | Exit the REPL |
+| `.history` | Show command history |
+| `.watch <secs>` | Re-run the last query every N seconds |
+| `.export <path>` | Write subsequent results to a file |
+| `.output <fmt>` | Set output format (`table`, `json`, `csv`, `jsonl`) |
 
 Config file support (YAML/TOML):
 

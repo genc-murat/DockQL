@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +44,6 @@ impl DolConfig {
         Self::default()
     }
 
-    #[allow(dead_code)]
     pub fn save(&self) -> anyhow::Result<()> {
         let path = config_path();
         if let Some(parent) = path.parent() {
@@ -52,6 +52,60 @@ impl DolConfig {
         let content = serde_yaml::to_string(self)?;
         std::fs::write(&path, content)?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ConfigAction {
+    Init,
+    Set { key: String, value: String },
+    View,
+}
+
+pub fn execute_config(action: ConfigAction) -> anyhow::Result<()> {
+    match action {
+        ConfigAction::Init => {
+            let path = config_path();
+            if path.exists() {
+                anyhow::bail!("config file already exists at {}", path.display());
+            }
+            let config = DolConfig::default();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let content = serde_yaml::to_string(&config)?;
+            std::fs::write(&path, content)?;
+            println!("Created default config at {}", path.display());
+            Ok(())
+        }
+        ConfigAction::Set { key, value } => {
+            let mut config = DolConfig::load();
+            match key.as_str() {
+                "store" => config.store = Some(value.clone()),
+                "output" => config.output = Some(value.clone()),
+                "metrics-interval" | "metrics_interval" => {
+                    config.metrics_interval = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
+                    })?);
+                }
+                "snapshot-interval" | "snapshot_interval" => {
+                    config.snapshot_interval = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
+                    })?);
+                }
+                "host" => config.host = Some(value.clone()),
+                _ => anyhow::bail!("unknown config key: {key}"),
+            }
+            config.save()?;
+            println!("Set {key} = {value}");
+            Ok(())
+        }
+        ConfigAction::View => {
+            let config = DolConfig::load();
+            let content = serde_yaml::to_string(&config)?;
+            print!("{content}");
+            Ok(())
+        }
     }
 }
 

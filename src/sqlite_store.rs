@@ -176,6 +176,20 @@ impl SqliteTelemetryStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp);
+
+            CREATE TABLE IF NOT EXISTS alert_history (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                container_id    TEXT NOT NULL,
+                container_name  TEXT NOT NULL,
+                rule_condition  TEXT NOT NULL,
+                action_type     TEXT NOT NULL,
+                action_detail   TEXT NOT NULL,
+                success         INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_alert_history_time ON alert_history(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_alert_history_container ON alert_history(container_id);
             ",
             )
             .map_err(|e| TelemetryError::Storage(e.to_string()))?;
@@ -366,6 +380,59 @@ impl TelemetryStore for SqliteTelemetryStore {
             }
             None => Ok(None),
         }
+    }
+
+    fn write_alert_event(&mut self, event: crate::storage::AlertHistoryEvent) -> Result<(), TelemetryError> {
+        self.conn
+            .execute(
+                "INSERT INTO alert_history (timestamp, container_id, container_name, rule_condition, action_type, action_detail, success)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    event.timestamp,
+                    event.container_id,
+                    event.container_name,
+                    event.rule_condition,
+                    event.action_type,
+                    event.action_detail,
+                    event.success as i32,
+                ],
+            )
+            .map_err(|e| TelemetryError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    fn alert_history(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<crate::storage::AlertHistoryEvent>, TelemetryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT timestamp, container_id, container_name, rule_condition, action_type, action_detail, success
+                 FROM alert_history
+                 WHERE timestamp >= ?1 AND timestamp <= ?2
+                 ORDER BY timestamp DESC",
+            )
+            .map_err(|e| TelemetryError::Storage(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![from, to], |row| {
+                let success_int: i32 = row.get(6)?;
+                Ok(crate::storage::AlertHistoryEvent {
+                    timestamp: row.get(0)?,
+                    container_id: row.get(1)?,
+                    container_name: row.get(2)?,
+                    rule_condition: row.get(3)?,
+                    action_type: row.get(4)?,
+                    action_detail: row.get(5)?,
+                    success: success_int != 0,
+                })
+            })
+            .map_err(|e| TelemetryError::Storage(e.to_string()))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| TelemetryError::Storage(e.to_string()))
     }
 }
 

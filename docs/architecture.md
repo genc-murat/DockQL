@@ -73,10 +73,16 @@ A standalone asynchronous task (`tokio`) that periodically polls the Docker API 
 A deterministic rules engine that scans telemetry data for anomalies (high CPU, memory pressure, restart loops, deployment errors) and computes container health signals.
 
 ### 7. Alerting Engine (`src/alerts.rs`)
-Evaluates conditions against live metrics/state at intervals. Manages duration guards (e.g., `for 2m`) to prevent flapping, and triggers actions (Print, Webhook, Restart) when conditions are met.
+Evaluates conditions against live metrics/state at intervals. Manages duration guards (e.g., `for 2m`) to prevent flapping, and triggers actions when conditions are met. Actions are executed in real time:
+- **Webhook**: Sends an HTTP POST to the configured URL via `reqwest`.
+- **Restart**: Runs `docker restart <container>` via `std::process::Command`.
+- **Alert history**: Fired alerts are persisted to the telemetry store's `alert_history` table when `--store` is active.
 
-### 8. Config Loader (`src/config.rs`)
-Loads DOL settings from YAML or TOML files at standard paths (`~/.config/dol/config.yaml`, `.dolrc`, `dol.yaml`). Supports `store`, `output`, `host`, `metrics_interval`, and `snapshot_interval` settings.
+### 8. Config Loader & Subcommand (`src/config.rs`)
+Loads DOL settings from YAML or TOML files at standard paths (`~/.config/dol/config.yaml`, `.dolrc`, `dol.yaml`). Supports `store`, `output`, `host`, `metrics_interval`, and `snapshot_interval` settings. The `dol config init|set|view` subcommand provides CLI-based config management.
+
+### 9. Interactive REPL (`src/repl.rs`)
+A readline-based interactive shell (`dol repl`) with tab completion for DOL keywords, command history (persisted across sessions), and REPL-specific commands (`.watch`, `.export`, `.output`, `.history`, `.help`). Supports all query types: observe, events, inspect, alert, and fields.
 
 ## Data Flow: Example Pipeline
 

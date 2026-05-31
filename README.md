@@ -14,7 +14,8 @@ dol "observe containers | group by state"
 - **Real-time events** — stream Docker events with pipeline filters and group-by aggregation
 - **Historical inspection** — inspect container state at any point in the past (requires `--store`)
 - **Historical observe** — query past container states with `observe containers last 5m`
-- **Alerting** — continuously evaluate conditions with duration guards and actions (print, webhook, restart)
+- **Alerting** — continuously evaluate conditions with duration guards; actions include print, webhook (real HTTP POST), and container restart
+- **Alert history** — all fired alerts are persisted in the SQLite store for audit/review
 - **Analysis** — deterministic anomaly detection (CPU, memory, restart loops, deployment errors)
 - **Telemetry store** — persistent SQLite-backed storage for metrics, events, and snapshots
 - **Schema introspection** — discover available fields with `fields containers`
@@ -22,7 +23,8 @@ dol "observe containers | group by state"
 - **Pattern matching** — `matches` (regex) and `in` operators for flexible filtering
 - **Diff mode** — compare current container state with the last store snapshot (`--diff`)
 - **Multiple output formats** — table (default), CSV, JSONL, JSON, ANSI-colored table
-- **Config file** — YAML/TOML configuration from standard paths
+- **Config file** — YAML/TOML configuration from standard paths; manage with `dol config init|set|view`
+- **Interactive REPL** — `dol repl` with tab completion, history, `.watch`, `.export` commands
 - **Shell completion** — generate completion scripts with `--completion <shell>`
 - **Batch and stream modes** — snapshots for `observe`/`inspect`, streaming for `events`/`alert`
 
@@ -167,6 +169,18 @@ dol --completion powershell >> $PROFILE
 
 ### Config File
 
+```bash
+# Create a default config file
+dol config init
+
+# Set config values
+dol config set store ~/telemetry.db
+dol config set host tcp://192.168.1.100:2375
+
+# View current configuration
+dol config view
+```
+
 DOL loads settings from `~/.config/dol/config.yaml`, `~/.config/dol/config.toml`, `.dolrc`, or `dol.yaml`:
 
 ```yaml
@@ -182,6 +196,41 @@ snapshot_interval: 300
 ```bash
 # Connect to a remote Docker daemon
 dol --host tcp://192.168.1.100:2375 "observe containers"
+```
+
+### Interactive REPL
+
+```bash
+# Start an interactive shell with tab completion and history
+dol repl
+
+dol> observe containers | where cpu > 50% | select name, cpu
+dol> events containers | where action = die
+dol> .help
+dol> .watch 3
+```
+
+REPL commands:
+- `.help` — show available commands
+- `.exit` / `.quit` — exit the REPL
+- `.history` — show command history
+- `.watch <secs>` — re-run the last query every N seconds
+- `.export <path>` — set export file path
+- `.output <fmt>` — set output format (table, json, csv, jsonl)
+
+### Real Alert Actions
+
+When an alert fires, actions are executed immediately:
+
+```bash
+# Webhook: sends an actual HTTP POST
+dol 'alert when cpu > 85% for 2m then webhook "https://hooks.example.com/alert"'
+
+# Restart: executes docker restart
+dol 'alert when restart_count > 5 for 3m then restart container api'
+
+# Alert history is saved to the telemetry store (requires --store)
+dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 ```
 
 ## Query Language
@@ -236,7 +285,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ### CLI Flags
 
-| Flag | Description |
+| Flag / Subcommand | Description |
 |------|-------------|
 | `--store <path>` | Path to SQLite telemetry store |
 | `--collect` | Start background data collection |
@@ -251,6 +300,10 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `--explain` | Show query plan without executing |
 | `--diff` | Compare results with last store snapshot |
 | `--completion <shell>` | Generate shell completion script |
+| `repl` | Start interactive REPL shell |
+| `config init` | Create a default config file |
+| `config set <key> <value>` | Update a config value |
+| `config view` | Display current configuration |
 
 ## Examples
 
@@ -300,7 +353,8 @@ Key modules:
 - **`collector`** — background daemon for telemetry collection
 - **`sqlite_store`** — persistent storage (metrics, events, snapshots, retention)
 - **`analyze`** — deterministic anomaly detection engine
-- **`config`** — YAML/TOML configuration file loader
+- **`config`** — YAML/TOML configuration file loader and `config init|set|view` subcommand
+- **`repl`** — interactive REPL with tab completion and command history
 - **`cli`** — CLI entry point (clap)
 
 ## Specification

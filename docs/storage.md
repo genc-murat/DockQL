@@ -70,6 +70,18 @@ The SQLite database contains three tables:
 | timestamp | TEXT    | ISO 8601 timestamp                             |
 | data      | TEXT    | JSON-serialized full Docker state snapshot      |
 
+### `alert_history`
+| Column          | Type    | Description                    |
+|-----------------|---------|--------------------------------|
+| id              | INTEGER | Primary key                    |
+| timestamp       | TEXT    | ISO 8601 timestamp             |
+| container_id    | TEXT    | Docker container ID            |
+| container_name  | TEXT    | Container name                 |
+| rule_condition  | TEXT    | The alert condition string     |
+| action_type     | TEXT    | Action type (print, webhook, restart) |
+| action_detail   | TEXT    | Action parameters (URL, target name) |
+| success         | INTEGER | Whether the action succeeded   |
+
 ## CLI Usage
 
 ### Starting the Background Collector
@@ -168,6 +180,8 @@ pub trait TelemetryStore {
     fn events_between(&self, from: &str, to: &str) -> Result<Vec<DockerEvent>, TelemetryError>;
     fn write_snapshot(&mut self, snapshot: TelemetrySnapshot) -> Result<(), TelemetryError>;
     fn snapshot_at_or_before(&self, timestamp: &str) -> Result<Option<TelemetrySnapshot>, TelemetryError>;
+    fn write_alert_event(&mut self, event: AlertHistoryEvent) -> Result<(), TelemetryError>;
+    fn alert_history(&self, from: &str, to: &str) -> Result<Vec<AlertHistoryEvent>, TelemetryError>;
 }
 ```
 

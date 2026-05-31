@@ -47,6 +47,23 @@ pub trait TelemetryStore {
         &self,
         timestamp: &str,
     ) -> Result<Option<TelemetrySnapshot>, TelemetryError>;
+    fn write_alert_event(&mut self, event: AlertHistoryEvent) -> Result<(), TelemetryError>;
+    fn alert_history(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<AlertHistoryEvent>, TelemetryError>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertHistoryEvent {
+    pub timestamp: String,
+    pub container_id: String,
+    pub container_name: String,
+    pub rule_condition: String,
+    pub action_type: String,
+    pub action_detail: String,
+    pub success: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,6 +122,20 @@ impl TelemetryStore for InMemoryTelemetryStore {
             .filter(|snapshot| snapshot.timestamp.as_str() <= timestamp)
             .max_by(|left, right| left.timestamp.cmp(&right.timestamp))
             .cloned())
+    }
+
+    fn write_alert_event(&mut self, event: AlertHistoryEvent) -> Result<(), TelemetryError> {
+        // InMemory store: no-op, silently accept
+        let _ = event;
+        Ok(())
+    }
+
+    fn alert_history(
+        &self,
+        _from: &str,
+        _to: &str,
+    ) -> Result<Vec<AlertHistoryEvent>, TelemetryError> {
+        Ok(Vec::new())
     }
 }
 

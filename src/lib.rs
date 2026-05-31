@@ -11,6 +11,7 @@ pub mod executor;
 pub mod metrics;
 pub mod parser;
 pub mod planner;
+pub mod repl;
 pub mod sqlite_store;
 pub mod storage;
 
