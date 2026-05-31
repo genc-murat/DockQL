@@ -1,0 +1,1 @@
+observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc

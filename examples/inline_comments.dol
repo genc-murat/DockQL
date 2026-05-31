@@ -1,0 +1,3 @@
+observe containers          # list all containers
+    | where state = running # only running ones
+    | select name, image    # just these columns

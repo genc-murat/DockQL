@@ -1,0 +1,1 @@
+observe containers | sort by state desc, cpu desc | select name, state, cpu

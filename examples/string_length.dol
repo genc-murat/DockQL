@@ -1,0 +1,1 @@
+observe containers | where length(name) > 10 | select name

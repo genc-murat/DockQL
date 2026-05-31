@@ -20,7 +20,13 @@ dol "observe containers | group by state"
 - **Telemetry store** — persistent SQLite-backed storage for metrics, events, and snapshots
 - **Schema introspection** — discover available fields with `fields containers`
 - **Control flow** — `if/then/else` pipeline branching, `case/when` expressions, `set` field assignment
+- **Arithmetic expressions** — compute fields with `+`, `-`, `*`, `/`, `%` (e.g., `set mem_gb = memory / 1073741824`)
+- **Aggregate functions** — `group by ... with sum/count/avg/min/max(field) as alias`
+- **String functions** — `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`
+- **Range check** — `between ... and ...`, `is null`, `is not null`
 - **Pattern matching** — `matches` (regex) and `in` operators for flexible filtering
+- **Multi-field sort** — `sort by state desc, cpu desc`
+- **Pipeline nodes** — `having`, `distinct`, `offset`
 - **Diff mode** — compare current container state with the last store snapshot (`--diff`)
 - **Multiple output formats** — table (default), CSV, JSONL, JSON, ANSI-colored table
 - **External integrations** — push results directly to InfluxDB, Loki, or Prometheus Pushgateway
@@ -297,8 +303,11 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 | `where <expr>` | Filter rows |
 | `select <fields>` | Choose columns |
 | `group by <fields>` | Aggregate with count |
-| `sort by <field> [asc\|desc]` | Order rows |
+| `having <expr>` | Filter groups after aggregation |
+| `sort by <field> [asc\|desc] [, ...]` | Order rows (multi-field) |
 | `limit <n>` | Take first N rows |
+| `offset <n>` | Skip first N rows |
+| `distinct` | Remove duplicate rows |
 | `alert "message"` | Emit inline alert |
 | `set <field> = <value>` | Add or override a field |
 | `if <cond> then <node>` | Conditional pipeline branching |
@@ -314,7 +323,10 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 ### Expression Operators
 
 Comparison: `=`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `matches` (regex), `in`
+Arithmetic: `+`, `-`, `*`, `/`, `%`
+Range: `between ... and ...`, `is null`, `is not null`
 Logical: `and`, `or`, `not`
+Functions: `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`
 Grouping: `(`, `)`
 
 ### Label Access

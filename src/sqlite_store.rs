@@ -561,9 +561,9 @@ mod tests {
                 to: "2026-01-01T12:10:00Z".to_owned(),
             }),
             filter: Some(crate::ast::Expression::Comparison {
-                field: "action".to_owned(),
+                left: Box::new(crate::ast::Expression::Field("action".to_owned())),
                 operator: crate::ast::Operator::Eq,
-                value: crate::ast::Value::String("die".to_owned()),
+                right: Box::new(crate::ast::Expression::Literal(crate::ast::Value::String("die".to_owned()))),
             }),
             pipeline: vec![],
         };

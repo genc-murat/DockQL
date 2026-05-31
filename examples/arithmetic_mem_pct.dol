@@ -1,0 +1,1 @@
+observe containers | set mem_pct = (memory / memory_limit) * 100 | select name, mem_pct | sort by mem_pct desc

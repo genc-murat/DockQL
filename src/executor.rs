@@ -366,15 +366,33 @@ fn apply_pipeline_node(mut rows: Vec<Row>, node: &PipelineNode) -> Result<Vec<Ro
             .into_iter()
             .map(|row| select_fields(row, fields))
             .collect(),
-        PipelineNode::SortBy { field, direction } => {
-            sort_rows(&mut rows, field, *direction)?;
+        PipelineNode::SortBy { fields } => {
+            sort_rows(&mut rows, fields)?;
             Ok(rows)
         }
         PipelineNode::Limit(limit) => {
             rows.truncate(*limit as usize);
             Ok(rows)
         }
-        PipelineNode::GroupBy(fields) => Ok(group_rows(rows, fields)),
+        PipelineNode::GroupBy { fields, .. } => Ok(group_rows(rows, fields)),
+        PipelineNode::Having(expr) => filter_rows(rows, expr),
+        PipelineNode::Distinct => {
+            let mut seen = HashSet::new();
+            rows.retain(|row| {
+                let key: Vec<String> = row.fields.values().map(eval::render_json_cell).collect();
+                seen.insert(key)
+            });
+            Ok(rows)
+        }
+        PipelineNode::Offset(offset) => {
+            let skip = *offset as usize;
+            if skip < rows.len() {
+                rows = rows.split_off(skip);
+            } else {
+                rows.clear();
+            }
+            Ok(rows)
+        }
         PipelineNode::Alert(message) => {
             for row in &rows {
                 let output = row
@@ -462,7 +480,7 @@ fn select_fields(row: Row, fields: &[String]) -> Result<Row, ExecutorError> {
     Ok(Row { fields: selected })
 }
 
-fn sort_rows(rows: &mut [Row], field: &str, direction: SortDirection) -> Result<(), ExecutorError> {
+fn sort_rows(rows: &mut [Row], fields: &[(String, SortDirection)]) -> Result<(), ExecutorError> {
     fn resolve_sort_value(row: &Row, field: &str) -> Option<JsonValue> {
         if let Some(v) = row.fields.get(field) {
             return Some(v.clone());
@@ -485,21 +503,30 @@ fn sort_rows(rows: &mut [Row], field: &str, direction: SortDirection) -> Result<
         None
     }
 
-    if rows.iter().any(|row| resolve_sort_value(row, field).is_none()) {
-        return Err(EvalError::UnsupportedField {
-            field: field.to_owned(),
+    // Validate all sort fields exist
+    for (field, _) in fields {
+        if rows.iter().any(|row| resolve_sort_value(row, field).is_none()) {
+            return Err(EvalError::UnsupportedField {
+                field: field.to_owned(),
+            }
+            .into());
         }
-        .into());
     }
 
     rows.sort_by(|left, right| {
-        let left_val = resolve_sort_value(left, field).unwrap();
-        let right_val = resolve_sort_value(right, field).unwrap();
-        let ordering = eval::compare_json_values(&left_val, &right_val);
-        match direction {
-            SortDirection::Asc => ordering,
-            SortDirection::Desc => ordering.reverse(),
+        for (field, direction) in fields {
+            let left_val = resolve_sort_value(left, field).unwrap_or(JsonValue::Null);
+            let right_val = resolve_sort_value(right, field).unwrap_or(JsonValue::Null);
+            let ordering = eval::compare_json_values(&left_val, &right_val);
+            let ordering = match direction {
+                SortDirection::Asc => ordering,
+                SortDirection::Desc => ordering.reverse(),
+            };
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
         }
+        std::cmp::Ordering::Equal
     });
     Ok(())
 }

@@ -1,0 +1,1 @@
+observe containers | group by state with count(id) as cnt | having cnt > 1

@@ -1,0 +1,1 @@
+observe containers | set memory_mb = memory / 1048576 | set mem_pct = (memory / memory_limit) * 100 | select name, memory_mb, mem_pct

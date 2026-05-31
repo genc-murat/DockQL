@@ -1,0 +1,1 @@
+observe containers | sort by image asc, name asc | select name, image

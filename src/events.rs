@@ -201,9 +201,9 @@ where
 {
     ensure_supported_target(query.target)?;
 
-    let has_group_by = query.pipeline.iter().any(|n| matches!(n, PipelineNode::GroupBy(_)));
+    let has_group_by = query.pipeline.iter().any(|n| matches!(n, PipelineNode::GroupBy { .. }));
     let group_fields: Option<Vec<String>> = query.pipeline.iter().find_map(|n| {
-        if let PipelineNode::GroupBy(fields) = n { Some(fields.clone()) } else { None }
+        if let PipelineNode::GroupBy { fields, .. } = n { Some(fields.clone()) } else { None }
     });
 
     let mut emitted = 0_u64;
@@ -231,7 +231,7 @@ where
 
             if has_group_by {
                 match node {
-        PipelineNode::GroupBy(fields) => {
+        PipelineNode::GroupBy { fields, .. } => {
                         let key: Vec<String> = fields.iter()
                             .map(|f| current.fields.get(f).map(eval::render_json_cell).unwrap_or_default())
                             .collect();
@@ -404,11 +404,20 @@ fn apply_pipeline_node(row: Row, node: &PipelineNode) -> Result<PipelineOutcome,
         PipelineNode::Select(fields) => select_fields(row, fields).map(PipelineOutcome::Row),
         PipelineNode::Limit(0) => Ok(PipelineOutcome::LimitReached),
         PipelineNode::Limit(_) => Ok(PipelineOutcome::Row(row)),
-        PipelineNode::GroupBy(_fields) => {
+        PipelineNode::GroupBy { .. } => {
             // In streaming, GroupBy is handled at the stream level.
             Ok(PipelineOutcome::Row(row))
         }
+        PipelineNode::Having(expression) => {
+            if eval::evaluate_expression(&row.fields, expression)? {
+                Ok(PipelineOutcome::Row(row))
+            } else {
+                Ok(PipelineOutcome::Drop)
+            }
+        }
         PipelineNode::SortBy { .. } => Err(EventsError::UnsupportedPipeline("sort by")),
+        PipelineNode::Distinct => Err(EventsError::UnsupportedPipeline("distinct")),
+        PipelineNode::Offset(_) => Err(EventsError::UnsupportedPipeline("offset")),
         PipelineNode::Alert(message) => {
             eprintln!(
                 "[ALERT] {message}: {}",

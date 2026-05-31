@@ -1,0 +1,1 @@
+observe containers where finished_at is not null | select name, finished_at

@@ -388,7 +388,117 @@ Keyboard controls:
 - `r` — force refresh
 - `q` / Esc — quit
 
-## 12. External Integrations
+## 12. Arithmetic Expressions
+
+Compute new fields using arithmetic with `+`, `-`, `*`, `/`, `%`.
+
+**Convert memory to gigabytes:**
+```dol
+observe containers | set mem_gb = memory / 1073741824 | select name, mem_gb
+```
+
+**Calculate memory percentage:**
+```dol
+observe containers | set mem_pct = (memory / memory_limit) * 100 | select name, mem_pct
+```
+
+**Filter by derived value:**
+```dol
+observe containers | where (memory / 1073741824) > 1 | select name, memory
+```
+
+## 13. String Functions
+
+Apply string transformations with `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`.
+
+**Normalize names to uppercase:**
+```dol
+observe containers | where upper(name) contains "API"
+```
+
+**Concatenate fields:**
+```dol
+observe containers | set label = concat(name, ":", image) | select name, label
+```
+
+**Filter by name length:**
+```dol
+observe containers | where length(name) > 10 | select name
+```
+
+## 14. Range and Null Checks
+
+**Between operator for inclusive range checks:**
+```dol
+observe containers where cpu between 50 and 80
+```
+
+**Filter containers that have finished:**
+```dol
+observe containers where finished_at is not null | select name, finished_at
+```
+
+**Find containers missing a value:**
+```dol
+observe containers where compose_project is null | select name
+```
+
+## 15. Aggregation with Functions
+
+Group by with `sum`, `count`, `avg`, `min`, `max`.
+
+**Average CPU per image:**
+```dol
+observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc
+```
+
+**Count containers per state with having filter:**
+```dol
+observe containers | group by state with count(id) as cnt | having cnt > 1
+```
+
+**Sum memory per compose project:**
+```dol
+observe containers | group by compose_project with sum(memory) as total_mem | sort by total_mem desc
+```
+
+## 16. Multi-Field Sort
+
+Sort by multiple fields with independent direction per field.
+
+**Sort by state then CPU:**
+```dol
+observe containers | sort by state desc, cpu desc | select name, state, cpu
+```
+
+**Sort by image then name:**
+```dol
+observe containers | sort by image asc, name asc | select name, image
+```
+
+## 17. Distinct and Offset
+
+**Remove duplicate rows (distinct):**
+```dol
+observe containers | distinct | select image
+```
+
+**Paginate with offset and limit:**
+```dol
+observe containers | sort by name asc | offset 5 | limit 5 | select name
+```
+
+## 18. Inline Comments
+
+Comments start with `#` and extend to end of line.
+
+```dol
+observe containers          # list all containers
+    | where state = running # only running ones
+    | select name, image    # just these columns
+```
+
+## 19. External Integrations
 
 Push query results directly to external monitoring systems.
 

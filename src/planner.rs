@@ -229,18 +229,28 @@ fn plan_analyze(query: &AnalyzeQuery) -> Result<LogicalPlan, PlanError> {
 fn node_to_step(node: &PipelineNode) -> PlanStep {
     match node {
         PipelineNode::Where(expr) => match expr {
-            crate::ast::Expression::In { field, values } => PlanStep::In {
-                field: field.clone(),
-                values: values.clone(),
-            },
+            crate::ast::Expression::In { expr: inner_expr, values } => {
+                let field = match inner_expr.as_ref() {
+                    crate::ast::Expression::Field(f) => f.clone(),
+                    _ => return PlanStep::Filter(expr.clone()),
+                };
+                PlanStep::In { field, values: values.clone() }
+            }
             other => PlanStep::Filter(other.clone()),
         },
         PipelineNode::Select(fields) => PlanStep::Select(fields.clone()),
-        PipelineNode::GroupBy(fields) => PlanStep::GroupBy(fields.clone()),
-        PipelineNode::SortBy { field, direction } => PlanStep::SortBy {
-            field: field.clone(),
-            direction: *direction,
-        },
+        PipelineNode::GroupBy { fields, .. } => PlanStep::GroupBy(fields.clone()),
+        PipelineNode::SortBy { fields } => {
+            // Take the first sort field for the plan step (primary sort)
+            if let Some((field, direction)) = fields.first() {
+                PlanStep::SortBy {
+                    field: field.clone(),
+                    direction: *direction,
+                }
+            } else {
+                PlanStep::SortBy { field: String::new(), direction: SortDirection::Asc }
+            }
+        }
         PipelineNode::Limit(n) => PlanStep::Limit(*n),
         PipelineNode::Alert(msg) => PlanStep::Alert(msg.clone()),
         PipelineNode::If {
@@ -258,6 +268,9 @@ fn node_to_step(node: &PipelineNode) -> PlanStep {
             field: field.clone(),
             value: value.clone(),
         },
+        PipelineNode::Having(expr) => PlanStep::Filter(expr.clone()),
+        PipelineNode::Distinct => PlanStep::Select(vec!["*".to_owned()]),
+        PipelineNode::Offset(n) => PlanStep::Limit(*n),
     }
 }
 
@@ -350,9 +363,9 @@ mod tests {
                 direction: SortDirection::Desc,
             },
             PlanStep::Filter(crate::ast::Expression::Comparison {
-                field: "state".into(),
+                left: Box::new(crate::ast::Expression::Field("state".into())),
                 operator: crate::ast::Operator::Eq,
-                value: crate::ast::Value::String("running".into()),
+                right: Box::new(crate::ast::Expression::Literal(crate::ast::Value::String("running".into()))),
             }),
         ];
         push_filters_early(&mut steps);

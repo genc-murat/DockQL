@@ -1,0 +1,1 @@
+observe containers | where upper(name) contains "API" | select name

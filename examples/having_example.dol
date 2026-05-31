@@ -1,0 +1,1 @@
+observe containers | group by image with count(id) as cnt, avg(cpu) as avg_cpu | having cnt > 1 and avg_cpu > 50 | sort by avg_cpu desc

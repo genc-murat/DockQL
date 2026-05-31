@@ -87,12 +87,17 @@ pub enum AnalysisVerb {
 pub enum PipelineNode {
     Where(Expression),
     Select(Vec<String>),
-    GroupBy(Vec<String>),
+    GroupBy {
+        fields: Vec<String>,
+        aggregates: Vec<AggregateExpr>,
+    },
+    Having(Expression),
     SortBy {
-        field: String,
-        direction: SortDirection,
+        fields: Vec<(String, SortDirection)>,
     },
     Limit(u64),
+    Offset(u64),
+    Distinct,
     Alert(String),
     If {
         condition: Expression,
@@ -106,8 +111,16 @@ pub enum PipelineNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AggregateExpr {
+    pub function: String,
+    pub field: String,
+    pub alias: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum SetValue {
     Literal(Value),
+    Expr(Expression),
     Case {
         when_clauses: Vec<(Expression, Value)>,
         else_value: Option<Value>,
@@ -154,18 +167,45 @@ pub enum AlertAction {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Expression {
+    Field(String),
+    Literal(Value),
+    Arithmetic {
+        left: Box<Expression>,
+        op: BinOp,
+        right: Box<Expression>,
+    },
     Comparison {
-        field: String,
+        left: Box<Expression>,
         operator: Operator,
-        value: Value,
+        right: Box<Expression>,
     },
     In {
-        field: String,
+        expr: Box<Expression>,
         values: Vec<Value>,
+    },
+    Between {
+        expr: Box<Expression>,
+        low: Box<Expression>,
+        high: Box<Expression>,
+    },
+    IsNull(Box<Expression>),
+    IsNotNull(Box<Expression>),
+    FnCall {
+        name: String,
+        args: Vec<Expression>,
     },
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
     Not(Box<Expression>),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]

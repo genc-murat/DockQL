@@ -1,0 +1,1 @@
+observe containers | group by compose_project with sum(memory) as total_mem | sort by total_mem desc

@@ -221,6 +221,7 @@ Common event fields:
 The `set` pipeline node adds or overrides a field on each row. The value can be:
 
 - A **literal**: `set tier = "prod"`
+- An **expression**: `set mem_gb = memory / 1073741824` (arithmetic, function calls, field references)
 - An **if/else expression**: `set health = if state = running then "up" else "down"`
 - A **case/when expression**: `set severity = case when cpu > 80% then "critical" else "ok" end`
 
@@ -228,6 +229,8 @@ Examples:
 
 ```dol
 observe containers | set tier = "prod"
+observe containers | set mem_gb = memory / 1073741824 | select name, mem_gb
+observe containers | set label = upper(name) | select name, label
 observe containers | set health = if state = running then "up" else "down"
 observe containers | set severity = case
     when cpu > 80% then "critical"
@@ -253,7 +256,7 @@ Bare identifiers are accepted for simple values in filters, but strings are reco
 
 ## 6. Operators
 
-Comparison operators:
+### 6.1 Comparison Operators
 
 - `=`
 - `!=`
@@ -262,26 +265,56 @@ Comparison operators:
 - `>=`
 - `<=`
 
-String and pattern operators:
+### 6.2 String and Pattern Operators
 
 - `contains` — substring match
 - `matches` — regex match (Rust regex syntax)
-- `in` — set membership: `field in ("a", "b", "c")` (regex)
-- `in`
+- `in` — set membership: `expr in ("a", "b", "c")`
 
-Boolean operators:
+### 6.3 Range and Null Operators
+
+- `between ... and ...` — numeric range check: `cpu between 50 and 80`
+- `is null` — null check: `finished_at is null`
+- `is not null` — not-null check: `finished_at is not null`
+
+### 6.4 Arithmetic Operators
+
+- `+` — addition
+- `-` — subtraction (also unary minus: `-5`)
+- `*` — multiplication
+- `/` — division
+- `%` — modulo
+
+Arithmetic expressions can be used in `set` assignments, `where` filters, `having` filters, and anywhere an expression is expected.
+
+### 6.5 Boolean Operators
 
 - `and`
 - `or`
 - `not`
 
+### 6.6 Function Calls
+
+- `upper(s)` — uppercase
+- `lower(s)` — lowercase
+- `length(s)` — string length
+- `trim(s)` — trim whitespace
+- `concat(a, b, ...)` — string concatenation
+- `substring(s, start, len)` — substring extraction
+- `coalesce(a, b, ...)` — first non-null value
+
+### 6.7 Operator Precedence
+
 Precedence, highest to lowest:
 
 1. Parentheses: `( ... )`
-2. `not`
-3. Comparison, `contains`, `matches`
-4. `and`
-5. `or`
+2. Function calls, unary `-`
+3. Arithmetic: `*`, `/`, `%`
+4. Arithmetic: `+`, `-`
+5. Comparison, `contains`, `matches`, `between`, `is null`, `is not null`
+6. `not`
+7. `and`
+8. `or`
 
 Example:
 
@@ -289,6 +322,10 @@ Example:
 observe containers where status = running and (cpu > 80% or memory > 90%)
 observe containers where image in ("postgres", "mysql", "redis")
 observe containers where name matches "^api-"
+observe containers where cpu between 50 and 80
+observe containers | where finished_at is not null | select name
+observe containers | set mem_gb = memory / 1073741824 | select name, mem_gb
+observe containers | where upper(name) contains "API" | select name
 ```
 
 ## 7. Time Syntax
@@ -331,20 +368,15 @@ Supported pipeline nodes:
 
 - `where <expression>`
 - `select <field-list>`
-- `group by <field-list>`
-- `sort by <field> [asc|desc]`
+- `group by <field-list> [with <agg>(<field>) as <alias> [, ...]]`
+- `having <expression>`
+- `sort by <field> [asc|desc] [, <field> [asc|desc] ...]`
 - `limit <integer>`
+- `offset <integer>`
+- `distinct`
 - `alert <string>`
 - `set <field> = <value-expr>`
 - `if <condition> then <pipeline-node> [else if <condition> then <pipeline-node>] [else <pipeline-node>]`
-
-Examples:
-
-```dol
-observe containers | where cpu > 80% | select name, cpu, memory
-observe images | sort by size desc | limit 10
-events containers | where action = "die" | group by image
-```
 
 Pipeline rules:
 
@@ -352,11 +384,14 @@ Pipeline rules:
 - Each pipe receives rows or events from the previous stage.
 - `where` filters records.
 - `select` changes output shape.
-- `group by` aggregates records by field values. Aggregation functions are reserved for v0.2.
-- `sort by` requires finite input; for streams it is only valid after a finite time window.
+- `group by` aggregates records by field values. When `with` is given, the specified aggregate functions (sum, count, avg, min, max) are computed per group with optional `as` aliases.
+- `having` filters groups after aggregation (similar to `where` but operates on aggregate values).
+- `sort by` supports multiple sort fields with independent direction per field.
 - `limit` stops after N records.
+- `offset` skips the first N records.
+- `distinct` removes duplicate rows (same values across all fields).
 - `alert` inside a pipeline emits an alert when a record reaches that stage.
-- `set <field> = <value>` adds or overrides a field on each row.
+- `set <field> = <value>` adds or overrides a field on each row. The value can include arithmetic expressions, function calls, and field references.
 - `if <condition> then <nodes> [else <nodes>]` conditionally applies nested pipeline nodes.
 
 Examples:
@@ -368,6 +403,12 @@ events containers | where action = "die" | group by image
 observe containers | set health = if state = running then "healthy" else "unhealthy"
 observe containers | if cpu > 90% then alert "Critical CPU" else alert "OK"
 observe containers | set severity = case when cpu > 80% then "critical" else "ok" end
+observe containers | set mem_gb = memory / 1073741824 | select name, mem_gb
+observe containers | sort by state desc, cpu desc | select name, state, cpu
+observe containers | distinct | select image
+observe containers | sort by name asc | offset 10 | limit 5
+observe containers | group by image with count(id) as cnt | having cnt > 3
+observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc
 ```
 
 ## 10. Execution Semantics
@@ -491,9 +532,9 @@ runtime error: historical query requires a telemetry store
 Reserved keywords in v0.1:
 
 ```text
-alert analyze and asc at by case contains desc end else events false find for from
-group if inspect last limit matches not observe or restart select set sort then to
-true webhook when where
+alert analyze and asc at between by case contains count desc distinct else end events
+false find for from group having if in inspect is last limit matches max min not null
+observe or offset restart select set sort sum then to true webhook when where
 ```
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.
