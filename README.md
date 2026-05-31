@@ -51,12 +51,50 @@ dol "observe containers | group by state"
 
 ## Installation
 
+### Quick install (Linux / macOS)
+
 ```bash
-git clone <repo>
+curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash
+```
+
+Or pin a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash -s -- 0.1.1
+```
+
+### macOS — Homebrew
+
+```bash
+brew tap genc-murat/dockql https://github.com/genc-murat/DockQL
+brew install dol
+```
+
+### Cargo (if you have Rust installed)
+
+```bash
+cargo install dol
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/genc-murat/DockQL.git
 cd DockQL
 cargo build --release
 ./target/release/dol --help
+
+# Optionally install to ~/.cargo/bin
+make install
 ```
+
+### Download a pre-built binary
+
+Pre-compiled binaries for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and
+Windows (x86_64) are attached to
+each [GitHub Release](https://github.com/genc-murat/DockQL/releases).
+Simply download the archive for your platform, extract it, and place the
+`dol` (or `dol.exe`) binary anywhere on your `PATH`.
 
 ## Usage
 

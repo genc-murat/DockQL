@@ -6,6 +6,10 @@ repository = "https://github.com/genc-murat/DockQL"
 homepage = "https://github.com/genc-murat/DockQL"
 description = "Docker Observability Language - A domain-specific language and CLI tool for querying Docker infrastructure"
 
+[[bin]]
+name = "dol"
+path = "src/main.rs"
+
 [package.metadata.docs.rs]
 logo = "https://genc-murat.github.io/DockQL/logo.svg"
 
