@@ -39,7 +39,7 @@ impl Completer for DolHelper {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
-        let keywords = [
+        let        keywords = [
             "observe",
             "events",
             "inspect",
@@ -81,6 +81,7 @@ impl Completer for DolHelper {
             "desc",
             ".help",
             ".exit",
+            ".host",
             ".watch",
             ".export",
             ".output",
@@ -118,6 +119,15 @@ impl Hinter for DolHelper {
 impl Highlighter for DolHelper {}
 
 pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
+    // Apply config host on startup so all Docker clients use it.
+    let mut current_host = config.host.clone().unwrap_or_default();
+    if !current_host.is_empty() {
+        // SAFETY: single-threaded startup — no concurrent env access.
+        unsafe {
+            std::env::set_var("DOCKER_HOST", &current_host);
+        }
+    }
+
     let h = Config::builder()
         .history_ignore_space(true)
         .completion_type(CompletionType::List)
@@ -137,6 +147,11 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
     }
 
     println!("DOL REPL — type .help for commands, Ctrl+C or .exit to quit");
+    if current_host.is_empty() {
+        println!("   Connected to: local Docker socket");
+    } else {
+        println!("   Connected to: {current_host}");
+    }
 
     loop {
         let input = match rl.readline("dol> ") {
@@ -160,6 +175,23 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
             match trimmed.as_str() {
                 ".exit" | ".quit" => break,
                 ".help" => print_repl_help(),
+                cmd if cmd.starts_with(".host") => {
+                    let val = cmd.strip_prefix(".host").unwrap_or("").trim();
+                    if val.is_empty() {
+                        if current_host.is_empty() {
+                            println!("Docker host: local socket");
+                        } else {
+                            println!("Docker host: {current_host}");
+                        }
+                    } else {
+                        current_host = val.to_owned();
+                        // SAFETY: REPL is single-threaded for user input.
+                        unsafe {
+                            std::env::set_var("DOCKER_HOST", &current_host);
+                        }
+                        println!("Docker host set to: {current_host}");
+                    }
+                }
                 ".history" => {
                     for (i, entry) in rl.history().iter().enumerate() {
                         println!("{:5}  {entry}", i + 1);
@@ -217,6 +249,7 @@ fn print_repl_help() {
     println!("DOL REPL Commands:");
     println!("  .help              Show this help");
     println!("  .exit / .quit      Exit the REPL");
+    println!("  .host [<addr>]     Show or set Docker host (e.g. tcp://192.168.1.100:2375)");
     println!("  .history           Show command history");
     println!("  .watch <secs>      Re-run last query every N seconds");
     println!("  .export <path>     Export results to file");
