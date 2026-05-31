@@ -26,7 +26,7 @@ Version 0.1 prioritizes:
 
 ## 2. Query Families
 
-DOL v0.1 has five top-level query families.
+DOL v0.1 has six top-level query families.
 
 ### 2.1 `observe`
 
@@ -98,6 +98,8 @@ fields images
 fields networks
 fields volumes
 ```
+
+### 2.6 `alert`
 
 `alert` defines a continuously evaluated condition and an action.
 
@@ -216,7 +218,7 @@ Common event fields:
 - `image`
 - `attributes`
 
-## 4.6 Dynamic Fields via `set`
+### 4.6 Dynamic Fields via `set`
 
 The `set` pipeline node adds or overrides a field on each row. The value can be:
 
@@ -431,9 +433,9 @@ observe containers | group by image with count(id) as cnt | having cnt > 3
 observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc
 ```
 
-## 10. Execution Semantics
+## 9. Execution Semantics
 
-### 10.1 Batch Queries
+### 9.1 Batch Queries
 
 Batch queries consume finite input and return finite output.
 
@@ -453,7 +455,7 @@ Batch execution steps:
 4. Apply filters and pipeline stages.
 5. Render output as table or JSON.
 
-### 10.2 Stream Queries
+### 9.2 Stream Queries
 
 Stream queries consume unbounded input and keep running until cancelled.
 
@@ -473,7 +475,7 @@ Stream execution rules:
 - Alerts keep state per entity when evaluating `for <duration>`.
 - Ctrl+C should cancel stream execution cleanly.
 
-### 10.3 Hybrid Queries
+### 9.3 Hybrid Queries
 
 Hybrid queries combine a current Docker snapshot with recent metric samples.
 
@@ -491,7 +493,7 @@ Hybrid execution rules:
 - Metric fields may come from the metrics collector or telemetry store.
 - Windowed metrics use samples whose timestamps are inside the requested interval.
 
-### 10.4 Historical Queries
+### 9.4 Historical Queries
 
 Historical queries require a telemetry store.
 
@@ -510,7 +512,7 @@ Historical execution rules:
 - `last` selects all matching records in the window ending at execution time.
 - Historical results must include source timestamps in JSON output.
 
-## 11. Consistency Model
+## 10. Consistency Model
 
 DOL v0.1 uses best-effort consistency:
 
@@ -522,7 +524,7 @@ DOL v0.1 uses best-effort consistency:
 
 The implementation should preserve timestamps and raw Docker IDs so users can reconcile output with Docker itself.
 
-## 12. Error Semantics
+## 11. Error Semantics
 
 Parser errors should include:
 
@@ -547,7 +549,7 @@ runtime error: `sort by` requires finite input; add `last 5m` or `limit`
 runtime error: historical query requires a telemetry store
 ```
 
-## 13. Reserved Keywords
+## 12. Reserved Keywords
 
 Reserved keywords in v0.1:
 
@@ -559,7 +561,7 @@ observe or offset restart select set sort sum then to true webhook when where
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.
 
-## 14. MVP Acceptance Query Set
+## 13. MVP Acceptance Query Set
 
 The parser and executor should prioritize these queries first:
 
@@ -578,7 +580,7 @@ alert when cpu > 85% for 2m then print "High CPU"
 observe containers | where cpu > 80% | alert "High CPU detected"
 ```
 
-## 15. Out of Scope for v0.1
+## 14. Out of Scope for v0.1
 
 These features are intentionally deferred:
 
@@ -590,7 +592,7 @@ These features are intentionally deferred:
 - Automatic remediation without explicit user opt-in.
 - AI-generated decisions that are not backed by deterministic signals.
 
-## 16. Implementation Notes for Faz 2
+## 15. Implementation Notes for Phase 2
 
 Parser phase should start with:
 
@@ -612,7 +614,7 @@ Recommended AST split:
 - `TimeSelector`
 - `AlertRule`
 
-## 17. CLI Reference
+## 16. CLI Reference
 
 The DOL CLI supports the following flags:
 

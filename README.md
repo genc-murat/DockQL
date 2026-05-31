@@ -387,7 +387,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ## Examples
 
-55 example queries are available in [`examples/`](examples/):
+54 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers
@@ -437,6 +437,11 @@ Key modules:
 - **`repl`** — interactive REPL with tab completion and command history
 - **`cli`** — CLI entry point (clap)
 
-## Specification
+## Documentation
 
-See [`docs/spec.md`](docs/spec.md) for the full language specification and [`docs/examples.md`](docs/examples.md) for a categorized query reference.
+- [**Tutorial**](docs/tutorial.md) — step-by-step guide from installation to advanced pipelines
+- [**Language Specification**](docs/spec.md) — full DOL language reference
+- [**Examples**](docs/examples.md) — categorized query reference with 55+ examples
+- [**Architecture**](docs/architecture.md) — pipeline architecture and module overview
+- [**Analysis**](docs/analyze.md) — anomaly detection and automated analysis
+- [**Storage**](docs/storage.md) — telemetry store, retention, and historical queries

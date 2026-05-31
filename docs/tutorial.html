@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="generator" content="pandoc" />
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <title>tutorial</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --surface: #11161e;
+      --surface-hover: #181f2a;
+      --border: #1f2a37;
+      --text: #e3e9f1;
+      --muted: #8a95a5;
+      --accent: #57a6ff;
+      --accent-glow: rgba(87, 166, 255, 0.15);
+      --green: #3ecf8e;
+      --orange: #d4973c;
+      --red: #f14c4c;
+      --code-bg: #0d121a;
+      --inline-code-bg: #1a2332;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 40px 0 80px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    .container {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 0 28px;
+    }
+
+    /* ── Headings ───────────────────────────── */
+    h1, h2, h3, h4 { font-weight: 600; line-height: 1.3; }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    h2 {
+      font-size: 1.4rem;
+      margin-top: 36px;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    h3 { font-size: 1.1rem; margin-top: 28px; margin-bottom: 8px; }
+    h4 { font-size: 1rem; margin-top: 20px; margin-bottom: 8px; color: var(--muted); }
+
+    /* ── Text ───────────────────────────────── */
+    p { margin-bottom: 16px; }
+    strong { color: #f0f6fc; }
+    em { color: var(--muted); }
+
+    /* ── Links ──────────────────────────────── */
+    a { color: var(--accent); text-decoration: none; transition: color .2s; }
+    a:hover { text-decoration: underline; color: #7cb8ff; }
+
+    /* ── Lists ──────────────────────────────── */
+    ul, ol { margin-bottom: 16px; padding-left: 24px; }
+    li { margin-bottom: 4px; }
+    ul li::marker { color: var(--green); }
+
+    /* ── Code blocks ────────────────────────── */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+      overflow-x: auto;
+      font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: #c9d1d9;
+      transition: border-color .3s;
+    }
+    pre:hover { border-color: rgba(87, 166, 255, 0.3); }
+    code {
+      font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85em;
+    }
+    :not(pre) > code {
+      background: var(--inline-code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      color: #e3e9f1;
+    }
+    pre code { background: none; padding: 0; font-size: inherit; }
+
+    /* ── Syntax highlighting (Pandoc) ──────── */
+    /* mapped to landing page colors */
+    .kw  { color: #ff7b72; }  /* keyword */
+    .cf  { color: #ff7b72; }  /* control flow */
+    .fu  { color: #d2a8ff; }  /* function */
+    .st  { color: #a5d6ff; }  /* string */
+    .ch  { color: #a5d6ff; }  /* character */
+    .dv,
+    .bn,
+    .fl  { color: #79c0ff; }  /* number */
+    .op  { color: #ffa657; }  /* operator */
+    .co  { color: #636d7d; }  /* comment */
+    .dt  { color: #7cb8ff; }  /* data type */
+    .va  { color: #e3e9f1; }  /* variable */
+    .bu  { color: #d2a8ff; }  /* built-in */
+    .im  { color: #57a6ff; }  /* import */
+    .in  { color: #57a6ff; }  /* information */
+    .cn  { color: #79c0ff; }  /* constant */
+    .ss  { color: #a5d6ff; }  /* special string */
+    .sc  { color: #ffa657; }  /* special char */
+    .vs  { color: #a5d6ff; }  /* verbatim string */
+    .at  { color: #d4973c; }  /* attribute */
+    .av  { color: #d4973c; }  /* attribute value */
+    .do  { color: #3ecf8e; }  /* documentation */
+    .an  { color: #8a95a5; }  /* annotation */
+    .ot  { color: #8a95a5; }  /* other */
+    .re  { color: #8a95a5; }  /* region marker */
+    .wa  { color: #d4973c; }  /* warning */
+    .er  { color: #f14c4c; }  /* error */
+    .al  { color: #f14c4c; }  /* alert */
+
+    /* ── Tables ─────────────────────────────── */
+    table {
+      border-collapse: collapse;
+      margin-bottom: 20px;
+      width: 100%;
+      font-size: 0.88rem;
+    }
+    th, td {
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
+    th {
+      background: var(--surface);
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.74rem;
+      letter-spacing: 0.04em;
+    }
+    td { color: var(--text); }
+    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    tr:hover td { background: rgba(87,166,255,0.06); }
+
+    /* ── Blockquotes ────────────────────────── */
+    blockquote {
+      border-left: 3px solid var(--accent);
+      padding: 10px 18px;
+      margin-bottom: 16px;
+      background: rgba(87,166,255,0.06);
+      border-radius: 0 8px 8px 0;
+    }
+    blockquote p { margin-bottom: 0; color: var(--muted); }
+
+    /* ── Horizontal rule ────────────────────── */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 32px 0;
+    }
+
+    /* ── Inline elements ────────────────────── */
+    abbr[title] { cursor: help; border-bottom: 1px dotted var(--muted); }
+    sub, sup { font-size: 0.75em; }
+
+    /* ── Responsive ─────────────────────────── */
+    @media (max-width: 640px) {
+      body { padding: 24px 16px 60px; }
+      .container { padding: 0 16px; }
+      h1 { font-size: 1.5rem; }
+      h2 { font-size: 1.2rem; }
+      h3 { font-size: 1rem; }
+      table { font-size: 0.8rem; }
+      th, td { padding: 6px 10px; }
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+<h1 id="dol-tutorial-learn-by-doing">DOL Tutorial — Learn by Doing</h1>
+<p>This hands-on tutorial walks you through Docker Observability
+Language (DOL) from your first query to advanced pipelines. Each step
+builds on the previous one, with real examples you can run against your
+Docker environment.</p>
+<hr />
+<h2 id="prerequisites-installation">1. Prerequisites &amp;
+Installation</h2>
+<p><strong>You’ll need:</strong></p>
+<ul>
+<li>Docker Engine running on your machine (local or remote)</li>
+<li>Rust 1.75+ toolchain (for building from source)</li>
+</ul>
+<p><strong>Install DOL:</strong></p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Option A: Build from source</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone https://github.com/genc-murat/DockQL.git</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> DockQL</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> build <span class="at">--release</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="bu">alias</span> dol=<span class="st">&#39;./target/release/dol&#39;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Option B: Install via cargo</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> install dol <span class="at">--git</span> https://github.com/genc-murat/DockQL</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Option C: Download a pre-built binary</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="co"># Grab the latest from https://github.com/genc-murat/DockQL/releases</span></span></code></pre></div>
+<p><strong>Verify it works:</strong></p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> dol <span class="at">--version</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> 0.1.1</span></code></pre></div>
+<hr />
+<h2 id="your-first-query">2. Your First Query</h2>
+<p>Let’s start simple. The <code>observe</code> command gives you a
+snapshot of your Docker environment. It’s like <code>docker ps</code>
+but more powerful and with a query language.</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers&quot;</span></span></code></pre></div>
+<p>You’ll see a table of all containers (running and stopped):</p>
+<pre class="text"><code>┌──────────────┬──────────────────┬──────────┬────────┬─────────┐
+│ name         │ image            │ state    │ status │ cpu     │
+├──────────────┼──────────────────┼──────────┼────────┼─────────┤
+│ web-01       │ nginx:1.25       │ running  │ Up 2h  │ 12.5%   │
+│ api-gateway  │ envoy:1.29       │ running  │ Up 2h  │ 8.3%    │
+│ redis-cache  │ redis:7-alpine   │ running  │ Up 3h  │ 2.1%    │
+│ db-master    │ postgres:16      │ running  │ Up 1h  │ 15.7%   │
+│ old-worker   │ python:3.11      │ exited   │ Ex 2d  │ 0.0%    │
+└──────────────┴──────────────────┴──────────┴────────┴─────────┘</code></pre>
+<blockquote>
+<p><strong>What happened?</strong> DOL connected to your Docker daemon,
+listed all containers, fetched live metrics (CPU, memory), and rendered
+them as a formatted table.</p>
+</blockquote>
+<p><strong>Try these variations:</strong></p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># List images instead of containers</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe images&quot;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co"># List networks</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe networks&quot;</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="co"># List volumes</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe volumes&quot;</span></span></code></pre></div>
+<hr />
+<h2 id="filtering-with-where">3. Filtering with <code>where</code></h2>
+<p>The <code>where</code> clause filters results — only rows matching
+the condition are kept.</p>
+<p><strong>Running containers only:</strong></p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers where state = running&quot;</span></span></code></pre></div>
+<p>No more squinting at the <code>STATUS</code> column to find running
+containers.</p>
+<p><strong>Containers running a specific image:</strong></p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers where image contains &#39;postgres&#39;&quot;</span></span></code></pre></div>
+<p>The <code>contains</code> operator does a case-sensitive substring
+match. Great for finding all containers from a family of images.</p>
+<p><strong>Combining conditions with <code>and</code> /
+<code>or</code>:</strong></p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers where (state = running and cpu &gt; 50%) or image contains &#39;postgres&#39;&quot;</span></span></code></pre></div>
+<p>You can use parentheses to control precedence, just like in any
+programming language.</p>
+<p><strong>Other comparison operators:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Operator</th>
+<th>Meaning</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>=</code></td>
+<td>equals</td>
+<td><code>state = running</code></td>
+</tr>
+<tr>
+<td><code>!=</code></td>
+<td>not equals</td>
+<td><code>state != exited</code></td>
+</tr>
+<tr>
+<td><code>&gt;</code></td>
+<td>greater than</td>
+<td><code>cpu &gt; 80%</code></td>
+</tr>
+<tr>
+<td><code>&lt;</code></td>
+<td>less than</td>
+<td><code>memory &lt; 100MB</code></td>
+</tr>
+<tr>
+<td><code>&gt;=</code></td>
+<td>greater or equal</td>
+<td><code>restart_count &gt;= 3</code></td>
+</tr>
+<tr>
+<td><code>&lt;=</code></td>
+<td>less or equal</td>
+<td><code>cpu &lt;= 50%</code></td>
+</tr>
+<tr>
+<td><code>contains</code></td>
+<td>substring match</td>
+<td><code>image contains \"nginx\"</code></td>
+</tr>
+<tr>
+<td><code>matches</code></td>
+<td>regex match</td>
+<td><code>name matches \"^api-\"</code></td>
+</tr>
+<tr>
+<td><code>in</code></td>
+<td>set membership</td>
+<td><code>image in (\"postgres\", \"mysql\")</code></td>
+</tr>
+<tr>
+<td><code>between</code></td>
+<td>range check</td>
+<td><code>cpu between 50 and 80</code></td>
+</tr>
+<tr>
+<td><code>is null</code></td>
+<td>null check</td>
+<td><code>finished_at is null</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="narrowing-output-with-select">4. Narrowing Output with
+<code>select</code></h2>
+<p>When you only need a few columns, use <code>select</code>:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where state = running | select name, image, cpu&quot;</span></span></code></pre></div>
+<pre class="text"><code>┌──────────────┬──────────────────┬──────┐
+│ name         │ image            │ cpu  │
+├──────────────┼──────────────────┼──────┤
+│ web-01       │ nginx:1.25       │ 12.5 │
+│ api-gateway  │ envoy:1.29       │ 8.3  │
+│ redis-cache  │ redis:7-alpine   │ 2.1  │
+│ db-master    │ postgres:16      │ 15.7 │
+└──────────────┴──────────────────┴──────┘</code></pre>
+<p><strong>Discover available fields:</strong></p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;fields containers&quot;</span></span></code></pre></div>
+<p>This shows all fields you can use in <code>select</code>,
+<code>where</code>, and other pipeline stages. Try it for images,
+networks, and volumes too!</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;fields images&quot;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;fields networks&quot;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;fields volumes&quot;</span></span></code></pre></div>
+<hr />
+<h2 id="sorting-and-limits">5. Sorting and Limits</h2>
+<p><strong>Sort by CPU descending:</strong></p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where state = running | sort cpu desc | select name, cpu&quot;</span></span></code></pre></div>
+<pre class="text"><code>┌──────────────┬──────┐
+│ name         │ cpu  │
+├──────────────┼──────┤
+│ db-master    │ 15.7 │
+│ web-01       │ 12.5 │
+│ api-gateway  │ 8.3  │
+│ redis-cache  │ 5.1  │
+└──────────────┴──────┘</code></pre>
+<p><strong>Top 3 by memory:</strong></p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | sort memory desc | limit 3 | select name, image, memory&quot;</span></span></code></pre></div>
+<p><strong>Remove duplicates with <code>distinct</code>:</strong></p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | distinct | select image&quot;</span></span></code></pre></div>
+<p>This lists each unique image only once, even if multiple containers
+use it.</p>
+<p><strong>Multi-field sort:</strong></p>
+<p>Sort by state (running first), then by CPU within each state
+group:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | sort by state desc, cpu desc | select name, state, cpu&quot;</span></span></code></pre></div>
+<p>Each field can have its own direction (<code>asc</code> or
+<code>desc</code>).</p>
+<p><strong>Pagination with <code>offset</code>:</strong></p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Skip the first 5 containers, show the next 5</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | sort name asc | offset 5 | limit 5 | select name&quot;</span></span></code></pre></div>
+<hr />
+<h2 id="building-pipelines">6. Building Pipelines</h2>
+<p>DOL queries are built as pipelines: data flows from left to right
+through each stage (<code>|</code>). Every stage transforms the data
+stream.</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co"># A typical pipeline:</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers |</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="st">     where state = running |</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="st">     where cpu &gt; 50% |</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="st">     select name, image, cpu |</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="st">     sort cpu desc |</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="st">     limit 5&quot;</span></span></code></pre></div>
+<p>The order matters:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>observe containers</code></td>
+<td>Fetches all container data</td>
+</tr>
+<tr>
+<td><code>where state = running</code></td>
+<td>Drops non-running containers</td>
+</tr>
+<tr>
+<td><code>where cpu &gt; 50%</code></td>
+<td>Keeps only high-CPU containers</td>
+</tr>
+<tr>
+<td><code>select name, image, cpu</code></td>
+<td>Keeps only 3 columns</td>
+</tr>
+<tr>
+<td><code>sort cpu desc</code></td>
+<td>Orders by CPU (highest first)</td>
+</tr>
+<tr>
+<td><code>limit 5</code></td>
+<td>Shows only top 5</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Why pipeline order matters:</strong> Putting
+<code>where</code> before <code>select</code> reduces the data volume
+early, making the query faster. DOL’s planner also does automatic filter
+push-down to optimize execution.</p>
+</blockquote>
+<p><strong>Boolean operators in filters:</strong></p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Find either high-CPU or recently restarted containers</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where (cpu &gt; 80% and state = running) or restart_count &gt; 3&quot;</span></span></code></pre></div>
+<p><strong>Inline comments (<code>#</code>):</strong></p>
+<pre class="dol"><code>observe containers          # list all containers
+    | where state = running # only running ones
+    | select name, image    # just these columns</code></pre>
+<hr />
+<h2 id="working-with-labels">7. Working with Labels</h2>
+<p>Docker labels are key-value pairs attached to containers. DOL gives
+you two ways to work with them.</p>
+<p><strong>Filter by the full labels string:</strong></p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where labels contains &#39;env=prod&#39;&quot;</span></span></code></pre></div>
+<p><strong>Use dot notation for individual labels:</strong></p>
+<p>If a container has <code>com.docker.compose.project=myapp</code>:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where label.com.docker.compose.project = &#39;myapp&#39;&quot;</span></span></code></pre></div>
+<p><strong>Docker Compose projects:</strong></p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co"># List all compose project names</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | select name, compose_project&quot;</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Filter by compose project</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where compose_project = &#39;myapp&#39; | select name, state&quot;</span></span></code></pre></div>
+<hr />
+<h2 id="computing-new-fields-with-set">8. Computing New Fields with
+<code>set</code></h2>
+<p>The <code>set</code> stage adds or overrides a field on each row —
+like assigning a variable in a loop.</p>
+<p><strong>Add a static label:</strong></p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | set tier = &#39;production&#39; | select name, tier&quot;</span></span></code></pre></div>
+<p><strong>Convert raw memory bytes to gigabytes:</strong></p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | set mem_gb = memory / 1073741824 | select name, mem_gb&quot;</span></span></code></pre></div>
+<p>Memory values come in bytes. Dividing by 1073741824 (1024³) converts
+to GB.</p>
+<p><strong>Calculate memory usage percentage:</strong></p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | set mem_pct = (memory / memory_limit) * 100 |</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="st">     select name, image, mem_pct | sort mem_pct desc&quot;</span></span></code></pre></div>
+<blockquote>
+<p><strong>Note:</strong> If <code>memory_limit</code> is 0 (unlimited),
+this will produce a division by zero. Use a conditional or
+<code>coalesce()</code> (introduced in Step 9) to handle this
+safely.</p>
+</blockquote>
+<p><strong>Conditional values with
+<code>if/then/else</code>:</strong></p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | set health =</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="st">     if state = running then &#39;healthy&#39;</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="st">     else if state = paused then &#39;degraded&#39;</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a><span class="st">     else &#39;down&#39; | select name, state, health&quot;</span></span></code></pre></div>
+<p><strong>Case/when for multiple conditions:</strong></p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | set severity = case</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="st">     when cpu &gt; 80% then &#39;critical&#39;</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="st">     when cpu &gt; 50% then &#39;warning&#39;</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="st">     else &#39;ok&#39;</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a><span class="st">     end | select name, cpu, severity&quot;</span></span></code></pre></div>
+<hr />
+<h2 id="filtering-with-string-functions">9. Filtering with String
+Functions</h2>
+<p>DOL provides several string functions for data transformation.</p>
+<p><strong>Case-insensitive filtering:</strong></p>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where upper(name) contains &#39;API&#39; | select name&quot;</span></span></code></pre></div>
+<p>The <code>upper()</code> function converts names to uppercase, so
+‘api-gateway’, ‘API-GATEWAY’, and ‘Api-Gateway’ all match.</p>
+<p><strong>Find containers with long names:</strong></p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where length(name) &gt; 15 | select name&quot;</span></span></code></pre></div>
+<p><strong>Concatenate fields:</strong></p>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | set label = concat(name, &#39;:&#39;, image) | select name, label&quot;</span></span></code></pre></div>
+<p><strong>Safely handle nulls with <code>coalesce</code>:</strong></p>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | set display_name =</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="st">     coalesce(label.name, name, &#39;unnamed&#39;) | select name, display_name&quot;</span></span></code></pre></div>
+<p><code>coalesce()</code> returns the first non-null, non-empty value
+from its arguments. Here it tries <code>label.name</code> first, falls
+back to the container <code>name</code>, and uses <code>'unnamed'</code>
+if both are null.</p>
+<p><strong>Other string functions:</strong></p>
+<table>
+<colgroup>
+<col style="width: 17%" />
+<col style="width: 41%" />
+<col style="width: 41%" />
+</colgroup>
+<thead>
+<tr>
+<th>Function</th>
+<th>Description</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>upper(s)</code></td>
+<td>Convert to uppercase</td>
+<td><code>upper(name)</code></td>
+</tr>
+<tr>
+<td><code>lower(s)</code></td>
+<td>Convert to lowercase</td>
+<td><code>lower(image)</code></td>
+</tr>
+<tr>
+<td><code>length(s)</code></td>
+<td>String length</td>
+<td><code>length(name) &gt; 10</code></td>
+</tr>
+<tr>
+<td><code>trim(s)</code></td>
+<td>Strip whitespace</td>
+<td><code>trim(name) = 'web-01'</code></td>
+</tr>
+<tr>
+<td><code>concat(a, b, ...)</code></td>
+<td>Concatenate strings</td>
+<td><code>concat(name, ':', image)</code></td>
+</tr>
+<tr>
+<td><code>substring(s, start, len)</code></td>
+<td>Substring extraction</td>
+<td><code>substring(name, 0, 3)</code></td>
+</tr>
+<tr>
+<td><code>coalesce(a, b, ...)</code></td>
+<td>First non-null value</td>
+<td><code>coalesce(label.env, 'dev')</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="aggregation-with-group-by">10. Aggregation with
+<code>group by</code></h2>
+<p>Group rows by field values to see summaries.</p>
+<p><strong>Count containers by state:</strong></p>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | group by state&quot;</span></span></code></pre></div>
+<pre class="text"><code>┌──────────┬───────┐
+│ state    │ count │
+├──────────┼───────┤
+│ running  │ 4     │
+│ exited   │ 1     │
+│ paused   │ 1     │
+└──────────┴───────┘</code></pre>
+<p><strong>Top 5 images by container count:</strong></p>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | group by image | sort by count desc | limit 5&quot;</span></span></code></pre></div>
+<p><strong>With aggregate functions (avg, sum, min, max):</strong></p>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Average CPU per image</span></span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc&quot;</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Total memory per compose project</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | group by compose_project with sum(memory) as total_mem |</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a><span class="st">     sort by total_mem desc&quot;</span></span></code></pre></div>
+<p><strong>Filter groups with <code>having</code>:</strong></p>
+<p>Only show images with more than 2 containers:</p>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | group by image with count(id) as cnt | having cnt &gt; 2&quot;</span></span></code></pre></div>
+<p>The <code>having</code> clause is like <code>where</code> but
+operates on aggregate values <em>after</em> grouping.</p>
+<hr />
+<h2 id="streaming-events">11. Streaming Events</h2>
+<p><code>events</code> opens a live stream from the Docker event bus. It
+keeps running until you press Ctrl+C.</p>
+<p><strong>Watch all container events live:</strong></p>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;events containers&quot;</span></span></code></pre></div>
+<p><strong>Filter to specific event types:</strong></p>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Only crash events</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;events containers where action = &#39;die&#39;&quot;</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Restart events with selected columns</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;events containers | where action = &#39;restart&#39; | select time, container, image&quot;</span></span></code></pre></div>
+<p><strong>Stop after N events:</strong></p>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;events containers | limit 10&quot;</span></span></code></pre></div>
+<p><strong>Historical replay (requires
+<code>--store</code>):</strong></p>
+<div class="sourceCode" id="cb42"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="st">&quot;events containers last 1h&quot;</span></span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="st">&quot;events containers from &#39;2026-05-30 10:00:00Z&#39; to &#39;2026-05-30 11:00:00Z&#39; where action = &#39;oom&#39;&quot;</span></span></code></pre></div>
+<p><strong>Monitor different resource types:</strong></p>
+<div class="sourceCode" id="cb43"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Image pulls</span></span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;events images | where action = &#39;pull&#39;&quot;</span></span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Network connections</span></span>
+<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;events networks | where action = &#39;connect&#39; | select time, actor_id&quot;</span></span>
+<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Volume mounts</span></span>
+<span id="cb43-8"><a href="#cb43-8" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;events volumes | where action = &#39;mount&#39;&quot;</span></span></code></pre></div>
+<hr />
+<h2 id="setting-up-alerts">12. Setting Up Alerts</h2>
+<p>Alerts run continuously, evaluating a condition and triggering an
+action when it’s been true for a specified duration.</p>
+<p><strong>Simple CPU alert:</strong></p>
+<div class="sourceCode" id="cb44"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&#39;alert when cpu &gt; 85% for 2m then print &quot;High CPU detected&quot;&#39;</span></span></code></pre></div>
+<p>This monitors all containers. If any container’s CPU stays above 85%
+for 2 consecutive minutes, DOL prints the message.</p>
+<p><strong>Alert with webhook (POST to a URL):</strong></p>
+<div class="sourceCode" id="cb45"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&#39;alert when memory &gt; 90% for 1m then webhook &quot;https://hooks.example.com/alert&quot;&#39;</span></span></code></pre></div>
+<p><strong>Auto-restart a container on restart loop:</strong></p>
+<div class="sourceCode" id="cb46"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&#39;alert when restart_count &gt; 5 for 3m then restart container api-service&#39;</span></span></code></pre></div>
+<blockquote>
+<p><strong>Warning:</strong> The <code>restart</code> action actually
+runs <code>docker restart &lt;container&gt;</code>. Use with caution in
+production.</p>
+</blockquote>
+<p><strong>Inline alert in a pipeline:</strong></p>
+<div class="sourceCode" id="cb47"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;observe containers | where cpu &gt; 80% | alert &#39;High CPU detected&#39;&quot;</span></span></code></pre></div>
+<p>This fires an alert for each container that passes the filter at
+query time — a one-shot check, not a continuous monitor.</p>
+<p><strong>Persist alert history (with
+<code>--store</code>):</strong></p>
+<div class="sourceCode" id="cb48"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="st">&#39;alert when restart_count &gt; 3 for 5m then print &quot;Restart loop&quot;&#39;</span></span></code></pre></div>
+<p>All fired alerts are logged to the <code>alert_history</code> table
+in the telemetry store. You can review them later with SQLite
+queries.</p>
+<hr />
+<h2 id="time-travel-historical-queries">13. Time Travel (Historical
+Queries)</h2>
+<p>With a telemetry store configured, you can query the past. This
+requires the background collector to be running.</p>
+<p><strong>Start the collector:</strong></p>
+<div class="sourceCode" id="cb49"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="at">--collect</span></span></code></pre></div>
+<p>This polls Docker every 30 seconds (metrics) and takes snapshots
+every 5 minutes. Let it run for a while to accumulate data.</p>
+<p><strong>Observe containers as they were 10 minutes ago:</strong></p>
+<div class="sourceCode" id="cb50"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="st">&quot;observe containers last 10m&quot;</span></span></code></pre></div>
+<p><strong>Inspect a specific container at a point in time:</strong></p>
+<div class="sourceCode" id="cb51"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Current state</span></span>
+<span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;inspect container db-master&quot;</span></span>
+<span id="cb51-3"><a href="#cb51-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb51-4"><a href="#cb51-4" aria-hidden="true" tabindex="-1"></a><span class="co"># State right before last night&#39;s outage</span></span>
+<span id="cb51-5"><a href="#cb51-5" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="st">&#39;inspect container db-master at &quot;2026-05-30 04:59:59Z&quot;&#39;</span></span></code></pre></div>
+<p><strong>Replay events from a time window:</strong></p>
+<div class="sourceCode" id="cb52"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="dt">\</span></span>
+<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;events containers last 1h | where action = &quot;die&quot; | group by image | sort by count desc&#39;</span></span></code></pre></div>
+<blockquote>
+<p><strong>Tip:</strong> Time travel is invaluable for post-mortems.
+Instead of guessing what happened, you can see exactly which containers
+were running and what their metrics looked like at the time of the
+incident.</p>
+</blockquote>
+<hr />
+<h2 id="automated-analysis">14. Automated Analysis</h2>
+<p>The <code>analyze</code> command runs deterministic checks across
+your Docker environment.</p>
+<p><strong>Find all anomalies:</strong></p>
+<div class="sourceCode" id="cb53"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;analyze containers find anomalies&quot;</span></span></code></pre></div>
+<p>This detects:</p>
+<ul>
+<li><strong>Restart loops</strong> — containers restarting
+frequently</li>
+<li><strong>High CPU</strong> — sustained CPU above thresholds</li>
+<li><strong>Memory pressure</strong> — containers near their memory
+limits</li>
+<li><strong>Unhealthy states</strong> — containers that have exited or
+died</li>
+<li><strong>Deployment errors</strong> — frequent <code>die</code>
+events (requires <code>--store</code>)</li>
+</ul>
+<p><strong>Diagnose a specific container:</strong></p>
+<div class="sourceCode" id="cb54"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;explain container api-service&quot;</span></span></code></pre></div>
+<p>Shows a detailed diagnostic: current state, key metrics, and any
+detected anomalies affecting that container.</p>
+<p><strong>Find related containers (blast radius):</strong></p>
+<div class="sourceCode" id="cb55"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="st">&quot;analyze containers correlate&quot;</span></span></code></pre></div>
+<p>Groups containers by shared images and labels. Useful for
+understanding: “If this container fails, what else is affected?”</p>
+<p><strong>Identify restart loops historically:</strong></p>
+<div class="sourceCode" id="cb56"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> <span class="at">--store</span> telemetry.db <span class="st">&quot;analyze containers find restart_loops last 30m&quot;</span></span></code></pre></div>
+<hr />
+<h2 id="using-the-repl">15. Using the REPL</h2>
+<p>The interactive REPL gives you a shell with tab completion, command
+history, and in-session state.</p>
+<p><strong>Start it up:</strong></p>
+<div class="sourceCode" id="cb57"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb57-1"><a href="#cb57-1" aria-hidden="true" tabindex="-1"></a><span class="ex">dol</span> repl</span></code></pre></div>
+<pre class="text"><code>DOL REPL — type .help for commands, Ctrl+C or .exit to quit
+
+dol&gt;</code></pre>
+<p><strong>Run queries interactively:</strong></p>
+<pre class="text"><code>dol&gt; observe containers | where state = running | select name, cpu
+dol&gt; events containers | limit 5</code></pre>
+<p><strong>REPL commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.help</code></td>
+<td>Show available commands</td>
+</tr>
+<tr>
+<td><code>.exit</code> / <code>.quit</code></td>
+<td>Exit the REPL</td>
+</tr>
+<tr>
+<td><code>.history</code></td>
+<td>Show command history</td>
+</tr>
+<tr>
+<td><code>.watch &lt;secs&gt;</code></td>
+<td>Re-run the last query every N sec</td>
+</tr>
+<tr>
+<td><code>.export &lt;path&gt;</code></td>
+<td>Write results to a file</td>
+</tr>
+<tr>
+<td><code>.output &lt;fmt&gt;</code></td>
+<td>Set output format (table/json/csv)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Auto-refresh a query:</strong></p>
+<pre class="text"><code>dol&gt; observe containers | where cpu &gt; 80% | select name, cpu
+dol&gt; .watch 5</code></pre>
+<p>This re-runs the query every 5 seconds — like a poor man’s monitoring
+dashboard.</p>
+<hr />
+<h2 id="next-steps">16. Next Steps</h2>
+<p>You’ve covered all the core DOL features. Here’s what to explore
+next:</p>
+<table>
+<colgroup>
+<col style="width: 43%" />
+<col style="width: 56%" />
+</colgroup>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="examples.md">Query Examples</a></td>
+<td>54 categorized examples for every feature</td>
+</tr>
+<tr>
+<td><a href="spec.md">Language Spec</a></td>
+<td>Complete syntax, types, and operator reference</td>
+</tr>
+<tr>
+<td><a href="architecture.md">Architecture</a></td>
+<td>How DOL works under the hood</td>
+</tr>
+<tr>
+<td><a href="analyze.md">Analysis Docs</a></td>
+<td>Anomaly detection and health scoring</td>
+</tr>
+<tr>
+<td><a href="storage.md">Storage Docs</a></td>
+<td>Telemetry store schema and retention</td>
+</tr>
+<tr>
+<td><a href="examples.md#11-terminal-dashboard">TUI Dashboard</a></td>
+<td><code>dol top</code> and <code>dol dashboard</code> commands</td>
+</tr>
+<tr>
+<td><a href="https://genc-murat.github.io/DockQL/dol/index.html">API
+Docs</a></td>
+<td>Rust API documentation (cargo doc)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Quick tips to remember:</strong></p>
+<ul>
+<li>Use <code>""</code> quotes for the full query string:
+<code>dol "observe containers"</code></li>
+<li>Use backticks or single quotes for string literals <em>inside</em>
+the query</li>
+<li>Pipeline order matters: <code>where</code> early,
+<code>select</code> mid, <code>sort</code>/<code>limit</code> late</li>
+<li><code>--store telemetry.db</code> unlocks historical queries, alert
+history, and <code>--diff</code></li>
+<li><code>--watch &lt;secs&gt;</code> repeats batch queries for live
+monitoring</li>
+<li><code>--output json</code> for machine-readable output, pipe to
+<code>jq</code> for processing</li>
+<li><code>--host tcp://&lt;addr&gt;:2375</code> to query a remote Docker
+daemon</li>
+</ul>
+</div>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    document.querySelectorAll('code.language-mermaid').forEach(el => {
+      const pre = el.closest('pre');
+      if (pre) {
+        pre.className = 'mermaid';
+        pre.textContent = el.textContent;
+      }
+    });
+    mermaid.initialize({ theme: 'dark', themeVariables: { background: '#0a0e14', primaryColor: '#57a6ff' } });
+  </script>
+</body>
+</html>

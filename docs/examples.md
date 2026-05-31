@@ -1,6 +1,8 @@
 # DOL Query Examples
 
-This document provides a reference of common, useful, and complex Docker Observability Language (DOL) queries.
+> **New to DOL?** Start with the [step-by-step Tutorial](tutorial.md) for a
+> structured introduction. This page is a reference you can come back to for
+> quick examples.
 
 ## 1. Observing Live State (`observe`)
 
@@ -22,6 +24,9 @@ observe containers
     where image contains "postgres" 
     | select name, status, ports
 ```
+
+> **Pipeline order tip:** Put `where` filters *before* `select` to reduce data
+> early — see the [Tutorial](tutorial.md#6-building-pipelines) for why.
 
 **List the 10 largest images:**
 ```dol
@@ -272,6 +277,12 @@ analyze container api-service correlate
 ## 8. Complex Pipelines
 
 You can chain multiple operations together using the `|` pipe operator.
+Data flows from left to right through each stage.
+
+> **Pipeline order matters:** `where` filters should come first (reduces
+> data volume early), then `select` (narrows columns), then `sort`/`limit`.
+> See the [Tutorial](tutorial.md#6-building-pipelines) for a full walkthrough
+> with a stage-by-stage breakdown.
 
 **High CPU containers grouped by image:**
 ```dol
@@ -478,6 +489,9 @@ observe containers | group by compose_project with sum(memory) as total_mem | so
 
 Sort by multiple fields with independent direction per field.
 
+> See the [Tutorial](tutorial.md#5-sorting-and-limits) for more on `sort by`,
+> `limit`, `offset`, and `distinct`.
+
 **Sort by state then CPU:**
 ```dol
 observe containers | sort by state desc, cpu desc | select name, state, cpu
@@ -499,6 +513,9 @@ observe containers | distinct | select image
 ```dol
 observe containers | sort by name asc | offset 5 | limit 5 | select name
 ```
+
+> The [Tutorial](tutorial.md#5-sorting-and-limits) covers sort, limit, offset,
+> and distinct with a step-by-step progression.
 
 ## 18. Inline Comments
 

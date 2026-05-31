@@ -1,3 +1,6 @@
+#![doc(html_logo_url = "https://genc-murat.github.io/DockQL/logo.svg",
+       html_favicon_url = "https://genc-murat.github.io/DockQL/logo.svg")]
+
 pub mod alerts;
 pub mod analyze;
 pub mod ast;
