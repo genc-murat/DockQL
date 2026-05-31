@@ -171,12 +171,21 @@ dol --output json --export results.json "observe containers"
 dol --explain "observe containers | where cpu > 50% | select name, cpu"
 ```
 
-### Watch Mode
+### Watch Mode & Timeout
 
 ```bash
 # Re-run query every 5 seconds
 dol --watch 5 "observe containers | where state = running"
+
+# With a 10-second timeout to prevent hanging
+dol --watch 5 --timeout 10 "observe containers | where state = running"
 ```
+
+The `--timeout` flag sets a time limit on each query execution. If a query takes longer than the specified seconds, it is aborted and an error is logged. This is useful for:
+- `--watch` mode — prevent repeated queries from hanging on a slow Docker host
+- `events` streams — auto-stop after a duration (e.g., `dol --timeout 60 "events containers"`)
+- `alert` loops — each metrics collection call is individually timed out
+- Store (historical) queries — abort if the store is slow to respond
 
 ### Shell Completion
 
@@ -236,6 +245,19 @@ dol --export metrics.prom --export-format prometheus "observe containers"
 ```bash
 # Connect to a remote Docker daemon
 dol --host tcp://192.168.1.100:2375 "observe containers"
+```
+
+### Query Timeout
+
+```bash
+# Stop a streaming events query after 60 seconds
+dol --timeout 60 "events containers"
+
+# Prevent watch mode from hanging on slow queries
+dol --watch 5 --timeout 10 "observe containers"
+
+# Timeout alert metrics collection
+dol --timeout 15 'alert when cpu > 85% for 2m then print "High CPU"'
 ```
 
 ### Interactive REPL
@@ -378,6 +400,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `--export <path>` | Write output to file instead of stdout |
 | `--host <addr>` | Docker daemon host address |
 | `--watch <s>` | Re-run query every N seconds |
+| `--timeout <s>` | Query execution timeout in seconds (applies to watch, alert, events, store, and single queries) |
 | `--explain` | Show query plan without executing |
 | `--diff` | Compare results with last store snapshot |
 | `--completion <shell>` | Generate shell completion script |

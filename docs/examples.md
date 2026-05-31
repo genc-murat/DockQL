@@ -185,6 +185,13 @@ observe containers
     | alert "High CPU detected"
 ```
 
+**Alert with timeout (prevents hanging metrics collection):**
+```bash
+dol --timeout 15 'alert when cpu > 85% for 2m then print "High CPU"'
+```
+
+Each metrics collection cycle is individually timed out. If `docker stats` doesn't respond within 15 seconds, the cycle is aborted and the next one begins.
+
 ## 5. Streaming and Event History (`events`)
 
 `events` lets you tap into the Docker event bus. All resource types are supported: containers, images, networks, and volumes.
@@ -222,6 +229,17 @@ events volumes | where action = "mount"
 ```dol
 events containers | limit 10
 ```
+
+**Auto-stop an events stream after a timeout:**
+```bash
+# Stop streaming after 60 seconds
+dol --timeout 60 "events containers"
+
+# Combine with filter
+dol --timeout 30 "events containers | where action = die"
+```
+
+The `--timeout` flag is especially useful for events streams in scripts — it ensures the command doesn't run indefinitely. The stream is automatically terminated when the timeout is reached.
 
 **Replay events from a specific 1-hour window yesterday (requires `--store`):**
 ```dol

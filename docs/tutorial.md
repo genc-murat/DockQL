@@ -674,6 +674,22 @@ dol> .watch 5
 This re-runs the query every 5 seconds — like a poor man's monitoring
 dashboard.
 
+**Prevent hanging with `--timeout`:**
+
+When using `--watch` or running long-lived queries, use `--timeout` to set a
+maximum execution time per query:
+
+```bash
+# Stop watching if a query takes longer than 10 seconds
+dol --watch 5 --timeout 10 "observe containers"
+
+# Auto-stop an events stream after 60 seconds
+dol --timeout 60 "events containers"
+```
+
+If the query exceeds the timeout, it's aborted and an error is shown. The
+`--watch` loop continues to the next iteration.
+
 ---
 
 ## 16. Next Steps

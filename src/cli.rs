@@ -11,7 +11,7 @@ use crate::{
     dashboard,
     docker::DockerCliClient,
     events::{self, DockerCliEventSource},
-    executor::{self, render_csv, render_jsonl, render_table},
+    executor::{self, render_csv, render_jsonl, render_table, ExecutionResult},
     export::{self, ExportFormat},
     metrics::{DockerCliMetricsCollector, MetricsCollector},
     parser, planner,
@@ -66,6 +66,11 @@ pub struct Cli {
     /// Re-run the query every N seconds (batch queries only).
     #[arg(long)]
     pub watch: Option<u64>,
+
+    /// Timeout in seconds for each query execution (applies to watch, alert, events, and store queries).
+    /// If the query takes longer than this, it will be aborted and logged.
+    #[arg(long)]
+    pub timeout: Option<u64>,
 
     /// Export results to a file (format inferred from extension: .csv, .json, .jsonl, .table).
     #[arg(long)]
@@ -137,6 +142,27 @@ fn apply_host(cli_host: Option<&str>, config_host: Option<&str>) {
         unsafe {
             std::env::set_var("DOCKER_HOST", host);
         }
+    }
+}
+
+/// Run a blocking function with an optional timeout by spawning it on a
+/// dedicated blocking thread. The closure must own all its data (`'static`).
+async fn spawn_with_timeout<T, F>(timeout_secs: Option<u64>, f: F) -> Result<T, anyhow::Error>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, anyhow::Error> + Send + 'static,
+{
+    match timeout_secs {
+        Some(secs) => {
+            let handle = tokio::task::spawn_blocking(f);
+            match tokio::time::timeout(std::time::Duration::from_secs(secs), handle).await {
+                Ok(Ok(Ok(result))) => Ok(result),
+                Ok(Ok(Err(e))) => Err(e),
+                Ok(Err(join_err)) => Err(anyhow::anyhow!("blocking task failed: {join_err}")),
+                Err(_elapsed) => Err(anyhow::anyhow!("query timed out after {}s", secs)),
+            }
+        }
+        None => f(),
     }
 }
 
@@ -277,7 +303,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         None
     };
 
-    let output_result = |result: &executor::ExecutionResult| -> anyhow::Result<()> {
+    let output_result = |result: &ExecutionResult| -> anyhow::Result<()> {
         // When --export-format is set, write in that format regardless of --output
         if let Some(export_fmt) = cli.export_format {
             if let Some(ref writer) = export_writer {
@@ -350,7 +376,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Ok(())
     };
 
-    // Check if this is a historical query that needs the store.
+    // ── Store (historical) queries with optional timeout ──────────────
     if needs_store(&parsed.query) {
         let store_path = cli.store.as_deref().or(config.store.as_deref()).ok_or_else(|| {
             anyhow::anyhow!(
@@ -358,14 +384,17 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             )
         })?;
         let store = SqliteTelemetryStore::open(store_path)?;
-        let result = executor::execute_with_store(&parsed.query, &store)?;
+        let result = spawn_with_timeout(cli.timeout, move || {
+            executor::execute_with_store(&parsed.query, &store).map_err(Into::into)
+        })
+        .await?;
         output_result(&result)?;
         run_exports(&cli, &result).await?;
         return Ok(());
     }
 
+    // ── Alert mode with optional timeout ──────────────────────────────
     if let Query::Alert(rule) = &parsed.query {
-        let metrics = DockerCliMetricsCollector::default();
         let mut evaluator = AlertEvaluator::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
@@ -377,28 +406,51 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             .transpose()?
             .map(|s| Arc::new(Mutex::new(s)));
 
+        println!("Evaluating alert... (Ctrl+C to stop)");
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     break;
                 }
                 _ = interval.tick() => {
-                    let samples = metrics.collect()?;
+                    // Only the metrics.collect() call is blocking; the evaluator
+                    // is in-memory computation. Spawn just the collect.
+                    let samples = if let Some(secs) = cli.timeout {
+                        let m = DockerCliMetricsCollector::default();
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(secs),
+                            tokio::task::spawn_blocking(move || m.collect()),
+                        )
+                        .await
+                        .map_err(|_| anyhow::anyhow!("metrics collection timed out after {}s", secs))?
+                        .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+                    } else {
+                        DockerCliMetricsCollector::default().collect()
+                    };
 
-                    if let Some(ref store) = store
-                        && let Ok(mut s) = store.lock() {
-                            for sample in &samples {
-                                let _ = s.write_metric(sample.clone());
+                    match samples {
+                        Ok(samples) => {
+                            if let Some(ref store) = store
+                                && let Ok(mut s) = store.lock() {
+                                    for sample in &samples {
+                                        let _ = s.write_metric(sample.clone());
+                                    }
+                                }
+
+                            match evaluator.evaluate_samples(rule, &samples, std::time::Instant::now()) {
+                                Ok(events) => {
+                                    for event in events {
+                                        match output_format {
+                                            OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
+                                            OutputFormat::Json | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
+                                            OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
+                                        }
+                                    }
+                                }
+                                Err(e) => eprintln!("Alert evaluation error: {e}"),
                             }
                         }
-
-                    let events = evaluator.evaluate_samples(rule, &samples, std::time::Instant::now())?;
-                    for event in events {
-                        match output_format {
-                            OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
-                            OutputFormat::Json | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
-                            OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
-                        }
+                        Err(e) => eprintln!("Metrics collection error: {e}"),
                     }
                 }
             }
@@ -407,6 +459,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // ── Events streaming with optional auto-stop timeout ──────────────
     if let Query::Events(events_query) = &parsed.query {
         let source = DockerCliEventSource::default();
 
@@ -418,8 +471,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             .transpose()?
             .map(|s| Arc::new(Mutex::new(s)));
 
-        return events::stream_events(events_query, &source, |row| {
-            if let Some(ref store) = store
+        let (event_callback_store, event_callback_fmt) = (store.clone(), output_format);
+        let event_callback = move |row: crate::executor::Row| -> Result<(), crate::events::EventsError> {
+            if let Some(ref store) = event_callback_store
                 && let Ok(mut s) = store.lock()
                 && let (Some(time), Some(action)) = (
                     row.fields.get("time").and_then(|v| v.as_str()),
@@ -456,8 +510,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 let _ = s.write_event(event);
             }
 
-            let result = executor::ExecutionResult { rows: vec![row] };
-            match output_format {
+            let result = ExecutionResult { rows: vec![row] };
+            match event_callback_fmt {
                 OutputFormat::Table => {
                     println!("{}", render_table(&result));
                 }
@@ -465,7 +519,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     println!(
                         "{}",
                         serde_json::to_string(&result.rows[0])
-                            .map_err(events::EventsError::Json)?
+                            .map_err(crate::events::EventsError::Json)?
                     );
                 }
                 OutputFormat::Csv => {
@@ -487,15 +541,28 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     println!(
                         "{}",
                         serde_json::to_string(&result.rows[0])
-                            .map_err(events::EventsError::Json)?
+                            .map_err(crate::events::EventsError::Json)?
                     );
                 }
             }
             Ok(())
-        })
-        .map_err(Into::into);
+        };
+
+        if let Some(secs) = cli.timeout {
+            // Run the synchronous stream on a blocking thread with a timeout.
+            let q = events_query.clone();
+            let s = DockerCliEventSource::default();
+            spawn_with_timeout(Some(secs), move || {
+                crate::events::stream_events(&q, &s, &event_callback).map_err(Into::into)
+            })
+            .await?;
+        } else {
+            events::stream_events(events_query, &source, &event_callback)?;
+        }
+        return Ok(());
     }
 
+    // ── Batch query with optional --watch ──────────────────────────────
     let docker = DockerCliClient::default();
     let metrics = DockerCliMetricsCollector::default();
 
@@ -505,7 +572,24 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => break,
                 _ = interval.tick() => {
-                    match executor::execute_with_metrics(&parsed.query, &docker, &metrics) {
+                    let result = if let Some(secs) = cli.timeout {
+                        let q = parsed.query.clone();
+                        let d = DockerCliClient::default();
+                        let m = DockerCliMetricsCollector::default();
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(secs),
+                            tokio::task::spawn_blocking(move || {
+                                executor::execute_with_metrics(&q, &d, &m)
+                            }),
+                        )
+                        .await
+                        .map_err(|_| anyhow::anyhow!("query timed out after {}s", secs))?
+                        .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+                    } else {
+                        executor::execute_with_metrics(&parsed.query, &docker, &metrics)
+                    };
+
+                    match result {
                         Ok(ref result) => {
                             if let Err(e) = output_result(result) {
                                 eprintln!("Error writing output: {e}");
@@ -522,7 +606,23 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let result = executor::execute_with_metrics(&parsed.query, &docker, &metrics)?;
+    // ── Single batch query with optional timeout ──────────────────────
+    let result = if let Some(secs) = cli.timeout {
+        let q = parsed.query.clone();
+        let d = DockerCliClient::default();
+        let m = DockerCliMetricsCollector::default();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(secs),
+            tokio::task::spawn_blocking(move || {
+                executor::execute_with_metrics(&q, &d, &m)
+            }),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("query timed out after {}s", secs))?
+        .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+    } else {
+        executor::execute_with_metrics(&parsed.query, &docker, &metrics)
+    }?;
 
     if cli.diff {
         let store_path = cli
@@ -543,7 +643,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 }
 
 /// Push query results to configured external export targets.
-async fn run_exports(cli: &Cli, result: &executor::ExecutionResult) -> anyhow::Result<()> {
+async fn run_exports(cli: &Cli, result: &ExecutionResult) -> anyhow::Result<()> {
     if let Some(ref url) = cli.export_influx {
         eprintln!(
             "Pushing {} rows to InfluxDB at {url} ...",
@@ -592,6 +692,7 @@ mod tests {
             apply_retention: false,
             explain: false,
             watch: None,
+            timeout: None,
             export: None,
             export_format: None,
             export_influx: None,
@@ -621,6 +722,7 @@ mod tests {
             apply_retention: false,
             explain: false,
             watch: None,
+            timeout: None,
             export: None,
             export_format: None,
             export_influx: None,
