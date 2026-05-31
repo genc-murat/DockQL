@@ -609,8 +609,8 @@ Reserved keywords in v0.1:
 
 ```text
 alert analyze and asc at between by case contains count desc distinct else end events
-false find for from group having if in inspect is last limit matches max min not null
-observe or offset restart select set sort sum then to true webhook when where
+false find for from group having if in inspect is last limit logs matches max min not null
+observe or offset ping restart select set sort sum then to true webhook when where
 ```
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.
@@ -684,7 +684,7 @@ The DOL CLI supports the following flags:
 | `--export <path>` | Write output to file (format inferred from extension: .csv, .json, .jsonl, .table) |
 | `--export-format <fmt>` | Export file format: `influx`, `loki`, `prometheus` (used with `--export`) |
 | `--host <addr>` | Docker daemon address (e.g., `tcp://192.168.1.100:2375`) |
-| `--watch <s>` | Re-run query every N seconds (batch queries only) |
+| `--watch <s>` | Re-run query every N seconds (batch and alert queries) |
 | `--timeout <s>` | Query execution timeout in seconds — if a query takes longer than this, it is aborted (applies to watch, alert, events, store, and single queries) |
 | `--explain` | Show the logical query plan without executing |
 | `--diff` | Compare query results with the last store snapshot (requires `--store`) |

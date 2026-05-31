@@ -26,7 +26,7 @@ flowchart TD
 ## Core Components
 
 ### 1. Parser (`src/parser.rs`)
-A hand-written recursive descent parser that converts raw DOL strings into a strongly typed AST (`src/ast.rs`). It features detailed context-aware error reporting with source line display and a `^` pointer at the exact error column, plus explicit precedence handling for boolean operators, arithmetic operators (precedence climbing), and pipeline operators. Supports arithmetic expressions (`+`, `-`, `*`, `/`, `%`), function calls (`upper`, `lower`, `length`, `trim`, `concat`, `substring`), range checks (`between`, `is null`, `is not null`), aggregate functions (`sum`, `count`, `avg`, `min`, `max`), multi-field sort, inline comments (`#`), and all pipeline nodes (`having`, `distinct`, `offset`).
+A hand-written recursive descent parser that converts raw DOL strings into a strongly typed AST (`src/ast.rs`). It features detailed context-aware error reporting with source line display and a `^` pointer at the exact error column, plus explicit precedence handling for boolean operators, arithmetic operators (precedence climbing), and pipeline operators. Supports arithmetic expressions (`+`, `-`, `*`, `/`, `%`), function calls (`upper`, `lower`, `length`, `trim`, `concat`, `substring`, `coalesce`), range checks (`between`, `is null`, `is not null`), aggregate functions (`sum`, `count`, `avg`, `min`, `max`), multi-field sort, inline comments (`#`), and all pipeline nodes (`having`, `distinct`, `offset`).
 
 ### 2. Semantic Analyzer (`src/semantic.rs`)
 A static semantic analysis and type checking pass that runs immediately after parsing. It validates that all referenced fields (including dynamic fields added via `set` and dotted label paths like `label.env`) are valid for the given target (Containers, Images, Networks, or Volumes). It also performs static type compatibility checking on binary comparisons and arithmetic expressions (e.g., rejecting comparisons of String fields to numeric literals before querying data sources).
@@ -35,7 +35,7 @@ A static semantic analysis and type checking pass that runs immediately after pa
 Produces a `LogicalPlan` from the AST, performing filter push-down optimizations (e.g., moving `where` conditions closer to the data source). The plan is displayable for the `--explain` CLI flag, which shows the execution plan without running the query.
 
 ### 4. Executor (`src/executor.rs`)
-The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `fields`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports five output formats: table, CSV, JSON, JSON-Compact (minified JSON), and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot. Parser errors are displayed in ANSI red with a source context line and `^` pointer at the error column.
+The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `logs`, `ping`, `fields`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports five output formats: table, CSV, JSON, JSON-Compact (minified JSON), and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot. Parser errors are displayed in ANSI red with a source context line and `^` pointer at the error column.
 
 ### 4. Data Providers
 - **Docker Client (`src/docker.rs`):** Interfaces with the Docker Engine daemon (currently via Docker CLI wrapping) to list containers, images, volumes, networks, stream events, and inspect individual containers for enriched fields (`started_at`, `finished_at`, `restart_count`).
@@ -99,7 +99,8 @@ The CLI (`src/cli.rs`) uses `clap` for argument parsing. Key flags include:
 
 - `--output <table|csv|json|json-compact|jsonl>` — output format selection
 - `--explain` — show logical plan without executing
-- `--watch <s>` — repeat query every N seconds
+- `--watch <s>` — repeat query every N seconds (batch and alert queries)
+- `--timeout <s>` — query execution timeout (applies to watch, alert, events, store, and single queries)
 - `--diff` — compare with last store snapshot
 - `--export <path>` — write output to file
 - `--host <addr>` — remote Docker daemon address

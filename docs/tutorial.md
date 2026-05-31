@@ -75,6 +75,12 @@ dol "observe networks"
 
 # List volumes
 dol "observe volumes"
+
+# View the last 50 log lines from a container
+dol "logs container my-app tail 50"
+
+# Check if Docker daemon is reachable
+dol "ping"
 ```
 
 ---
@@ -721,10 +727,31 @@ dol --watch 5 --timeout 10 "observe containers"
 
 # Auto-stop an events stream after 60 seconds
 dol --timeout 60 "events containers"
+
+# Timeout alert metrics collection
+dol --timeout 15 'alert when cpu > 85% for 2m then print "High CPU"'
 ```
 
 If the query exceeds the timeout, it's aborted and an error is shown. The
 `--watch` loop continues to the next iteration.
+
+**`--watch` + Alert Integration**
+
+The `--watch` flag works with alert queries too. When combined, the watch
+interval controls the alert evaluation cadence instead of the hardcoded 5-second
+loop:
+
+```bash
+# Evaluate alert every 3 seconds
+dol --watch 3 'alert when cpu > 80% then print "High"'
+
+# With timeout to prevent hanging on slow metrics
+dol --watch 5 --timeout 10 'alert when cpu > 85% for 2m then print "High CPU"'
+```
+
+When `--watch` is used without an alert query, it re-runs the batch query at the
+specified interval (existing behavior). When used with an alert query, it drives
+the evaluation loop timing.
 
 ---
 

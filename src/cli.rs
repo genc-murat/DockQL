@@ -410,68 +410,70 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // ── Alert mode with optional timeout ──────────────────────────────
     if let Query::Alert(rule) = &parsed.query {
-        let mut evaluator = AlertEvaluator::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        // When --watch is set, alert is handled in the watch loop below with the specified interval.
+        if cli.watch.is_none() {
+            let mut evaluator = AlertEvaluator::new();
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
-        let store: Option<Arc<Mutex<SqliteTelemetryStore>>> = cli
-            .store
-            .as_deref()
-            .or(config.store.as_deref())
-            .map(SqliteTelemetryStore::open)
-            .transpose()?
-            .map(|s| Arc::new(Mutex::new(s)));
+            let store: Option<Arc<Mutex<SqliteTelemetryStore>>> = cli
+                .store
+                .as_deref()
+                .or(config.store.as_deref())
+                .map(SqliteTelemetryStore::open)
+                .transpose()?
+                .map(|s| Arc::new(Mutex::new(s)));
 
-        println!("Evaluating alert... (Ctrl+C to stop)");
-        loop {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    break;
-                }
-                _ = interval.tick() => {
-                    // Only the metrics.collect() call is blocking; the evaluator
-                    // is in-memory computation. Spawn just the collect.
-                    let samples = if let Some(secs) = cli.timeout {
-                        let m = DockerCliMetricsCollector::default();
-                        tokio::time::timeout(
-                            std::time::Duration::from_secs(secs),
-                            tokio::task::spawn_blocking(move || m.collect()),
-                        )
-                        .await
-                        .map_err(|_| anyhow::anyhow!("metrics collection timed out after {}s", secs))?
-                        .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
-                    } else {
-                        DockerCliMetricsCollector::default().collect()
-                    };
+            println!("Evaluating alert... (Ctrl+C to stop)");
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        // Only the metrics.collect() call is blocking; the evaluator
+                        // is in-memory computation. Spawn just the collect.
+                        let samples = if let Some(secs) = cli.timeout {
+                            let m = DockerCliMetricsCollector::default();
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(secs),
+                                tokio::task::spawn_blocking(move || m.collect()),
+                            )
+                            .await
+                            .map_err(|_| anyhow::anyhow!("metrics collection timed out after {}s", secs))?
+                            .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+                        } else {
+                            DockerCliMetricsCollector::default().collect()
+                        };
 
-                    match samples {
-                        Ok(samples) => {
-                            if let Some(ref store) = store
-                                && let Ok(mut s) = store.lock() {
-                                    for sample in &samples {
-                                        let _ = s.write_metric(sample.clone());
-                                    }
-                                }
-
-                            match evaluator.evaluate_samples(rule, &samples, std::time::Instant::now()) {
-                                Ok(events) => {
-                                    for event in events {
-                                        match output_format {
-                                            OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
-                                            OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
-                                            OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
+                        match samples {
+                            Ok(samples) => {
+                                if let Some(ref store) = store
+                                    && let Ok(mut s) = store.lock() {
+                                        for sample in &samples {
+                                            let _ = s.write_metric(sample.clone());
                                         }
                                     }
+
+                                match evaluator.evaluate_samples(rule, &samples, std::time::Instant::now()) {
+                                    Ok(events) => {
+                                        for event in events {
+                                            match output_format {
+                                                OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
+                                                OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
+                                                OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
+                                            }
+                                        }
+                                    }
+                                    Err(e) => eprintln!("Alert evaluation error: {e}"),
                                 }
-                                Err(e) => eprintln!("Alert evaluation error: {e}"),
                             }
+                            Err(e) => eprintln!("Metrics collection error: {e}"),
                         }
-                        Err(e) => eprintln!("Metrics collection error: {e}"),
                     }
                 }
             }
         }
-
-        return Ok(());
+        // If --watch is set, fall through to the watch loop below
     }
 
     // ── Events streaming with optional auto-stop timeout ──────────────
@@ -577,6 +579,26 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // ── Alert state for --watch (stateful evaluator persists across iterations) ──
+    let mut alert_evaluator = match &parsed.query {
+        Query::Alert(_) => Some(AlertEvaluator::new()),
+        _ => None,
+    };
+    let alert_rule: Option<crate::ast::AlertRule> = match &parsed.query {
+        Query::Alert(r) => Some(r.clone()),
+        _ => None,
+    };
+    let alert_store: Option<Arc<Mutex<SqliteTelemetryStore>>> = if alert_rule.is_some() {
+        cli.store
+            .as_deref()
+            .or(config.store.as_deref())
+            .map(SqliteTelemetryStore::open)
+            .transpose()?
+            .map(|s| Arc::new(Mutex::new(s)))
+    } else {
+        None
+    };
+
     // ── Batch query with optional --watch ──────────────────────────────
     let docker = DockerCliClient::default();
     let metrics = DockerCliMetricsCollector::default();
@@ -587,33 +609,75 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => break,
                 _ = interval.tick() => {
-                    let result = if let Some(secs) = cli.timeout {
-                        let q = parsed.query.clone();
-                        let d = DockerCliClient::default();
-                        let m = DockerCliMetricsCollector::default();
-                        tokio::time::timeout(
-                            std::time::Duration::from_secs(secs),
-                            tokio::task::spawn_blocking(move || {
-                                executor::execute_with_metrics(&q, &d, &m)
-                            }),
-                        )
-                        .await
-                        .map_err(|_| anyhow::anyhow!("query timed out after {}s", secs))?
-                        .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
-                    } else {
-                        executor::execute_with_metrics(&parsed.query, &docker, &metrics)
-                    };
+                    if let (Some(ev), Some(rule)) = (&mut alert_evaluator, &alert_rule) {
+                        // ── Alert evaluation in --watch loop ──
+                        let samples = if let Some(secs) = cli.timeout {
+                            let m = DockerCliMetricsCollector::default();
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(secs),
+                                tokio::task::spawn_blocking(move || m.collect()),
+                            )
+                            .await
+                            .map_err(|_| anyhow::anyhow!("metrics collection timed out after {}s", secs))?
+                            .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+                        } else {
+                            DockerCliMetricsCollector::default().collect()
+                        };
 
-                    match result {
-                        Ok(ref result) => {
-                            if let Err(e) = output_result(result) {
-                                eprintln!("Error writing output: {e}");
+                        match samples {
+                            Ok(samples) => {
+                                if let Some(ref store) = alert_store
+                                    && let Ok(mut s) = store.lock() {
+                                        for sample in &samples {
+                                            let _ = s.write_metric(sample.clone());
+                                        }
+                                    }
+
+                                match ev.evaluate_samples(rule, &samples, std::time::Instant::now()) {
+                                    Ok(events) => {
+                                        for event in events {
+                                            match output_format {
+                                                OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
+                                                OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
+                                                OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
+                                            }
+                                        }
+                                    }
+                                    Err(e) => eprintln!("Alert evaluation error: {e}"),
+                                }
                             }
-                            if let Err(e) = run_exports(&cli, result).await {
-                                eprintln!("Export error: {e}");
-                            }
+                            Err(e) => eprintln!("Metrics collection error: {e}"),
                         }
-                        Err(e) => eprintln!("Error: {e}"),
+                    } else {
+                        // ── Batch query execution ──
+                        let result = if let Some(secs) = cli.timeout {
+                            let q = parsed.query.clone();
+                            let d = DockerCliClient::default();
+                            let m = DockerCliMetricsCollector::default();
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(secs),
+                                tokio::task::spawn_blocking(move || {
+                                    executor::execute_with_metrics(&q, &d, &m)
+                                }),
+                            )
+                            .await
+                            .map_err(|_| anyhow::anyhow!("query timed out after {}s", secs))?
+                            .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+                        } else {
+                            executor::execute_with_metrics(&parsed.query, &docker, &metrics)
+                        };
+
+                        match result {
+                            Ok(ref result) => {
+                                if let Err(e) = output_result(result) {
+                                    eprintln!("Error writing output: {e}");
+                                }
+                                if let Err(e) = run_exports(&cli, result).await {
+                                    eprintln!("Export error: {e}");
+                                }
+                            }
+                            Err(e) => eprintln!("Error: {e}"),
+                        }
                     }
                 }
             }
@@ -870,4 +934,111 @@ mod tests {
             _ => {}
         }
     }
+
+    #[tokio::test]
+    async fn watch_with_alert_runs_without_panic() {
+        let cli = Cli {
+            query: Some(r#"alert when cpu > 80% for 30s then print "High""#.to_owned()),
+            watch: Some(1),
+            output: None,
+            store: None,
+            collect: false,
+            metrics_interval: 30,
+            snapshot_interval: 300,
+            store_stats: false,
+            apply_retention: false,
+            explain: false,
+            timeout: None,
+            export: None,
+            export_format: None,
+            export_influx: None,
+            export_grafana_loki: None,
+            export_prometheus: None,
+            host: None,
+            completion: None,
+            diff: false,
+            command: None,
+        };
+
+        // Watch loop runs indefinitely; use timeout to verify no panic
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            run(cli),
+        )
+        .await;
+
+        assert!(result.is_err(), "watch+alert loop should run until timeout (no docker)");
+    }
+
+    #[tokio::test]
+    async fn watch_with_alert_with_timeout() {
+        let cli = Cli {
+            query: Some(r#"alert when cpu > 80% for 30s then print "High""#.to_owned()),
+            watch: Some(5),
+            output: None,
+            store: None,
+            collect: false,
+            metrics_interval: 30,
+            snapshot_interval: 300,
+            store_stats: false,
+            apply_retention: false,
+            explain: false,
+            timeout: Some(1),
+            export: None,
+            export_format: None,
+            export_influx: None,
+            export_grafana_loki: None,
+            export_prometheus: None,
+            host: None,
+            completion: None,
+            diff: false,
+            command: None,
+        };
+
+        // With --timeout, the collect() call uses spawn_blocking inside the watch loop.
+        // Without docker, metrics collection fails and prints error, loop continues.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            run(cli),
+        )
+        .await;
+
+        assert!(result.is_err(), "watch+alert with timeout should still loop indefinitely");
+    }
+
+    #[tokio::test]
+    async fn alert_without_watch_runs_dedicated_loop() {
+        let cli = Cli {
+            query: Some(r#"alert when cpu > 80% for 30s then print "High""#.to_owned()),
+            watch: None,
+            output: None,
+            store: None,
+            collect: false,
+            metrics_interval: 30,
+            snapshot_interval: 300,
+            store_stats: false,
+            apply_retention: false,
+            explain: false,
+            timeout: None,
+            export: None,
+            export_format: None,
+            export_influx: None,
+            export_grafana_loki: None,
+            export_prometheus: None,
+            host: None,
+            completion: None,
+            diff: false,
+            command: None,
+        };
+
+        // Dedicated alert loop also runs indefinitely
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            run(cli),
+        )
+        .await;
+
+        assert!(result.is_err(), "dedicated alert loop should run until timeout (no docker)");
+    }
 }
+

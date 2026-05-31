@@ -472,7 +472,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ## Examples
 
-54 example queries are available in [`examples/`](examples/):
+58 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers
@@ -488,7 +488,9 @@ events containers | where action = die | limit 10
 events images | where action = pull
 inspect container api-service
 inspect container db-master at "2025-05-30 04:59:59Z"
+logs container my-app
 logs container my-app tail 50
+logs container my-app tail 200 | where message contains "error" | select line, message
 ping
 analyze containers find anomalies
 alert when cpu > 85% for 2m then print High CPU

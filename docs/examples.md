@@ -2,7 +2,8 @@
 
 > **New to DOL?** Start with the [step-by-step Tutorial](tutorial.md) for a
 > structured introduction. This page is a reference you can come back to for
-> quick examples.
+> quick examples. **58 example queries** are available in the
+> [`examples/`](https://github.com/genc-murat/DockQL/tree/main/examples) directory.
 
 ## 1. Observing Live State (`observe`)
 
@@ -151,7 +152,42 @@ events containers
     | group by image
 ```
 
-## 4. Alerting and Monitoring (`alert`)
+## 4. Container Logs (`logs`)
+
+Retrieve log output from running containers. The `logs` query returns lines with
+`line` number, `message` content, and `container` name.
+
+**View the last 100 lines (default):**
+```dol
+logs container my-app
+```
+
+**View the last 50 lines:**
+```dol
+logs container my-app tail 50
+```
+
+**Filter logs with pipeline:**
+```dol
+logs container my-app | where message contains "error" | select line, message
+```
+
+**Filter logs with tail and pipeline:**
+```dol
+logs container my-app tail 200 | where message contains "error" | select line, message
+```
+
+## 5. Docker Connectivity (`ping`)
+
+Test connectivity to the Docker daemon. Returns `status: ok` and a message on
+success, or `status: error` with details on failure.
+
+**Basic ping:**
+```dol
+ping
+```
+
+## 6. Alerting and Monitoring (`alert`)
 
 Alerts run continuously and trigger actions when conditions are met for a duration.
 
@@ -185,6 +221,15 @@ observe containers
     | alert "High CPU detected"
 ```
 
+**Alert with `--watch` (custom evaluation cadence):**
+```bash
+# Evaluate alert every 3 seconds
+dol --watch 3 'alert when cpu > 80% then print "High"'
+
+# With timeout to prevent hanging metrics collection
+dol --watch 5 --timeout 10 'alert when cpu > 85% for 2m then print "High CPU"'
+```
+
 **Alert with timeout (prevents hanging metrics collection):**
 ```bash
 dol --timeout 15 'alert when cpu > 85% for 2m then print "High CPU"'
@@ -192,7 +237,10 @@ dol --timeout 15 'alert when cpu > 85% for 2m then print "High CPU"'
 
 Each metrics collection cycle is individually timed out. If `docker stats` doesn't respond within 15 seconds, the cycle is aborted and the next one begins.
 
-## 5. Streaming and Event History (`events`)
+When `--watch` is used with an alert query, the watch interval controls the
+evaluation cadence instead of the default 5-second loop.
+
+## 7. Streaming and Event History (`events`)
 
 `events` lets you tap into the Docker event bus. All resource types are supported: containers, images, networks, and volumes.
 
@@ -249,7 +297,7 @@ events containers
     where action = "oom"
 ```
 
-## 6. Time Travel (`inspect ... at` / `observe ... last`)
+## 8. Time Travel (`inspect ... at` / `observe ... last`)
 
 Historical queries allow you to view the exact state of containers as they were at a specific moment in the past. Requires `--store`.
 
@@ -278,7 +326,7 @@ observe containers last 10m
 observe containers at "2026-05-30 12:00:00Z"
 ```
 
-## 7. Automated Insights (`analyze`)
+## 9. Automated Insights (`analyze`)
 
 The deterministic analysis engine automatically surfaces problems without writing complex queries.
 
@@ -312,7 +360,7 @@ analyze containers find leaks
 analyze containers find drift
 ```
 
-## 8. Complex Pipelines
+## 10. Complex Pipelines
 
 You can chain multiple operations together using the `|` pipe operator.
 Data flows from left to right through each stage.
@@ -360,7 +408,7 @@ observe containers
     | select name, compose_project, state
 ```
 
-## 9. Interactive REPL
+## 11. Interactive REPL
 
 Start an interactive shell with `dol repl`. Tab completion, command history, and REPL commands available.
 
@@ -385,7 +433,7 @@ dol> .help
 | `.export <path>` | Set export file path |
 | `.output <fmt>` | Set output format |
 
-## 10. Config Management
+## 12. Config Management
 
 Create and manage DOL configuration:
 
@@ -403,7 +451,7 @@ dol config view
 
 Supported config keys: `store`, `output`, `host`, `metrics-interval`, `snapshot-interval`.
 
-## 11. Terminal Dashboard
+## 13. Terminal Dashboard
 
 Interactive TUI monitors for live container observability.
 
@@ -444,7 +492,7 @@ Keyboard controls:
 - `h` — toggle help overlay
 - `q` / Esc — quit
 
-## 12. Arithmetic Expressions
+## 14. Arithmetic Expressions
 
 Compute new fields using arithmetic with `+`, `-`, `*`, `/`, `%`.
 
@@ -463,7 +511,7 @@ observe containers | set mem_pct = (memory / memory_limit) * 100 | select name, 
 observe containers | where (memory / 1073741824) > 1 | select name, memory
 ```
 
-## 13. String Functions
+## 15. String Functions
 
 Apply string transformations with `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`.
 
@@ -487,7 +535,7 @@ observe containers | where length(name) > 10 | select name
 observe containers | set display_name = coalesce(label.name, name, "unknown")
 ```
 
-## 14. Range and Null Checks
+## 16. Range and Null Checks
 
 **Between operator for inclusive range checks:**
 ```dol
@@ -504,7 +552,7 @@ observe containers where finished_at is not null | select name, finished_at
 observe containers where compose_project is null | select name
 ```
 
-## 15. Aggregation with Functions
+## 17. Aggregation with Functions
 
 Group by with `sum`, `count`, `avg`, `min`, `max`.
 
@@ -523,7 +571,7 @@ observe containers | group by state with count(id) as cnt | having cnt > 1
 observe containers | group by compose_project with sum(memory) as total_mem | sort by total_mem desc
 ```
 
-## 16. Multi-Field Sort
+## 18. Multi-Field Sort
 
 Sort by multiple fields with independent direction per field.
 
@@ -540,7 +588,7 @@ observe containers | sort by state desc, cpu desc | select name, state, cpu
 observe containers | sort by image asc, name asc | select name, image
 ```
 
-## 17. Distinct and Offset
+## 19. Distinct and Offset
 
 **Remove duplicate rows (distinct):**
 ```dol
@@ -555,7 +603,7 @@ observe containers | sort by name asc | offset 5 | limit 5 | select name
 > The [Tutorial](tutorial.md#5-sorting-and-limits) covers sort, limit, offset,
 > and distinct with a step-by-step progression.
 
-## 18. Inline Comments
+## 20. Inline Comments
 
 Comments start with `#` and extend to end of line.
 
@@ -565,7 +613,7 @@ observe containers          # list all containers
     | select name, image    # just these columns
 ```
 
-## 19. External Integrations
+## 21. External Integrations
 
 Push query results directly to external monitoring systems.
 
