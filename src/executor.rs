@@ -5,8 +5,8 @@ use thiserror::Error;
 use crate::{
     analyze::{self, AnalyzeError},
     ast::{
-        CollectionTarget, DurationUnit, Expression, ObserveQuery, PipelineNode, Query,
-        SortDirection,
+        AggregateExpr, CollectionTarget, DurationUnit, Expression, ObserveQuery, PipelineNode,
+        Query, SortDirection,
     },
     docker::{Container, DockerClient, DockerError, Image, MetricSample, Network, Volume},
     eval::{self, EvalError},
@@ -400,7 +400,9 @@ fn apply_pipeline_node(mut rows: Vec<Row>, node: &PipelineNode) -> Result<Vec<Ro
             rows.truncate(*limit as usize);
             Ok(rows)
         }
-        PipelineNode::GroupBy { fields, .. } => Ok(group_rows(rows, fields)),
+        PipelineNode::GroupBy { fields, aggregates } => {
+            Ok(group_rows(rows, fields, aggregates))
+        }
         PipelineNode::Having(expr) => filter_rows(rows, expr),
         PipelineNode::Distinct => {
             let mut seen = HashSet::new();
@@ -945,8 +947,25 @@ fn latest_metrics_by_container(samples: Vec<MetricSample>) -> HashMap<String, Me
     latest
 }
 
-fn group_rows(rows: Vec<Row>, group_fields: &[String]) -> Vec<Row> {
-    let mut groups: BTreeMap<Vec<String>, (Row, u64)> = BTreeMap::new();
+fn group_rows(
+    rows: Vec<Row>,
+    group_fields: &[String],
+    aggregates: &[AggregateExpr],
+) -> Vec<Row> {
+    // Helper struct to accumulate state for each group
+    struct GroupAcc {
+        row: Row,
+        count: u64,
+        sums: HashMap<String, f64>,
+        avg_sums: HashMap<String, f64>,
+        avg_counts: HashMap<String, u64>,
+        mins: HashMap<String, f64>,
+        maxs: HashMap<String, f64>,
+        min_inits: HashSet<String>,
+        max_inits: HashSet<String>,
+    }
+
+    let mut groups: BTreeMap<Vec<String>, GroupAcc> = BTreeMap::new();
 
     for row in rows {
         let key: Vec<String> = group_fields
@@ -959,23 +978,116 @@ fn group_rows(rows: Vec<Row>, group_fields: &[String]) -> Vec<Row> {
             })
             .collect();
 
-        let entry = groups.entry(key).or_insert_with(|| {
+        let acc = groups.entry(key).or_insert_with(|| {
             let mut fields = BTreeMap::new();
             for f in group_fields {
                 if let Some(v) = row.fields.get(f) {
                     fields.insert(f.clone(), v.clone());
                 }
             }
-            (Row { fields }, 0)
+            GroupAcc {
+                row: Row { fields },
+                count: 0,
+                sums: HashMap::new(),
+                avg_sums: HashMap::new(),
+                avg_counts: HashMap::new(),
+                mins: HashMap::new(),
+                maxs: HashMap::new(),
+                min_inits: HashSet::new(),
+                max_inits: HashSet::new(),
+            }
         });
-        entry.1 += 1;
+
+        acc.count += 1;
+
+        // Accumulate aggregate values
+        for agg in aggregates {
+            let alias = &agg.alias;
+            if let Some(v) = row.fields.get(&agg.field) {
+                if let Some(num) = eval::json_as_f64(v) {
+                    match agg.function.as_str() {
+                        "sum" => {
+                            *acc.sums.entry(alias.clone()).or_insert(0.0) += num;
+                        }
+                        "avg" => {
+                            *acc.avg_sums.entry(alias.clone()).or_insert(0.0) += num;
+                            *acc.avg_counts.entry(alias.clone()).or_insert(0) += 1;
+                        }
+                        "min" => {
+                            if !acc.min_inits.contains(alias) || num < acc.mins[alias] {
+                                acc.mins.insert(alias.clone(), num);
+                                acc.min_inits.insert(alias.clone());
+                            }
+                        }
+                        "max" => {
+                            if !acc.max_inits.contains(alias) || num > acc.maxs[alias] {
+                                acc.maxs.insert(alias.clone(), num);
+                                acc.max_inits.insert(alias.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
+    // Build result rows with aggregate values
     groups
-        .into_iter()
-        .map(|(_, (mut row, count))| {
-            row.fields
-                .insert("count".to_owned(), JsonValue::Number(Number::from(count)));
+        .into_values()
+        .map(|acc| {
+            let mut row = acc.row;
+            if aggregates.is_empty() {
+                // Backward compatible: add default count column
+                row.fields.insert(
+                    "count".to_owned(),
+                    JsonValue::Number(Number::from(acc.count)),
+                );
+            } else {
+                for agg in aggregates {
+                    let alias = &agg.alias;
+                    match agg.function.as_str() {
+                        "count" => {
+                            row.fields.insert(
+                                alias.clone(),
+                                JsonValue::Number(Number::from(acc.count)),
+                            );
+                        }
+                        "sum" => {
+                            let val = acc.sums.get(alias).copied().unwrap_or(0.0);
+                            row.fields.insert(alias.clone(), json_f64(val));
+                        }
+                        "avg" => {
+                            let cnt = acc.avg_counts.get(alias).copied().unwrap_or(0);
+                            let val = if cnt > 0 {
+                                acc.avg_sums.get(alias).copied().unwrap_or(0.0) / cnt as f64
+                            } else {
+                                0.0
+                            };
+                            row.fields.insert(alias.clone(), json_f64(val));
+                        }
+                        "min" => {
+                            if acc.min_inits.contains(alias) {
+                                if let Some(val) = acc.mins.get(alias) {
+                                    row.fields.insert(alias.clone(), json_f64(*val));
+                                }
+                            } else {
+                                row.fields.insert(alias.clone(), JsonValue::Null);
+                            }
+                        }
+                        "max" => {
+                            if acc.max_inits.contains(alias) {
+                                if let Some(val) = acc.maxs.get(alias) {
+                                    row.fields.insert(alias.clone(), json_f64(*val));
+                                }
+                            } else {
+                                row.fields.insert(alias.clone(), JsonValue::Null);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             row
         })
         .collect()
@@ -1095,6 +1207,139 @@ mod tests {
             result.rows[0].fields["repository"],
             JsonValue::String("postgres".to_owned())
         );
+    }
+
+    #[test]
+    fn groups_by_state_with_sum() {
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | group by state with sum(restart_count) as total_restarts",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let running = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("running".to_owned()))
+            .expect("running group");
+        let exited = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("exited".to_owned()))
+            .expect("exited group");
+        assert_eq!(running.fields["total_restarts"], json_f64(0.0));
+        assert_eq!(exited.fields["total_restarts"], json_f64(4.0));
+    }
+
+    #[test]
+    fn groups_by_state_with_avg_cpu() {
+        let client = mock_client();
+        let metrics = MockMetricsCollector {
+            samples: vec![
+                MetricSample {
+                    container_id: "abc".to_owned(),
+                    container_name: "api".to_owned(),
+                    timestamp: "2026-05-31T02:00:00Z".to_owned(),
+                    cpu_percent: Some(50.0),
+                    memory_usage_bytes: Some(128),
+                    memory_limit_bytes: Some(1024),
+                    network_rx_bytes: Some(10),
+                    network_tx_bytes: Some(20),
+                    disk_read_bytes: Some(30),
+                    disk_write_bytes: Some(40),
+                },
+                MetricSample {
+                    container_id: "def".to_owned(),
+                    container_name: "worker".to_owned(),
+                    timestamp: "2026-05-31T02:00:00Z".to_owned(),
+                    cpu_percent: Some(30.0),
+                    memory_usage_bytes: Some(64),
+                    memory_limit_bytes: Some(1024),
+                    network_rx_bytes: Some(1),
+                    network_tx_bytes: Some(2),
+                    disk_read_bytes: Some(3),
+                    disk_write_bytes: Some(4),
+                },
+            ],
+        };
+        let parsed = parser::parse(
+            "observe containers | group by state with avg(cpu) as avg_cpu",
+        )
+        .expect("query should parse");
+
+        let result = execute_with_metrics(&parsed.query, &client, &metrics)
+            .expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let running = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("running".to_owned()))
+            .expect("running group");
+        let exited = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("exited".to_owned()))
+            .expect("exited group");
+        assert_eq!(running.fields["avg_cpu"], json_f64(50.0));
+        assert_eq!(exited.fields["avg_cpu"], json_f64(30.0));
+    }
+
+    #[test]
+    fn groups_by_state_with_min_max() {
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | group by state with min(restart_count) as min_r, max(restart_count) as max_r",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let running = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("running".to_owned()))
+            .expect("running group");
+        let exited = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("exited".to_owned()))
+            .expect("exited group");
+        assert_eq!(running.fields["min_r"], json_f64(0.0));
+        assert_eq!(running.fields["max_r"], json_f64(0.0));
+        assert_eq!(exited.fields["min_r"], json_f64(4.0));
+        assert_eq!(exited.fields["max_r"], json_f64(4.0));
+    }
+
+    #[test]
+    fn groups_by_state_with_count_alias() {
+        let client = mock_client();
+        let parsed = parser::parse(
+            "observe containers | group by state with count(id) as cnt",
+        )
+        .expect("query should parse");
+
+        let result = execute(&parsed.query, &client).expect("query should execute");
+
+        assert_eq!(result.rows.len(), 2);
+        let running = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("running".to_owned()))
+            .expect("running group");
+        let exited = result
+            .rows
+            .iter()
+            .find(|row| row.fields["state"] == JsonValue::String("exited".to_owned()))
+            .expect("exited group");
+        assert_eq!(running.fields["cnt"], JsonValue::Number(Number::from(1)));
+        assert_eq!(exited.fields["cnt"], JsonValue::Number(Number::from(1)));
+        // When explicit aggregates are used, no default `count` column
+        assert!(!running.fields.contains_key("count"));
     }
 
     #[test]
