@@ -236,14 +236,15 @@ impl SemanticAnalyzer {
             Expression::FnCall { name, args } => {
                 // Check if function exists
                 match name.as_str() {
-                    "upper" | "lower" | "trim" | "length" | "concat" | "substring" | "coalesce" => {
+                    "upper" | "lower" | "trim" | "length" | "concat" | "substring" | "coalesce"
+                    | "starts_with" | "ends_with" | "replace" | "reverse" | "repeat" | "split_part" | "position" => {
                         for arg in args {
                             self.infer_expr_type(arg)?;
                         }
-                        if name == "length" {
-                            Ok(Type::Integer)
-                        } else {
-                            Ok(Type::String)
+                        match name.as_str() {
+                            "length" | "position" => Ok(Type::Integer),
+                            "starts_with" | "ends_with" => Ok(Type::Boolean),
+                            _ => Ok(Type::String),
                         }
                     }
                     _ => Err(EvalError::UnknownFunction { name: name.clone() }),

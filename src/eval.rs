@@ -343,6 +343,70 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             }
             Ok(JsonValue::Null)
         }
+        "starts_with" => {
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let prefix = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            Ok(JsonValue::Bool(s.starts_with(prefix)))
+        }
+        "ends_with" => {
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let suffix = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            Ok(JsonValue::Bool(s.ends_with(suffix)))
+        }
+        "replace" => {
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let from = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let to = args.get(2).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            Ok(JsonValue::String(s.replace(from, to)))
+        }
+        "reverse" => {
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            Ok(JsonValue::String(s.chars().rev().collect()))
+        }
+        "repeat" => {
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let n = args.get(1).and_then(json_as_f64).map(|f| f as usize).unwrap_or(0);
+            Ok(JsonValue::String(s.repeat(n)))
+        }
+        "position" => {
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let substr = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let pos = s.find(substr).map(|i| i as u64).unwrap_or(0);
+            Ok(JsonValue::Number(Number::from(pos)))
+        }
+        "split_part" => {
+            let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let delim = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let n = args.get(2).and_then(json_as_f64).map(|f| f as usize).unwrap_or(1);
+            let part = s.split(delim).nth(n.saturating_sub(1)).unwrap_or("").to_owned();
+            Ok(JsonValue::String(part))
+        }
         _ => Err(EvalError::UnknownFunction {
             name: name.to_owned(),
         }),
@@ -855,6 +919,136 @@ mod tests {
         };
         let result = eval_expr(&f, &mul).unwrap();
         assert_eq!(result.as_f64(), Some(120.0));
+    }
+
+    #[test]
+    fn evaluates_starts_with() {
+        let f = fields(&[("name", "api-service")]);
+        let expr = Expression::FnCall {
+            name: "starts_with".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::String("api".to_owned())),
+            ],
+        };
+        assert_eq!(eval_expr(&f, &expr).unwrap(), JsonValue::Bool(true));
+
+        let expr_no = Expression::FnCall {
+            name: "starts_with".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::String("web".to_owned())),
+            ],
+        };
+        assert_eq!(eval_expr(&f, &expr_no).unwrap(), JsonValue::Bool(false));
+    }
+
+    #[test]
+    fn evaluates_ends_with() {
+        let f = fields(&[("name", "api-service")]);
+        let expr = Expression::FnCall {
+            name: "ends_with".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::String("service".to_owned())),
+            ],
+        };
+        assert_eq!(eval_expr(&f, &expr).unwrap(), JsonValue::Bool(true));
+    }
+
+    #[test]
+    fn evaluates_replace() {
+        let f = fields(&[("name", "api-service-v2")]);
+        let expr = Expression::FnCall {
+            name: "replace".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::String("service".to_owned())),
+                Expression::Literal(Value::String("app".to_owned())),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::String("api-app-v2".to_owned())
+        );
+    }
+
+    #[test]
+    fn evaluates_reverse() {
+        let f = fields(&[("name", "abc")]);
+        let expr = Expression::FnCall {
+            name: "reverse".to_owned(),
+            args: vec![Expression::Field("name".to_owned())],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::String("cba".to_owned())
+        );
+    }
+
+    #[test]
+    fn evaluates_repeat() {
+        let f = fields(&[("name", "ab")]);
+        let expr = Expression::FnCall {
+            name: "repeat".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::Integer(3)),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::String("ababab".to_owned())
+        );
+    }
+
+    #[test]
+    fn evaluates_position() {
+        let f = fields(&[("name", "hello world")]);
+        let expr = Expression::FnCall {
+            name: "position".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::String("world".to_owned())),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::Number(Number::from(6))
+        );
+    }
+
+    #[test]
+    fn evaluates_position_not_found() {
+        let f = fields(&[("name", "hello")]);
+        let expr = Expression::FnCall {
+            name: "position".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::String("xyz".to_owned())),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::Number(Number::from(0))
+        );
+    }
+
+    #[test]
+    fn evaluates_split_part() {
+        let f = fields(&[("name", "a,b,c,d")]);
+        let expr = Expression::FnCall {
+            name: "split_part".to_owned(),
+            args: vec![
+                Expression::Field("name".to_owned()),
+                Expression::Literal(Value::String(",".to_owned())),
+                Expression::Literal(Value::Integer(2)),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::String("b".to_owned())
+        );
     }
 
     #[test]
