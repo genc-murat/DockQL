@@ -3,7 +3,6 @@ allow-branch = ["main"]
 
 # Publish to crates.io so 'cargo install dol' works
 publish = true
-publish-path = "."
 # Set CARGO_REGISTRY_TOKEN in your environment or .cargo/config.toml
 # Generate a token at: https://crates.io/settings/tokens
 registry = "crates-io"
