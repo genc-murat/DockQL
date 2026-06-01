@@ -1,0 +1,1 @@
+observe containers | fill state with "unknown" | select name, state

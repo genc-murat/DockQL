@@ -1,0 +1,1 @@
+observe containers | where ends_with(name, "-v2") | select name, image
