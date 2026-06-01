@@ -487,6 +487,12 @@ fn apply_pipeline_node(row: Row, node: &PipelineNode) -> Result<PipelineOutcome,
             }
             Ok(PipelineOutcome::Row(row))
         }
+        PipelineNode::Let { name, value } => {
+            let mut row = row;
+            let value = eval::eval_expr(&BTreeMap::new(), value)?;
+            row.fields.insert(name.clone(), value);
+            Ok(PipelineOutcome::Row(row))
+        }
         PipelineNode::If {
             condition,
             then_branch,

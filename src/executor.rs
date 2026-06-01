@@ -798,6 +798,13 @@ fn apply_pipeline_node(mut rows: Vec<Row>, node: &PipelineNode) -> Result<Vec<Ro
             }
             Ok(rows)
         }
+        PipelineNode::Let { name, value } => {
+            let value = eval::eval_expr(&BTreeMap::new(), value)?;
+            for row in &mut rows {
+                row.fields.insert(name.clone(), value.clone());
+            }
+            Ok(rows)
+        }
     }
 }
 

@@ -364,6 +364,10 @@ impl SemanticAnalyzer {
                 let ty = self.infer_expr_type(default)?;
                 self.active_schema.insert(field.clone(), ty);
             }
+            PipelineNode::Let { name, value } => {
+                let ty = self.infer_expr_type(value)?;
+                self.active_schema.insert(name.clone(), ty);
+            }
         }
         Ok(())
     }

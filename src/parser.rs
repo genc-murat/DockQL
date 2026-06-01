@@ -504,7 +504,10 @@ impl Parser {
         if self.consume_ident("fill") {
             return self.parse_fill_pipeline();
         }
-        Err(self.error_here("expected pipeline node: where, select, group by, sort by, limit, offset, distinct, alert, if, set, or fill"))
+        if self.consume_ident("let") {
+            return self.parse_let_pipeline();
+        }
+        Err(self.error_here("expected pipeline node: where, select, group by, sort by, limit, offset, distinct, alert, if, set, fill, or let"))
     }
 
     fn parse_aggregates(&mut self) -> Result<Vec<crate::ast::AggregateExpr>, ParseError> {
@@ -852,6 +855,18 @@ impl Parser {
         self.expect_ident("with")?;
         let default = self.parse_expression()?;
         Ok(PipelineNode::Fill { field, default })
+    }
+
+    fn parse_let_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
+        let name = self.expect_identifier_like("variable name")?;
+        let name = if let Some(stripped) = name.strip_prefix('$') {
+            stripped.to_owned()
+        } else {
+            name
+        };
+        self.expect(TokenKind::Eq, "`=`")?;
+        let value = self.parse_expression()?;
+        Ok(PipelineNode::Let { name, value })
     }
 
     fn parse_optional_operator(&mut self) -> Option<Operator> {
@@ -1984,6 +1999,52 @@ mod tests {
             filter,
             Expression::Comparison { operator: Operator::EndsWith, .. }
         ));
+    }
+
+    #[test]
+    fn parses_let_pipeline() {
+        let q = parse_one("observe containers | let $threshold = 80");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        match &o.pipeline[0] {
+            PipelineNode::Let { name, .. } => assert_eq!(name, "threshold"),
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_let_without_dollar() {
+        let q = parse_one("observe containers | let threshold = 80");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        match &o.pipeline[0] {
+            PipelineNode::Let { name, .. } => assert_eq!(name, "threshold"),
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_let_with_string_value() {
+        let q = parse_one(r#"observe containers | let $app_name = "myapp""#);
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        match &o.pipeline[0] {
+            PipelineNode::Let { name, value } => {
+                assert_eq!(name, "app_name");
+                assert!(matches!(value, Expression::Literal(Value::String(s)) if s == "myapp"));
+            }
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_let_with_expression() {
+        let q = parse_one("observe containers | let $limit = cpu * 2");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        match &o.pipeline[0] {
+            PipelineNode::Let { name, value } => {
+                assert_eq!(name, "limit");
+                assert!(matches!(value, Expression::Arithmetic { .. }));
+            }
+            other => panic!("expected Let, got {other:?}"),
+        }
     }
 
     #[test]

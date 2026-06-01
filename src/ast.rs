@@ -147,6 +147,10 @@ pub enum PipelineNode {
         field: String,
         default: Expression,
     },
+    Let {
+        name: String,
+        value: Expression,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
