@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::{Number, Value as JsonValue};
 use thiserror::Error;
 
+use chrono::{NaiveDateTime, Datelike, Timelike};
 use crate::ast::{BinOp, Expression, Operator, SetValue, Value};
 
 #[derive(Debug, Error)]
@@ -438,6 +439,61 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             let pos = s.find(substr).map(|i| i as u64).unwrap_or(0);
             Ok(JsonValue::Number(Number::from(pos)))
         }
+        "now" => {
+            Ok(JsonValue::String(chrono::Utc::now().to_rfc3339()))
+        }
+        "date_format" => {
+            let ts = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let fmt = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let dt = parse_timestamp(ts)?;
+            let result = dt.format(fmt).to_string();
+            Ok(JsonValue::String(result))
+        }
+        "date_diff" => {
+            let a = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let b = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let unit = args.get(2).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let dt_a = parse_timestamp(a)?;
+            let dt_b = parse_timestamp(b)?;
+            let diff = dt_b.signed_duration_since(dt_a);
+            let result = match unit {
+                "seconds" | "s" => diff.num_seconds(),
+                "minutes" | "m" => diff.num_minutes(),
+                "hours" | "h" => diff.num_hours(),
+                "days" | "d" => diff.num_days(),
+                _ => return Err(EvalError::InvalidArguments { name: name.to_owned() }),
+            };
+            Ok(JsonValue::Number(Number::from(result)))
+        }
+        "extract" => {
+            let ts = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let part = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
+                EvalError::InvalidArguments { name: name.to_owned() }
+            })?;
+            let dt = parse_timestamp(ts)?;
+            let result = match part {
+                "year" => dt.year() as i64,
+                "month" => dt.month() as i64,
+                "day" => dt.day() as i64,
+                "hour" => dt.hour() as i64,
+                "minute" => dt.minute() as i64,
+                "second" => dt.second() as i64,
+                _ => return Err(EvalError::InvalidArguments { name: name.to_owned() }),
+            };
+            Ok(JsonValue::Number(Number::from(result)))
+        }
         "split_part" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
                 EvalError::InvalidArguments { name: name.to_owned() }
@@ -453,6 +509,28 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             name: name.to_owned(),
         }),
     }
+}
+
+fn parse_timestamp(s: &str) -> Result<NaiveDateTime, EvalError> {
+    // Try ISO 8601 format first, then common formats
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.naive_utc());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return Ok(dt.naive_utc());
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Ok(dt);
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
+        return Ok(dt);
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.fZ") {
+        return Ok(dt);
+    }
+    Err(EvalError::InvalidArguments {
+        name: "timestamp".to_owned(),
+    })
 }
 
 fn resolve_field<'a>(
@@ -1090,6 +1168,67 @@ mod tests {
         assert_eq!(
             eval_expr(&f, &expr).unwrap(),
             JsonValue::String("b".to_owned())
+        );
+    }
+
+    #[test]
+    fn evaluates_now() {
+        let expr = Expression::FnCall {
+            name: "now".to_owned(),
+            args: vec![],
+        };
+        let result = eval_expr(&BTreeMap::new(), &expr).unwrap();
+        assert!(result.is_string());
+        let s = result.as_str().unwrap();
+        assert!(s.len() > 10, "now() should return an ISO timestamp");
+    }
+
+    #[test]
+    fn evaluates_date_format() {
+        let f = fields(&[("ts", "2026-06-01T12:30:00Z")]);
+        let expr = Expression::FnCall {
+            name: "date_format".to_owned(),
+            args: vec![
+                Expression::Field("ts".to_owned()),
+                Expression::Literal(Value::String("%Y-%m-%d".to_owned())),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::String("2026-06-01".to_owned())
+        );
+    }
+
+    #[test]
+    fn evaluates_date_diff_days() {
+        let f = fields(&[("start", "2026-01-01T00:00:00Z"), ("end", "2026-01-11T00:00:00Z")]);
+        let expr = Expression::FnCall {
+            name: "date_diff".to_owned(),
+            args: vec![
+                Expression::Field("start".to_owned()),
+                Expression::Field("end".to_owned()),
+                Expression::Literal(Value::String("days".to_owned())),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::Number(Number::from(10))
+        );
+    }
+
+    #[test]
+    fn evaluates_extract_year() {
+        let f = fields(&[("ts", "2026-06-15T08:30:00Z")]);
+        let expr = Expression::FnCall {
+            name: "extract".to_owned(),
+            args: vec![
+                Expression::Field("ts".to_owned()),
+                Expression::Literal(Value::String("year".to_owned())),
+            ],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::Number(Number::from(2026))
         );
     }
 

@@ -237,13 +237,15 @@ impl SemanticAnalyzer {
                 // Check if function exists
                 match name.as_str() {
                     "upper" | "lower" | "trim" | "length" | "concat" | "substring" | "coalesce"
-                    | "starts_with" | "ends_with" | "replace" | "reverse" | "repeat" | "split_part" | "position" => {
+                    | "starts_with" | "ends_with" | "replace" | "reverse" | "repeat" | "split_part" | "position"
+                    | "now" | "date_format" | "date_diff" | "extract" => {
                         for arg in args {
                             self.infer_expr_type(arg)?;
                         }
                         match name.as_str() {
-                            "length" | "position" => Ok(Type::Integer),
+                            "length" | "position" | "date_diff" | "extract" => Ok(Type::Integer),
                             "starts_with" | "ends_with" => Ok(Type::Boolean),
+                            "now" => Ok(Type::String),
                             _ => Ok(Type::String),
                         }
                     }

@@ -725,6 +725,9 @@ impl Parser {
             TokenKind::String(value) => Ok(Value::String(value)),
             TokenKind::Ident(value) if value == "true" => Ok(Value::Boolean(true)),
             TokenKind::Ident(value) if value == "false" => Ok(Value::Boolean(false)),
+            TokenKind::Ident(value) if value.starts_with('$') => {
+                Ok(Value::Identifier(value[1..].to_owned()))
+            }
             TokenKind::Ident(value) => Ok(Value::Identifier(value)),
             TokenKind::Integer(value) => Ok(Value::Integer(value)),
             TokenKind::Float(value) => Ok(Value::Float(value)),
@@ -827,9 +830,13 @@ impl Parser {
             return Ok(Expression::Literal(value));
         }
 
-        // Field reference
+        // Field reference (with optional $ prefix for variable-style access)
         let field = self.expect_identifier_like("field")?;
-        Ok(Expression::Field(field))
+        if let Some(name) = field.strip_prefix('$') {
+            Ok(Expression::Field(name.to_owned()))
+        } else {
+            Ok(Expression::Field(field))
+        }
     }
 
     fn parse_value_list(&mut self) -> Result<Vec<Value>, ParseError> {
@@ -881,6 +888,9 @@ impl Parser {
             TokenKind::String(value) => Ok(Value::String(value)),
             TokenKind::Ident(value) if value == "true" => Ok(Value::Boolean(true)),
             TokenKind::Ident(value) if value == "false" => Ok(Value::Boolean(false)),
+            TokenKind::Ident(value) if value.starts_with('$') => {
+                Ok(Value::Identifier(value[1..].to_owned()))
+            }
             TokenKind::Ident(value) => Ok(Value::Identifier(value)),
             TokenKind::Integer(value) => Ok(Value::Integer(value)),
             TokenKind::Float(value) => Ok(Value::Float(value)),
@@ -1325,6 +1335,7 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
             || chars[i] == '@'
             || chars[i] == '/'
             || chars[i] == '-'
+            || chars[i] == '$'
         {
             let start = i;
             while i < chars.len()
@@ -1334,7 +1345,8 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
                     || chars[i] == ':'
                     || chars[i] == '@'
                     || chars[i] == '/'
-                    || chars[i] == '-')
+                    || chars[i] == '-'
+                    || chars[i] == '$')
             {
                 i += 1;
             }
@@ -1972,5 +1984,18 @@ mod tests {
             filter,
             Expression::Comparison { operator: Operator::EndsWith, .. }
         ));
+    }
+
+    #[test]
+    fn parses_dollar_var_as_field() {
+        let q = parse_one("observe containers where $state = running");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let filter = o.filter.as_ref().expect("expected filter");
+        match filter {
+            Expression::Comparison { left, .. } => {
+                assert!(matches!(left.as_ref(), Expression::Field(f) if f == "state"));
+            }
+            _ => panic!("expected comparison"),
+        }
     }
 }
