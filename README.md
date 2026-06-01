@@ -42,9 +42,12 @@ dol "observe containers | group by state"
 - **Control flow** — `if/then/else` pipeline branching, `case/when` expressions, `set` field assignment
 - **Arithmetic expressions** — compute fields with `+`, `-`, `*`, `/`, `%` (e.g., `set mem_gb = memory / 1073741824`)
 - **Aggregate functions** — `group by ... with sum/count/avg/min/max(field) as alias`
-- **String functions** — `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`
+- **String functions** — `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`, `starts_with()`, `ends_with()`, `replace()`, `reverse()`, `repeat()`, `position()`, `split_part()`
+- **Date/time functions** — `now()`, `date_format()`, `date_diff()`, `extract()`
 - **Range check** — `between ... and ...`, `is null`, `is not null`
-- **Pattern matching** — `matches` (regex) and `in` operators for flexible filtering
+- **Pattern matching** — `matches` (regex), `in`, `starts_with`, `ends_with` operators for flexible filtering
+- **`fill` pipeline node** — `fill <field> with <expr>` to supply defaults for null/missing values
+- **`$var` field references** — prefix field names with `$` for clarity in expressions (e.g., `$state = running`)
 - **Multi-field sort** — `sort by state desc, cpu desc`
 - **Pipeline nodes** — `having`, `distinct`, `offset`
 - **Diff mode** — compare current container state with the last store snapshot (`--diff`)
@@ -418,6 +421,7 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 | `distinct` | Remove duplicate rows |
 | `alert "message"` | Emit inline alert |
 | `set <field> = <value>` | Add or override a field |
+| `fill <field> with <expr>` | Fill null/missing values with a default expression |
 | `if <cond> then <node>` | Conditional pipeline branching |
 | `[else if <cond> then <node>]` | Chained else-if |
 | `[else <node>]` | Fallback branch |
@@ -430,12 +434,13 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 
 ### Expression Operators
 
-Comparison: `=`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `matches` (regex), `in`
+Comparison: `=`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `matches` (regex), `in`, `starts_with`, `ends_with`
 Arithmetic: `+`, `-`, `*`, `/`, `%`
 Range: `between ... and ...`, `is null`, `is not null`
 Logical: `and`, `or`, `not`
-Functions: `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`
+Functions: `upper()`, `lower()`, `length()`, `trim()`, `concat()`, `substring()`, `coalesce()`, `starts_with()`, `ends_with()`, `replace()`, `reverse()`, `repeat()`, `position()`, `split_part()`, `now()`, `date_format()`, `date_diff()`, `extract()`
 Grouping: `(`, `)`
+Field references: `$field` — prefix with `$` for explicit field access
 
 ### Label Access
 

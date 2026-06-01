@@ -411,6 +411,8 @@ DOL implements a static semantic analyzer and type safety validation pass before
 
 - `contains` — substring match
 - `matches` — regex match (Rust regex syntax)
+- `starts_with` — prefix match: `name starts_with "api-"`
+- `ends_with` — suffix match: `image ends_with ":latest"`
 - `in` — set membership: `expr in ("a", "b", "c")`
 
 ### 6.3 Range and Null Operators
@@ -437,6 +439,7 @@ Arithmetic expressions can be used in `set` assignments, `where` filters, `havin
 
 ### 6.6 Function Calls
 
+**String functions:**
 - `upper(s)` — uppercase
 - `lower(s)` — lowercase
 - `length(s)` — string length
@@ -444,6 +447,19 @@ Arithmetic expressions can be used in `set` assignments, `where` filters, `havin
 - `concat(a, b, ...)` — string concatenation
 - `substring(s, start, len)` — substring extraction
 - `coalesce(a, b, ...)` — first non-null value
+- `starts_with(s, prefix)` — returns Boolean, true if `s` starts with `prefix`
+- `ends_with(s, suffix)` — returns Boolean, true if `s` ends with `suffix`
+- `replace(s, from, to)` — replace all occurrences of `from` with `to`
+- `reverse(s)` — reverse the string
+- `repeat(s, n)` — repeat the string `n` times
+- `position(s, substr)` — returns Integer, 0-based index of first `substr` occurrence (0 if not found)
+- `split_part(s, delim, n)` — split by `delim`, return the `n`-th part (1-indexed)
+
+**Date/time functions (uses the existing `chrono` dependency):**
+- `now()` — returns current UTC timestamp as RFC 3339 string
+- `date_format(ts, fmt)` — format a timestamp string according to `fmt` (strftime syntax, e.g., `%Y-%m-%d`)
+- `date_diff(a, b, unit)` — returns Integer difference between two timestamps in the given unit (`seconds`, `minutes`, `hours`, `days`)
+- `extract(ts, part)` — returns Integer part of a timestamp: `year`, `month`, `day`, `hour`, `minute`, `second`
 
 ### 6.7 Coalesce Function
 
@@ -455,7 +471,20 @@ observe containers | set name = coalesce(label.name, name, "unknown") | select n
 
 If all arguments are null or empty strings, `coalesce()` returns `null`.
 
-### 6.8 Operator Precedence
+### 6.8 `$var` Field References
+
+Field names can be prefixed with `$` for explicit field access. This is useful
+when a field name might otherwise be parsed as a literal value:
+
+```dol
+observe containers where $state = running
+observe containers | set $cpu = cpu
+```
+
+`$state` is equivalent to `state` — the `$` prefix is stripped during parsing
+and the result is treated as a field reference.
+
+### 6.9 Operator Precedence
 
 Precedence, highest to lowest:
 
@@ -463,7 +492,7 @@ Precedence, highest to lowest:
 2. Function calls, unary `-`
 3. Arithmetic: `*`, `/`, `%`
 4. Arithmetic: `+`, `-`
-5. Comparison, `contains`, `matches`, `between`, `is null`, `is not null`
+5. Comparison, `contains`, `matches`, `starts_with`, `ends_with`, `between`, `is null`, `is not null`
 6. `not`
 7. `and`
 8. `or`
@@ -528,6 +557,7 @@ Supported pipeline nodes:
 - `distinct`
 - `alert <string>`
 - `set <field> = <value-expr>`
+- `fill <field> with <expr>` — Replace null/empty values in `<field>` with the result of `<expr>` (useful for supplying defaults for missing metrics or labels)
 - `if <condition> then <pipeline-node> [else if <condition> then <pipeline-node>] [else <pipeline-node>]`
 
 Pipeline rules:
@@ -561,6 +591,13 @@ observe containers | distinct | select image
 observe containers | sort by name asc | offset 10 | limit 5
 observe containers | group by image with count(id) as cnt | having cnt > 3
 observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc
+observe containers | fill memory with 0 | where memory > 500
+observe containers | where name starts_with "api-"
+observe containers | where image ends_with ":latest"
+observe containers | set mem_gb = memory / 1073741824
+observe containers | set today = now()
+observe containers | set day = extract(created_at, 'day')
+observe containers where $state = running
 ```
 
 ## 9. Execution Semantics
