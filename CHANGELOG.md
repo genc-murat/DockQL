@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `let` pipeline node for declaring constants and parameters (`let $threshold = 80`)
+- `fill` pipeline node to replace null/missing values with a default (`fill memory with 0`)
+- `starts_with` and `ends_with` comparison operators (`where name starts_with "api-"`)
+- String functions: `starts_with`, `ends_with`, `replace`, `reverse`, `repeat`, `position`, `split_part`
+- Date/time functions: `now()`, `date_format()`, `date_diff()`, `extract()`
+- `$var` field reference syntax for explicit field access (`where $state = running`)
+- Expressions in `set case/when` and `set if/then/else` branches (e.g., `concat()` in `then`)
+- 29 new example `.dol` files showcasing all new features
+- `scripts/validate_examples.sh` — standalone validation script for example files
+- Advanced pipeline examples combining all features (monitoring, alerting, time analysis, etc.)
+
+### Changed
+
+- Tokenizer: `-` is now properly parsed as minus operator in arithmetic expressions
+- `case/when` and `if/then/else` in `set` now accept full expressions (function calls, arithmetic) in result branches
+
+### Documentation
+
+- Updated README.md with new features, pipeline nodes table, and 83 example queries
+- Updated docs/spec.md with fill, let, string/date functions, $var syntax, and starts_with/ends_with operators
+- Updated docs/tutorial.md with new sections for fill, let, date/time functions, and $var
+- Updated docs/examples.md with examples for all new features
+- Updated docs/index.html with updated features list and example count
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
