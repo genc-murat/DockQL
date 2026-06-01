@@ -1,0 +1,19 @@
+observe containers
+| let $cpu_anomaly = 85
+| let $mem_anomaly = 90
+| let $restart_anomaly = 3
+| fill cpu with 0
+| fill memory with 0
+| fill restart_count with 0
+| set mem_pct = (memory / memory_limit) * 100
+| set anomalies = case
+    when cpu > $cpu_anomaly and restart_count > $restart_anomaly then "cpu+restart"
+    when mem_pct > $mem_anomaly and restart_count > $restart_anomaly then "memory+restart"
+    when cpu > $cpu_anomaly then "high_cpu"
+    when mem_pct > $mem_anomaly then "high_memory"
+    when restart_count > $restart_anomaly then "restart_loop"
+    else "none"
+  end
+| where anomalies != "none"
+| select name, image, state, cpu, mem_pct, restart_count, anomalies
+| sort by anomalies asc, cpu desc

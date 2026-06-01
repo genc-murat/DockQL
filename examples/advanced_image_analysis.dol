@@ -1,0 +1,10 @@
+observe containers
+| set repo = split_part(image, ":", 1)
+| set tag = split_part(image, ":", 2)
+| set reversed_name = reverse(name)
+| set dash_position = position(name, "-")
+| set clean_name = replace(name, "_", "-")
+| set is_official = if starts_with(repo, "library/") then "yes" else "no"
+| select name, repo, tag, clean_name, is_official, state
+| sort by repo asc, tag desc
+| limit 25

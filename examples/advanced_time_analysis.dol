@@ -1,0 +1,11 @@
+observe containers
+| fill started_at with now()
+| fill finished_at with now()
+| set uptime_hours = date_diff(started_at, now(), "hours")
+| set created_month = extract(created_at, "month")
+| set created_year = extract(created_at, "year")
+| set created_day = extract(created_at, "day")
+| set formatted_date = date_format(created_at, "%Y-%m-%d")
+| select name, image, state, uptime_hours, formatted_date, created_year, created_month, created_day
+| sort by created_year desc, created_month desc, created_day desc
+| limit 15

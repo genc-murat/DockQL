@@ -1,0 +1,16 @@
+observe containers
+| let $cpu_warn = 50
+| let $cpu_crit = 80
+| let $mem_warn = 500000000
+| fill memory with 0
+| fill memory_limit with 1
+| set mem_pct = (memory / memory_limit) * 100
+| set alert_level = case
+    when cpu > $cpu_crit or mem_pct > 90 then "critical"
+    when cpu > $cpu_warn or mem_pct > 75 then "warning"
+    else "ok"
+  end
+| where alert_level != "ok"
+| select name, image, cpu, mem_pct, alert_level
+| sort by alert_level desc, cpu desc
+| limit 20

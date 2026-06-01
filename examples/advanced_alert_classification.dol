@@ -1,0 +1,13 @@
+observe containers
+| let $cpu_high = 80
+| fill restart_count with 0
+| where name starts_with "api-"
+| set risk_score = case
+    when cpu > $cpu_high and restart_count > 5 then "severe"
+    when cpu > $cpu_high or restart_count > 3 then "high"
+    when restart_count > 0 then "medium"
+    else "low"
+  end
+| group by risk_score with count(id) as container_count, avg(cpu) as avg_cpu
+| having container_count > 0
+| sort by risk_score desc
