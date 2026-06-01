@@ -419,7 +419,6 @@ where
         | crate::ast::ComposeTarget::Services
         | crate::ast::ComposeTarget::Health => {
             let samples = latest_metrics_by_container(metrics.collect()?);
-            let samples = latest_metrics_by_container(metrics.collect()?);
             docker
                 .list_containers()?
                 .into_iter()
