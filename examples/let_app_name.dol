@@ -1,0 +1,1 @@
+observe containers | let $app = "myapp" | where compose_project = $app | select name, state

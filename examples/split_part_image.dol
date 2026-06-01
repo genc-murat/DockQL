@@ -1,0 +1,1 @@
+observe containers | set repo = split_part(image, ":", 1) | set tag = split_part(image, ":", 2) | select name, repo, tag

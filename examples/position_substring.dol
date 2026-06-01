@@ -1,0 +1,1 @@
+observe containers | set dash_pos = position(name, "-") | select name, dash_pos

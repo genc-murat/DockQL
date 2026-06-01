@@ -1,0 +1,1 @@
+observe containers | set separator = repeat("-", 20) | select name, separator

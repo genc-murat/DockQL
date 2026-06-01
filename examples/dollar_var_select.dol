@@ -1,0 +1,1 @@
+observe containers | set label = concat($name, ":", $image) | select label

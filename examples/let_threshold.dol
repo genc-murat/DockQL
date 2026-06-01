@@ -1,0 +1,1 @@
+observe containers | let $threshold = 80 | where cpu > $threshold | select name, cpu

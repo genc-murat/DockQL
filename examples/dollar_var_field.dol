@@ -1,0 +1,1 @@
+observe containers where $state = running | select name, image, $state

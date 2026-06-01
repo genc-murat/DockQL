@@ -1,0 +1,1 @@
+observe containers where name starts_with "api-" | select name, image, state

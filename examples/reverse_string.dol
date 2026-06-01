@@ -1,0 +1,1 @@
+observe containers | set reversed = reverse(name) | select name, reversed

@@ -1,0 +1,1 @@
+observe containers where image ends_with ":latest" | select name, image, state

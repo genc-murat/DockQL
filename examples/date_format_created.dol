@@ -1,0 +1,1 @@
+observe containers | set created_date = date_format(created_at, "%Y-%m-%d") | select name, created_at, created_date

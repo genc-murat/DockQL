@@ -1,0 +1,1 @@
+observe containers | set current_time = now() | select name, current_time

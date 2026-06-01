@@ -1,0 +1,1 @@
+observe containers | set uptime_hours = date_diff(created_at, started_at, "hours") | select name, image, uptime_hours

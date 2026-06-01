@@ -1,0 +1,1 @@
+observe containers | let $min_cpu = 50 | let $max_cpu = 90 | where cpu between $min_cpu and $max_cpu | select name, cpu

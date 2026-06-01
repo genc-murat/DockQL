@@ -1,0 +1,1 @@
+observe containers | fill name with coalesce(label.name, "unnamed") | select name

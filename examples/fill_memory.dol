@@ -1,0 +1,1 @@
+observe containers | fill memory with 0 | where memory > 500 | select name, memory

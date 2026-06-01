@@ -1,0 +1,1 @@
+observe containers | set clean_name = replace(name, "-", "_") | select name, clean_name

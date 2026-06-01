@@ -1,0 +1,1 @@
+observe containers | where starts_with(name, "db-") | select name, state
