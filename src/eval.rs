@@ -603,13 +603,13 @@ pub fn evaluate_set_value(
         } => {
             for (condition, result) in when_clauses {
                 if eval_bool(fields, condition)? {
-                    return Ok(value_to_json(result));
+                    return eval_expr(fields, result);
                 }
             }
             Ok(else_value
                 .as_ref()
-                .map(value_to_json)
-                .unwrap_or(JsonValue::Null))
+                .map(|expr| eval_expr(fields, expr))
+                .unwrap_or(Ok(JsonValue::Null))?)
         }
         SetValue::IfElse {
             condition,
@@ -617,12 +617,12 @@ pub fn evaluate_set_value(
             else_value,
         } => {
             if eval_bool(fields, condition)? {
-                Ok(value_to_json(then_value))
+                eval_expr(fields, then_value)
             } else {
                 Ok(else_value
                     .as_ref()
-                    .map(value_to_json)
-                    .unwrap_or(JsonValue::Null))
+                    .map(|expr| eval_expr(fields, expr))
+                    .unwrap_or(Ok(JsonValue::Null))?)
             }
         }
     }
@@ -794,14 +794,14 @@ mod tests {
             when_clauses: vec![
                 (
                     cmp_expr("cpu", Operator::Gt, Value::Percentage(80.0)),
-                    Value::String("critical".into()),
+                    Expression::Literal(Value::String("critical".into())),
                 ),
                 (
                     cmp_expr("cpu", Operator::Gt, Value::Percentage(50.0)),
-                    Value::String("warning".into()),
+                    Expression::Literal(Value::String("warning".into())),
                 ),
             ],
-            else_value: Some(Value::String("ok".into())),
+            else_value: Some(Expression::Literal(Value::String("ok".into()))),
         };
         let result = evaluate_set_value(&f, &sv).unwrap();
         assert_eq!(result, JsonValue::String("critical".to_string()));
@@ -814,9 +814,9 @@ mod tests {
         let sv = SetValue::Case {
             when_clauses: vec![(
                 cmp_expr("cpu", Operator::Gt, Value::Percentage(80.0)),
-                Value::String("critical".into()),
+                Expression::Literal(Value::String("critical".into())),
             )],
-            else_value: Some(Value::String("ok".into())),
+            else_value: Some(Expression::Literal(Value::String("ok".into()))),
         };
         let result = evaluate_set_value(&f, &sv).unwrap();
         assert_eq!(result, JsonValue::String("ok".to_string()));
@@ -827,8 +827,8 @@ mod tests {
         let f = fields(&[("state", "running")]);
         let sv = SetValue::IfElse {
             condition: cmp_expr("state", Operator::Eq, Value::Identifier("running".into())),
-            then_value: Value::String("up".into()),
-            else_value: Some(Value::String("down".into())),
+            then_value: Expression::Literal(Value::String("up".into())),
+            else_value: Some(Expression::Literal(Value::String("down".into()))),
         };
         let result = evaluate_set_value(&f, &sv).unwrap();
         assert_eq!(result, JsonValue::String("up".to_string()));

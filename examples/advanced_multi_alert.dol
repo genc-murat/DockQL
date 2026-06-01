@@ -1,0 +1,19 @@
+observe containers
+| let $cpu_crit = 90
+| let $cpu_warn = 70
+| let $mem_crit = 95
+| fill cpu with 0
+| fill memory with 0
+| fill restart_count with 0
+| set mem_pct = (memory / memory_limit) * 100
+| set alert_type = case
+    when cpu > $cpu_crit or mem_pct > $mem_crit then "critical"
+    when cpu > $cpu_warn or restart_count > 3 then "warning"
+    else "ok"
+  end
+| set alert_message = case
+    when alert_type = "critical" then concat("CRITICAL: ", name, " cpu=", cpu, "% mem=", mem_pct, "%")
+    when alert_type = "warning" then concat("WARNING: ", name, " cpu=", cpu, "%")
+  end
+| select name, image, cpu, mem_pct, restart_count, alert_type, alert_message
+| sort by alert_type desc, cpu desc

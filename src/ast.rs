@@ -165,13 +165,13 @@ pub enum SetValue {
     Literal(Value),
     Expr(Expression),
     Case {
-        when_clauses: Vec<(Expression, Value)>,
-        else_value: Option<Value>,
+        when_clauses: Vec<(Expression, Expression)>,
+        else_value: Option<Expression>,
     },
     IfElse {
         condition: Expression,
-        then_value: Value,
-        else_value: Option<Value>,
+        then_value: Expression,
+        else_value: Option<Expression>,
     },
 }
 

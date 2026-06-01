@@ -342,19 +342,27 @@ impl SemanticAnalyzer {
                     SetValue::Expr(expr) => self.infer_expr_type(expr)?,
                     SetValue::Case {
                         when_clauses,
-                        else_value: _,
+                        else_value,
                     } => {
-                        for (cond, _val) in when_clauses {
+                        for (cond, val) in when_clauses {
                             self.validate_expression(cond)?;
+                            self.validate_expression(val)?;
+                        }
+                        if let Some(else_expr) = else_value {
+                            self.validate_expression(else_expr)?;
                         }
                         Type::Unknown
                     }
                     SetValue::IfElse {
                         condition,
-                        then_value: _,
-                        else_value: _,
+                        then_value,
+                        else_value,
                     } => {
                         self.validate_expression(condition)?;
+                        self.validate_expression(then_value)?;
+                        if let Some(else_expr) = else_value {
+                            self.validate_expression(else_expr)?;
+                        }
                         Type::Unknown
                     }
                 };

@@ -1,0 +1,19 @@
+logs container my-app tail 1000
+| let $error_levels = "error"
+| let $warn_levels = "warn"
+| set log_level = case
+    when starts_with(message, "[ERROR]") then "error"
+    when starts_with(message, "[WARN]") then "warning"
+    when starts_with(message, "TRACE") then "trace"
+    else "info"
+  end
+| set clean_msg = replace(message, "[ERROR] ", "")
+| set clean_msg = replace(clean_msg, "[WARN] ", "")
+| set severity = case
+    when log_level = "error" then 1
+    when log_level = "warning" then 2
+    else 3
+  end
+| where severity <= 2
+| select line, log_level, clean_msg
+| sort by severity asc, line asc

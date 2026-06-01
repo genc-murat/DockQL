@@ -1,0 +1,12 @@
+observe compose myapp services
+| let $healthy = "healthy"
+| set status_label = case
+    when health = $healthy then "green"
+    when health = "unhealthy" then "red"
+    when state = "running" then "yellow"
+    else "gray"
+  end
+| set service_upper = upper(service)
+| set display = concat(service_upper, " [", status_label, "]")
+| select name, service, display, health, state
+| sort by status_label asc, name asc

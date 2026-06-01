@@ -580,11 +580,11 @@ impl Parser {
         while self.consume_ident("when") {
             let condition = self.parse_expression()?;
             self.expect_ident("then")?;
-            let result = self.parse_value()?;
+            let result = self.parse_expression()?;
             when_clauses.push((condition, result));
         }
         let else_value = if self.consume_ident("else") {
-            Some(self.parse_value()?)
+            Some(self.parse_expression()?)
         } else {
             None
         };
@@ -598,9 +598,9 @@ impl Parser {
     fn parse_set_if_else(&mut self) -> Result<SetValue, ParseError> {
         let condition = self.parse_expression()?;
         self.expect_ident("then")?;
-        let then_value = self.parse_value()?;
+        let then_value = self.parse_expression()?;
         let else_value = if self.consume_ident("else") {
-            Some(self.parse_value()?)
+            Some(self.parse_expression()?)
         } else {
             None
         };
@@ -1342,6 +1342,16 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
             continue;
         }
 
+        // Standalone minus (not part of a number, not ->)
+        if chars[i] == '-' {
+            tokens.push(Token {
+                kind: TokenKind::Minus,
+                column: col,
+            });
+            i += 1;
+            continue;
+        }
+
         // Identifier
         if chars[i].is_ascii_alphanumeric()
             || chars[i] == '_'
@@ -1349,7 +1359,6 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
             || chars[i] == ':'
             || chars[i] == '@'
             || chars[i] == '/'
-            || chars[i] == '-'
             || chars[i] == '$'
         {
             let start = i;

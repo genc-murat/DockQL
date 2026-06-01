@@ -1,0 +1,7 @@
+events containers
+| where action = "connect"
+| set network_type = if image ends_with "proxy" then "proxy" else "service"
+| set event_hour = extract(time, "hour")
+| set event_date = date_format(time, "%Y-%m-%d")
+| select event_date, event_hour, network_type, container, image
+| limit 50

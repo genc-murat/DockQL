@@ -1,0 +1,14 @@
+observe containers
+| let $base_threshold = 50
+| let $multiplier = 1.5
+| fill cpu with 0
+| fill memory with 0
+| set effective_cpu_threshold = $base_threshold * $multiplier
+| set cpu_overage = cpu - $base_threshold
+| set mem_gb = memory / 1073741824
+| set mem_threshold_gb = memory_limit / 1073741824
+| set mem_pct = (memory / memory_limit) * 100
+| where cpu > $base_threshold or mem_pct > 80
+| select $name, $image, cpu, mem_gb, mem_threshold_gb, effective_cpu_threshold, cpu_overage
+| sort by cpu desc
+| limit 10
