@@ -392,7 +392,11 @@ $ dol <span class="str">"compose myapp networks"</span>
 $ dol <span class="str">"compose myapp health | where health = unhealthy"</span>
 
 <span class="cmt"># Cross-target JOIN: containers × images</span>
-$ dol <span class="str">"observe containers join images on id = id | select c.name, i.repository"</span></pre>
+$ dol <span class="str">"observe containers join images on id = id | select c.name, i.repository"</span>
+
+<span class="cmt"># Run a query from a .dol file</span>
+$ dol <span class="op">--file</span> examples/ping.dol
+$ dol <span class="op">-f</span> examples/list_containers.dol</pre>
     </div>
 
     <!-- Features -->
@@ -477,6 +481,9 @@ $ cargo build --release
 
 <span class="cmt"># Run a query</span>
 $ ./target/release/dol <span class="str">"observe containers"</span>
+
+<span class="cmt"># Run a query from a .dol file</span>
+$ ./target/release/dol <span class="op">--file</span> examples/ping.dol
 
 <span class="cmt"># Start the interactive REPL</span>
 $ ./target/release/dol repl

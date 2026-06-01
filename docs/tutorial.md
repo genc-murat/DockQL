@@ -1110,3 +1110,4 @@ You've covered all the core DOL features. Here's what to explore next:
 - `--watch <secs>` repeats batch queries for live monitoring
 - `--output json` for machine-readable output, pipe to `jq` for processing
 - `--host tcp://<addr>:2375` to query a remote Docker daemon
+- `--file <path>` or `-f <path>` to run a query from a `.dol` file

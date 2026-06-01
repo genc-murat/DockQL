@@ -814,6 +814,7 @@ The DOL CLI supports the following flags:
 | `--output <fmt>` | Output format: `table`, `json`, `json-compact`, `csv`, `jsonl` (default: table) |
 | `--export <path>` | Write output to file (format inferred from extension: .csv, .json, .jsonl, .table) |
 | `--export-format <fmt>` | Export file format: `influx`, `loki`, `prometheus` (used with `--export`) |
+| `--file <path>` / `-f <path>` | Read the DOL query from a `.dol` file |
 | `--host <addr>` | Docker daemon address (e.g., `tcp://192.168.1.100:2375`) |
 | `--watch <s>` | Re-run query every N seconds (batch and alert queries) |
 | `--timeout <s>` | Query execution timeout in seconds — if a query takes longer than this, it is aborted (applies to watch, alert, events, store, and single queries) |

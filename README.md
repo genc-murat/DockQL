@@ -188,6 +188,18 @@ dol "observe containers"
 
 `json-compact` is ideal for piping into other tools or for reducing output size in scripts.
 
+### Running Queries from `.dol` Files
+
+```bash
+# Read the query from a .dol file instead of passing it inline
+dol --file examples/ping.dol
+dol -f examples/list_containers.dol
+
+# Combine with other flags
+dol --file examples/running_containers.dol --output json
+dol --explain -f examples/high_cpu.dol
+```
+
 ### Background Data Collection
 
 ```bash
@@ -468,6 +480,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `--apply-retention` | Apply retention policies to the store |
 | `--output <fmt>` | Output format: `table`, `json`, `json-compact`, `csv`, `jsonl` |
 | `--export <path>` | Write output to file instead of stdout |
+| `--file <path>` / `-f <path>` | Read the DOL query from a `.dol` file |
 | `--host <addr>` | Docker daemon host address |
 | `--watch <s>` | Re-run query every N seconds |
 | `--timeout <s>` | Query execution timeout in seconds (applies to watch, alert, events, store, and single queries) |

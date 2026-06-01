@@ -31,6 +31,10 @@ pub struct Cli {
     /// DOL query to execute (positional).
     pub query: Option<String>,
 
+    /// Read the DOL query from a .dol file.
+    #[arg(short = 'f', long)]
+    pub file: Option<String>,
+
     /// Output format: table, json, json-compact, csv, jsonl.
     #[arg(long, value_enum)]
     pub output: Option<OutputFormat>,
@@ -285,14 +289,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Regular query execution.
-    let query = cli.query.as_deref().unwrap_or_default().trim();
+    // Read query from --file if provided, otherwise use positional argument.
+    let query = if let Some(ref file_path) = cli.file {
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| anyhow::anyhow!("failed to read file '{}': {}", file_path, e))?;
+        content
+    } else {
+        cli.query.as_deref().unwrap_or_default().to_owned()
+    };
+    let query = query.trim().to_owned();
 
     if query.is_empty() {
-        anyhow::bail!("empty DOL query; pass a query such as `observe containers`");
+        anyhow::bail!("empty DOL query; pass a query such as `observe containers` or use `--file <path>`");
     }
 
-    let parsed = parser::parse(query)?;
+    let parsed = parser::parse(&query)?;
 
     if cli.explain {
         let plan = planner::plan(&parsed.query).map_err(|e| anyhow::anyhow!("plan error: {e}"))?;
@@ -762,6 +773,7 @@ mod tests {
     async fn rejects_empty_query() {
         let cli = Cli {
             query: Some("   ".to_owned()),
+            file: None,
             output: None,
             store: None,
             collect: false,
@@ -792,6 +804,7 @@ mod tests {
     async fn historical_query_requires_store_flag() {
         let cli = Cli {
             query: Some("inspect container api at \"2026-01-01 12:00:00\"".to_owned()),
+            file: None,
             output: None,
             store: None,
             collect: false,
@@ -957,6 +970,7 @@ mod tests {
     async fn watch_with_alert_runs_without_panic() {
         let cli = Cli {
             query: Some(r#"alert when cpu > 80% for 30s then print "High""#.to_owned()),
+            file: None,
             watch: Some(1),
             output: None,
             store: None,
@@ -991,6 +1005,7 @@ mod tests {
     async fn watch_with_alert_with_timeout() {
         let cli = Cli {
             query: Some(r#"alert when cpu > 80% for 30s then print "High""#.to_owned()),
+            file: None,
             watch: Some(5),
             output: None,
             store: None,
@@ -1026,6 +1041,7 @@ mod tests {
     async fn alert_without_watch_runs_dedicated_loop() {
         let cli = Cli {
             query: Some(r#"alert when cpu > 80% for 30s then print "High""#.to_owned()),
+            file: None,
             watch: None,
             output: None,
             store: None,

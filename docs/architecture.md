@@ -103,6 +103,7 @@ The CLI (`src/cli.rs`) uses `clap` for argument parsing. Key flags include:
 - `--timeout <s>` — query execution timeout (applies to watch, alert, events, store, and single queries)
 - `--diff` — compare with last store snapshot
 - `--export <path>` — write output to file
+- `--file <path>` / `-f <path>` — read the DOL query from a `.dol` file
 - `--host <addr>` — remote Docker daemon address
 - `--completion <shell>` — generate shell completion script
 - `repl` — interactive REPL shell
