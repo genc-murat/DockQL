@@ -501,7 +501,10 @@ impl Parser {
         if self.consume_ident("set") {
             return self.parse_set_pipeline();
         }
-        Err(self.error_here("expected pipeline node: where, select, group by, sort by, limit, offset, distinct, alert, if, or set"))
+        if self.consume_ident("fill") {
+            return self.parse_fill_pipeline();
+        }
+        Err(self.error_here("expected pipeline node: where, select, group by, sort by, limit, offset, distinct, alert, if, set, or fill"))
     }
 
     fn parse_aggregates(&mut self) -> Result<Vec<crate::ast::AggregateExpr>, ParseError> {
@@ -837,6 +840,13 @@ impl Parser {
         Ok(values)
     }
 
+    fn parse_fill_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
+        let field = self.expect_identifier_like("field name")?;
+        self.expect_ident("with")?;
+        let default = self.parse_expression()?;
+        Ok(PipelineNode::Fill { field, default })
+    }
+
     fn parse_optional_operator(&mut self) -> Option<Operator> {
         let op = match self.peek().map(|t| &t.kind) {
             Some(TokenKind::Eq) => Operator::Eq,
@@ -847,6 +857,8 @@ impl Parser {
             Some(TokenKind::Lte) => Operator::Lte,
             Some(TokenKind::Ident(v)) if v == "contains" => Operator::Contains,
             Some(TokenKind::Ident(v)) if v == "matches" => Operator::Matches,
+            Some(TokenKind::Ident(v)) if v == "starts_with" => Operator::StartsWith,
+            Some(TokenKind::Ident(v)) if v == "ends_with" => Operator::EndsWith,
             _ => return None,
         };
         self.advance();
@@ -1924,5 +1936,41 @@ mod tests {
     fn rejects_join_without_on() {
         let result = parse("observe containers join networks");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_fill_pipeline() {
+        let q = parse_one("observe containers | fill memory with 0");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        assert!(matches!(o.pipeline[0], PipelineNode::Fill { .. }));
+    }
+
+    #[test]
+    fn parses_fill_with_expression() {
+        let q = parse_one("observe containers | fill name with coalesce(label.name, name)");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        assert!(matches!(o.pipeline[0], PipelineNode::Fill { .. }));
+    }
+
+    #[test]
+    fn parses_starts_with_operator() {
+        let q = parse_one("observe containers where name starts_with \"api-\"");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let filter = o.filter.as_ref().expect("expected filter");
+        assert!(matches!(
+            filter,
+            Expression::Comparison { operator: Operator::StartsWith, .. }
+        ));
+    }
+
+    #[test]
+    fn parses_ends_with_operator() {
+        let q = parse_one("observe containers where image ends_with \":latest\"");
+        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let filter = o.filter.as_ref().expect("expected filter");
+        assert!(matches!(
+            filter,
+            Expression::Comparison { operator: Operator::EndsWith, .. }
+        ));
     }
 }

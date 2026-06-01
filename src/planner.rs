@@ -374,6 +374,10 @@ fn node_to_step(node: &PipelineNode) -> PlanStep {
             field: field.clone(),
             value: value.clone(),
         },
+        PipelineNode::Fill { field, default } => PlanStep::Set {
+            field: field.clone(),
+            value: crate::ast::SetValue::Expr(default.clone()),
+        },
         PipelineNode::Having(expr) => PlanStep::Filter(expr.clone()),
         PipelineNode::Distinct => PlanStep::Select(vec!["*".to_owned()]),
         PipelineNode::Offset(n) => PlanStep::Limit(*n),

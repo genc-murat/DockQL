@@ -143,6 +143,10 @@ pub enum PipelineNode {
         field: String,
         value: SetValue,
     },
+    Fill {
+        field: String,
+        default: Expression,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -253,6 +257,8 @@ pub enum Operator {
     Lte,
     Contains,
     Matches,
+    StartsWith,
+    EndsWith,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

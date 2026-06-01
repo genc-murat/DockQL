@@ -224,6 +224,48 @@ fn eval_bool_expr(
                 }),
             }
         }
+        Operator::StartsWith => {
+            let l_str = match &l {
+                JsonValue::String(s) => s.clone(),
+                _ => {
+                    return Err(EvalError::InvalidComparison {
+                        field: format!("{l:?}"),
+                        operator: "StartsWith".to_owned(),
+                    });
+                }
+            };
+            let r_str = match &r {
+                JsonValue::String(s) => s.clone(),
+                _ => {
+                    return Err(EvalError::InvalidComparison {
+                        field: format!("{r:?}"),
+                        operator: "StartsWith".to_owned(),
+                    });
+                }
+            };
+            Ok(l_str.starts_with(&r_str))
+        }
+        Operator::EndsWith => {
+            let l_str = match &l {
+                JsonValue::String(s) => s.clone(),
+                _ => {
+                    return Err(EvalError::InvalidComparison {
+                        field: format!("{l:?}"),
+                        operator: "EndsWith".to_owned(),
+                    });
+                }
+            };
+            let r_str = match &r {
+                JsonValue::String(s) => s.clone(),
+                _ => {
+                    return Err(EvalError::InvalidComparison {
+                        field: format!("{r:?}"),
+                        operator: "EndsWith".to_owned(),
+                    });
+                }
+            };
+            Ok(l_str.ends_with(&r_str))
+        }
         Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte => {
             let ln = json_as_f64(&l).ok_or_else(|| EvalError::InvalidComparison {
                 field: format!("{l:?}"),

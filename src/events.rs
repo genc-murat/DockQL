@@ -476,6 +476,17 @@ fn apply_pipeline_node(row: Row, node: &PipelineNode) -> Result<PipelineOutcome,
             row.fields.insert(field.clone(), json_value);
             Ok(PipelineOutcome::Row(row))
         }
+        PipelineNode::Fill { field, default } => {
+            let mut row = row;
+            if !row.fields.contains_key(field)
+                || row.fields.get(field) == Some(&JsonValue::Null)
+                || matches!(row.fields.get(field), Some(JsonValue::String(s)) if s.is_empty())
+            {
+                let value = eval::eval_expr(&row.fields, default)?;
+                row.fields.insert(field.clone(), value);
+            }
+            Ok(PipelineOutcome::Row(row))
+        }
         PipelineNode::If {
             condition,
             then_branch,

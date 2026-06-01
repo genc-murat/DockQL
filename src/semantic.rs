@@ -291,7 +291,6 @@ impl SemanticAnalyzer {
                 }
                 for agg in aggregates {
                     self.check_field_validity(&agg.field)?;
-                    // Aggregates like count, avg, etc. return Float/Integer
                     let ty = match agg.function.as_str() {
                         "count" => Type::Integer,
                         "sum" | "avg" | "min" | "max" => Type::Float,
@@ -311,7 +310,6 @@ impl SemanticAnalyzer {
                 else_branch,
             } => {
                 self.validate_expression(condition)?;
-                // Branch semantic analysis inherits current schema
                 let mut then_analyzer = Self {
                     active_schema: self.active_schema.clone(),
                     target: self.target,
@@ -358,6 +356,10 @@ impl SemanticAnalyzer {
                         Type::Unknown
                     }
                 };
+                self.active_schema.insert(field.clone(), ty);
+            }
+            PipelineNode::Fill { field, default } => {
+                let ty = self.infer_expr_type(default)?;
                 self.active_schema.insert(field.clone(), ty);
             }
         }
