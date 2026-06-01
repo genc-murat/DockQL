@@ -487,7 +487,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ## Examples
 
-64 example queries are available in [`examples/`](examples/):
+83 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers
