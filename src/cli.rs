@@ -11,7 +11,7 @@ use crate::{
     dashboard,
     docker::DockerCliClient,
     events::{self, DockerCliEventSource},
-    executor::{self, ExecutionResult, render_csv, render_jsonl, render_table},
+    executor::{self, ExecutionResult, render_csv, render_jsonl, render_table, render_table_ratatui},
     export::{self, ExportFormat},
     metrics::{DockerCliMetricsCollector, MetricsCollector},
     parser, planner,
@@ -344,13 +344,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
         match output_format {
             OutputFormat::Table => {
-                let text = render_table(result);
+                let text = render_table_ratatui(result);
                 if let Some(ref writer) = export_writer {
                     use std::io::Write;
                     let mut file = writer.lock().unwrap();
                     writeln!(file, "{text}")?;
                 } else {
-                    println!("{text}");
+                    print!("{text}");
                 }
             }
             OutputFormat::Json => {

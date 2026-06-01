@@ -2,6 +2,14 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
 
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Borders, Cell, Table};
+use ratatui::widgets::Row as RatatuiRow;
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
+
 use crate::{
     analyze::{self, AnalyzeError},
     ast::{
@@ -336,6 +344,276 @@ where
     }
 
     Ok(ExecutionResult { rows })
+}
+
+/// Render a table using ratatui's Table widget with box-drawing borders,
+/// colored headers, and styled cells. Uses an in-memory TestBackend.
+pub fn render_table_ratatui(result: &ExecutionResult) -> String {
+    if result.rows.is_empty() {
+        return "No rows".to_owned();
+    }
+
+    let columns: Vec<String> = result.rows[0].fields.keys().cloned().collect();
+    let col_count = columns.len() as u16;
+
+    // Calculate column widths based on header and data
+    let mut col_widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+    for row in &result.rows {
+        for (i, col) in columns.iter().enumerate() {
+            let val = row
+                .fields
+                .get(col)
+                .map(eval::render_json_cell)
+                .unwrap_or_default();
+            col_widths[i] = col_widths[i].max(val.len());
+        }
+    }
+    // Add padding: min width of 8, cap at 50
+    for w in &mut col_widths {
+        *w = (*w + 2).max(8).min(50);
+    }
+
+    // Total width: sum of column widths + left/right border (2) + column spacings
+    let col_spacing: u16 = 1;
+    let spacing_total: u16 = if col_count > 1 {
+        (col_count - 1) * col_spacing
+    } else {
+        0
+    };
+    let total_width: u16 = col_widths.iter().sum::<usize>() as u16
+        + 2  // left + right border
+        + spacing_total;
+
+    // Use terminal width if available, otherwise fall back to calculated width
+    let term_width = crossterm::terminal::size()
+        .map(|(w, _)| w)
+        .unwrap_or(120);
+
+    // If the table is too wide for the terminal, fall back to the simpler
+    // colored render which handles overflow better (no fixed borders).
+    if total_width > term_width.saturating_sub(2) {
+        return render_table_colored(result);
+    }
+
+    let width = total_width.max(20);
+    let row_count = result.rows.len() as u16;
+    let height = row_count + 3; // header + top/bottom border + rows
+    let height = height.min(200).max(4);
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = match Terminal::new(backend) {
+        Ok(t) => t,
+        Err(_) => return render_table_colored(result), // fallback
+    };
+
+    let _ = terminal.draw(|f| {
+        let area = Rect::new(0, 0, width, height);
+
+        // Build ratatui rows
+        let ratatui_rows: Vec<RatatuiRow> = result
+            .rows
+            .iter()
+            .map(|row| {
+                let cells: Vec<Cell> = columns
+                    .iter()
+                    .map(|col| {
+                        let val = row
+                            .fields
+                            .get(col)
+                            .map(eval::render_json_cell)
+                            .unwrap_or_default();
+                        let cell_style = match col.as_str() {
+                            "state" | "status" => {
+                                Style::default().fg(ansi_state_color_ratatui(&val))
+                            }
+                            "cpu" => Style::default().fg(threshold_color_ratatui_val(&val)),
+                            "memory" => Style::default().fg(memory_color_ratatui(&val)),
+                            _ => Style::default(),
+                        };
+                        Cell::from(Span::styled(val, cell_style))
+                    })
+                    .collect();
+                RatatuiRow::new(cells).height(1)
+            })
+            .collect();
+
+        // Build header cells
+        let header_cells: Vec<Cell> = columns
+            .iter()
+            .map(|col| {
+                let header_style = Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD);
+                Cell::from(Span::styled(col.to_uppercase(), header_style))
+            })
+            .collect();
+
+        let constraints: Vec<Constraint> = col_widths
+            .iter()
+            .map(|w| Constraint::Length(*w as u16))
+            .collect();
+
+        let table = Table::new(ratatui_rows, constraints)
+            .header(RatatuiRow::new(header_cells).height(1))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            )
+            .column_spacing(1);
+
+        f.render_widget(table, area);
+    });
+
+    // Extract the buffer content as an ANSI-colored string
+    let buffer = terminal.backend().buffer();
+    buffer_to_ansi_string(buffer)
+}
+
+/// Convert a ratatui Buffer to an ANSI-colored string by iterating cells.
+fn buffer_to_ansi_string(buffer: &ratatui::buffer::Buffer) -> String {
+    use std::fmt::Write;
+    let area = buffer.area();
+    let mut output = String::new();
+    let mut prev_style: Option<Style> = None;
+    let mut has_content = false;
+
+    for y in 0..area.height {
+        let mut line = String::new();
+        let mut line_has_content = false;
+
+        for x in 0..area.width {
+            let idx = (y * area.width + x) as usize;
+            let cell = &buffer.content()[idx];
+            let symbol = cell.symbol();
+
+            if !symbol.is_empty() && symbol != " " {
+                line_has_content = true;
+            }
+
+            // Apply style if changed
+            let style = cell.style();
+            if prev_style.map_or(true, |s| s != style) {
+                if style != Style::default() {
+                    let _ = write!(line, "{}", style_to_ansi(style));
+                } else {
+                    line.push_str("\x1b[0m");
+                }
+                prev_style = Some(style);
+            }
+
+            line.push_str(symbol);
+        }
+
+        if line_has_content {
+            // Trim trailing whitespace but preserve ANSI codes at the end
+            let trimmed = line.trim_end_matches(|c: char| c == ' ');
+            output.push_str(trimmed);
+            output.push('\n');
+            has_content = true;
+        }
+    }
+
+    if has_content {
+        output.push_str("\x1b[0m");
+    }
+    output
+}
+
+/// Convert ratatui::style::Color to ANSI foreground color escape code.
+fn color_to_ansi(color: Color) -> &'static str {
+    match color {
+        Color::Black => "\x1b[30m",
+        Color::Red => "\x1b[31m",
+        Color::Green => "\x1b[32m",
+        Color::Yellow => "\x1b[33m",
+        Color::Blue => "\x1b[34m",
+        Color::Magenta => "\x1b[35m",
+        Color::Cyan => "\x1b[36m",
+        Color::White => "\x1b[37m",
+        Color::DarkGray => "\x1b[90m",
+        Color::LightRed => "\x1b[91m",
+        Color::LightGreen => "\x1b[92m",
+        Color::LightYellow => "\x1b[93m",
+        Color::LightBlue => "\x1b[94m",
+        Color::LightMagenta => "\x1b[95m",
+        Color::LightCyan => "\x1b[96m",
+        _ => "\x1b[0m",
+    }
+}
+
+/// Convert a full ratatui::style::Style to ANSI escape codes.
+fn style_to_ansi(style: Style) -> String {
+    let mut codes = String::new();
+    
+    // Foreground
+    if let Some(fg) = style.fg {
+        codes.push_str(color_to_ansi(fg));
+    }
+    
+    // Background
+    if let Some(bg) = style.bg {
+        codes.push_str(match bg {
+            Color::Black => "\x1b[40m",
+            Color::Red => "\x1b[41m",
+            Color::Green => "\x1b[42m",
+            Color::Yellow => "\x1b[43m",
+            Color::Blue => "\x1b[44m",
+            Color::Magenta => "\x1b[45m",
+            Color::Cyan => "\x1b[46m",
+            Color::White => "\x1b[47m",
+            _ => "",
+        });
+    }
+
+    // Bold
+    if style.add_modifier.contains(Modifier::BOLD) {
+        codes.push_str("\x1b[1m");
+    }
+
+    codes
+}
+
+fn ansi_state_color_ratatui(value: &str) -> Color {
+    match value {
+        "running" => Color::Green,
+        "exited" | "dead" => Color::Red,
+        "restarting" | "paused" => Color::Yellow,
+        "created" => Color::Cyan,
+        "critical" => Color::LightRed,
+        "warning" => Color::Yellow,
+        "ok" | "healthy" => Color::Green,
+        _ => Color::White,
+    }
+}
+
+fn threshold_color_ratatui_val(value_str: &str) -> Color {
+    let cleaned = value_str.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
+    if let Ok(val) = cleaned.parse::<f64>() {
+        if val > 80.0 {
+            Color::Red
+        } else if val > 50.0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        }
+    } else {
+        Color::White
+    }
+}
+
+fn memory_color_ratatui(value_str: &str) -> Color {
+    if let Ok(bytes) = value_str.parse::<f64>() {
+        if bytes > 1_073_741_824.0 {
+            Color::Red
+        } else if bytes > 536_870_912.0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        }
+    } else {
+        Color::White
+    }
 }
 
 pub fn render_table(result: &ExecutionResult) -> String {
