@@ -326,19 +326,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_print_repl_help_contains_host_command() {
-        // Capture stdout
-        let mut output = Vec::new();
-        {
-            let _ = std::io::Write::write(&mut output, b"");
-            // Temporarily capture stdout
-            let saved = std::io::stdout();
-            let handle = saved.lock();
-            // We can't easily capture print! output in tests,
-            // so test the function's structure through its text constant.
-        }
-        // Instead of capturing, verify the help text by checking
-        // that print_repl_help() compiles and runs without panic.
+    fn test_print_repl_help_runs_without_panic() {
+        // Verify that print_repl_help() compiles and runs without panic.
         print_repl_help();
     }
 

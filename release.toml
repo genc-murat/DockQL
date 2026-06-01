@@ -1,11 +1,8 @@
 # Only allow releases from the main branch
 allow-branch = ["main"]
 
-# Publish to crates.io so 'cargo install dol' works
-publish = true
-# Set CARGO_REGISTRY_TOKEN in your environment or .cargo/config.toml
-# Generate a token at: https://crates.io/settings/tokens
-registry = "crates-io"
+# Publish to crates.io (disabled)
+publish = false
 
 # Use a single commit for version bump + changelog update
 consolidate-commits = true
