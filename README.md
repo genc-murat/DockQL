@@ -47,6 +47,7 @@ dol "observe containers | group by state"
 - **Range check** — `between ... and ...`, `is null`, `is not null`
 - **Pattern matching** — `matches` (regex), `in`, `starts_with`, `ends_with` operators for flexible filtering
 - **`fill` pipeline node** — `fill <field> with <expr>` to supply defaults for null/missing values
+- **`let` pipeline node** — `let $name = <expr>` to declare constants and parameters in pipelines
 - **`$var` field references** — prefix field names with `$` for clarity in expressions (e.g., `$state = running`)
 - **Multi-field sort** — `sort by state desc, cpu desc`
 - **Pipeline nodes** — `having`, `distinct`, `offset`
@@ -422,6 +423,7 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 | `alert "message"` | Emit inline alert |
 | `set <field> = <value>` | Add or override a field |
 | `fill <field> with <expr>` | Fill null/missing values with a default expression |
+| `let $name = <expr>` | Declare a constant or parameter for use in downstream pipeline stages (e.g., `let $threshold = 80`) |
 | `if <cond> then <node>` | Conditional pipeline branching |
 | `[else if <cond> then <node>]` | Chained else-if |
 | `[else <node>]` | Fallback branch |

@@ -51,7 +51,24 @@ observe containers | set hour = extract(created_at, "hour") | select name, hour
 observe containers | set month = extract(created_at, "month") | group by month
 ```
 
-## 27. `$var` Field References
+## 27. `let` Pipeline Node (Constants & Parameters)
+
+**Declare a threshold and filter by it:**
+```dol
+observe containers | let $threshold = 80 | where cpu > $threshold | select name, cpu
+```
+
+**Declare an application name:**
+```dol
+observe containers | let $app = "myapp" | where compose_project = $app | select name, state
+```
+
+**Declare multiple parameters:**
+```dol
+observe containers | let $min_cpu = 50 | let $max_cpu = 90 | where cpu between $min_cpu and $max_cpu
+```
+
+## 28. `$var` Field References
 
 **Explicit field access with $ prefix:**
 ```dol
@@ -59,7 +76,7 @@ observe containers where $state = running
 observe containers | set label = concat($name, ":", $image) | select label
 ```
 
-## 28. Cross-Target JOIN Queries
+## 29. Cross-Target JOIN Queries
 
 Join rows from two targets on a matching key. Output fields are prefixed with
 an auto-generated alias (`c.` for containers, `i.` for images, `n.` for networks,

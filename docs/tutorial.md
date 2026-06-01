@@ -538,7 +538,150 @@ dol "observe containers | fill name with coalesce(label.name, 'unnamed') | selec
 The `fill` node checks if a field is null or empty, and if so, replaces it
 with the result of the expression.
 
-## 12. Aggregation with `group by`
+---
+
+## 12. Declaring Constants with `let`
+
+The `let` pipeline node lets you declare constants and parameters that can be
+referenced in downstream pipeline stages. This is especially useful for avoiding
+hard-coded values in filters and making queries more readable.
+
+**Declare a threshold parameter:**
+
+```bash
+dol "observe containers | let $threshold = 80 | where cpu > $threshold | select name, cpu"
+```
+
+**Declare an application name filter:**
+
+```bash
+dol "observe containers | let $app = 'myapp' | where compose_project = $app | select name, state"
+```
+
+**Use without the `$` prefix:**
+
+The `$` prefix is optional. Both forms work identically:
+
+```bash
+# With $
+dol "observe containers | let $threshold = 80 | where cpu > $threshold"
+
+# Without $
+dol "observe containers | let threshold = 80 | where cpu > threshold"
+```
+
+> **Note:** `let` is for declaring constant values and simple expressions. For
+> per-row computed fields that reference other fields, use `set` instead.
+
+---
+
+## 13. Aggregation with `group by`
+
+Group rows by field values to see summaries.
+
+**Count containers by state:**
+
+```bash
+dol "observe containers | group by state"
+```
+
+```text
+┌──────────┬───────┐
+│ state    │ count │
+├──────────┼───────┤
+│ running  │ 4     │
+│ exited   │ 1     │
+│ paused   │ 1     │
+└──────────┴───────┘
+```
+
+**Top 5 images by container count:**
+
+```bash
+dol "observe containers | group by image | sort by count desc | limit 5"
+```
+
+**With aggregate functions (avg, sum, min, max):**
+
+```bash
+# Average CPU per image
+dol "observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc"
+
+# Total memory per compose project
+dol "observe containers | group by compose_project with sum(memory) as total_mem |
+     sort by total_mem desc"
+```
+
+**Filter groups with `having`:**
+
+Only show images with more than 2 containers:
+
+```bash
+dol "observe containers | group by image with count(id) as cnt | having cnt > 2"
+```
+
+The `having` clause is like `where` but operates on aggregate values *after*
+grouping.
+
+---
+
+## 14. Date and Time Functions
+
+DOL provides a set of date/time functions for timestamp manipulation. These
+are especially useful for events, logs, and historical queries.
+
+**Current time:**
+
+```bash
+dol "observe containers | set now = now() | select name, now"
+```
+
+**Format a timestamp:**
+
+```bash
+dol "observe containers | set day = date_format(created_at, '%Y-%m-%d') | select name, day"
+```
+
+**Difference between two timestamps:**
+
+```bash
+# Hours between creation and last start
+dol "observe containers | set uptime = date_diff(created_at, started_at, 'hours') | select name, uptime"
+```
+
+**Extract a component from a timestamp:**
+
+```bash
+dol "observe containers | set month = extract(created_at, 'month') | select name, month"
+```
+
+Supported `extract` parts: `year`, `month`, `day`, `hour`, `minute`, `second`
+
+Supported `date_diff` units: `seconds`, `minutes`, `hours`, `days`
+
+#### `$var` Field References
+
+Field names can be prefixed with `$` for explicit field access. This is
+particularly useful on the right side of a comparison where bare identifiers
+are treated as literal values:
+
+```bash
+# Without $, 'running' is a literal value
+dol "observe containers where state = running"
+
+# With $, $state is explicitly a field reference
+dol "observe containers where $state = running"
+```
+
+Both forms produce the same result. The `$` prefix is especially helpful when
+a field name might collide with a keyword or when writing scripts.
+
+---
+
+## 15. Streaming Events
+
+`events` opens a live stream from the Docker event bus. It keeps running until
+you press Ctrl+C.
 
 Group rows by field values to see summaries.
 
@@ -688,7 +831,7 @@ dol "events volumes | where action = 'mount'"
 
 ---
 
-## 15. Setting Up Alerts
+## 16. Setting Up Alerts
 
 Alerts run continuously, evaluating a condition and triggering an action when
 it's been true for a specified duration.
@@ -737,7 +880,7 @@ store. You can review them later with SQLite queries.
 
 ---
 
-## 16. Time Travel (Historical Queries)
+## 17. Time Travel (Historical Queries)
 
 With a telemetry store configured, you can query the past. This requires the
 background collector to be running.
@@ -780,7 +923,7 @@ dol --store telemetry.db \
 
 ---
 
-## 17. Automated Analysis
+## 18. Automated Analysis
 
 The `analyze` command runs deterministic checks across your Docker environment.
 
@@ -856,7 +999,7 @@ dol --store telemetry.db "analyze containers find restart_loops last 30m"
 
 ---
 
-## 18. Using the REPL
+## 19. Using the REPL
 
 The interactive REPL gives you a shell with tab completion, command history,
 and in-session state.
@@ -944,7 +1087,7 @@ the evaluation loop timing.
 
 ---
 
-## 19. Next Steps
+## 20. Next Steps
 
 You've covered all the core DOL features. Here's what to explore next:
 

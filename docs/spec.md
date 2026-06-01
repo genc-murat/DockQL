@@ -558,6 +558,7 @@ Supported pipeline nodes:
 - `alert <string>`
 - `set <field> = <value-expr>`
 - `fill <field> with <expr>` — Replace null/empty values in `<field>` with the result of `<expr>` (useful for supplying defaults for missing metrics or labels)
+- `let $name = <expr>` — Declare a constant or parameter. The expression is evaluated and the result is added to each row as a field named `$name` (the `$` prefix is optional). Useful for declaring thresholds, labels, or reusable values: `let $threshold = 80`
 - `if <condition> then <pipeline-node> [else if <condition> then <pipeline-node>] [else <pipeline-node>]`
 
 Pipeline rules:
@@ -598,6 +599,8 @@ observe containers | set mem_gb = memory / 1073741824
 observe containers | set today = now()
 observe containers | set day = extract(created_at, 'day')
 observe containers where $state = running
+observe containers | let $threshold = 80 | where cpu > $threshold
+observe containers | let $app = "myapp" | where compose_project = $app
 ```
 
 ## 9. Execution Semantics
@@ -738,8 +741,8 @@ Reserved keywords in v0.1:
 
 ```text
 alert analyze and asc at between by case compose contains count desc distinct else end events
-false find for from group having if in inspect is join last limit logs matches max min not null
-observe of offset or ping restart select service services set sort sum then to true webhook when where
+false fill find for from group having if in inspect is join last let limit logs matches max min
+not null observe of offset or ping restart select service services set sort sum then to true webhook when where
 ```
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.
