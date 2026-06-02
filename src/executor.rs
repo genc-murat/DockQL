@@ -1735,7 +1735,7 @@ fn render_table_colored_with_theme(result: &ExecutionResult, theme: Theme) -> St
     lines.push(format!(
         "{header_color_code}{}{ANSI_RESET}",
         render_table_line(
-            &columns.iter().cloned().collect::<Vec<_>>(),
+            &columns.to_vec(),
             &widths
         )
     ));
