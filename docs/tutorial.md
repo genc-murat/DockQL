@@ -1111,3 +1111,4 @@ You've covered all the core DOL features. Here's what to explore next:
 - `--output json` for machine-readable output, pipe to `jq` for processing
 - `--host tcp://<addr>:2375` to query a remote Docker daemon
 - `--file <path>` or `-f <path>` to run a query from a `.dol` file
+- `--theme light` (or `dol config set theme light`) for terminals with light backgrounds

@@ -184,9 +184,16 @@ dol --output jsonl "events containers | limit 5"
 
 # ANSI-colored table (default when output is a terminal)
 dol "observe containers"
+
+# Light theme for terminals with light backgrounds
+dol --theme light "observe containers"
 ```
 
 `json-compact` is ideal for piping into other tools or for reducing output size in scripts.
+
+The default table output uses a **dark theme** with DarkGray alternating row backgrounds
+and cyan headings. Pass `--theme light` (or set `theme: light` in the config file) for
+blue headings on a light background without alternating row tints.
 
 ### Running Queries from `.dol` Files
 
@@ -281,6 +288,7 @@ dol config init
 # Set config values
 dol config set store ~/telemetry.db
 dol config set host tcp://192.168.1.100:2375
+dol config set theme light
 
 # View current configuration
 dol config view
@@ -294,7 +302,11 @@ output: table
 host: tcp://192.168.1.100:2375
 metrics_interval: 30
 snapshot_interval: 300
+theme: light
 ```
+
+Config values can be overridden at runtime via CLI flags. For example, `--theme dark`
+takes precedence over a `theme: light` setting in the config file.
 
 ### External Integrations
 
@@ -494,6 +506,12 @@ dol "observe containers | where label.env = production | select name, label.vers
 | `repl` | Start interactive REPL shell with tab completion and history |
 | `top` | Live-updating TUI container monitor with CPU/MEM gauge bars and filter mode |
 | `dashboard` | Multi-panel TUI with container list, stats, and live events |
+| `config init` | Create a default config file |
+| `config set <key> <value>` | Update a config value |
+| `--theme <dark\|light>` | Color theme for table output (`dark` or `light`); can be set permanently in config with `theme: dark\|light` |
+| `config init` | Create a default config file |
+| `config set <key> <value>` | Update a config value |
+| `--theme <dark\|light>` | Color theme for table output (`dark` or `light`); can be set permanently in config with `theme: dark\|light` |
 | `config init` | Create a default config file |
 | `config set <key> <value>` | Update a config value |
 | `config view` | Display current configuration |

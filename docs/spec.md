@@ -823,6 +823,7 @@ The DOL CLI supports the following flags:
 | `--timeout <s>` | Query execution timeout in seconds — if a query takes longer than this, it is aborted (applies to watch, alert, events, store, and single queries) |
 | `--explain` | Show the logical query plan without executing |
 | `--diff` | Compare query results with the last store snapshot (requires `--store`) |
+| `--theme <dark\|light>` | Color theme for table output (`dark` or `light`); can also be set permanently in config via `theme: dark\|light` |
 | `--completion <shell>` | Generate shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
 | `--export-influx <url>` | Push results to InfluxDB v1/v2 HTTP write API |
 | `--export-grafana-loki <url>` | Push results to Grafana Loki HTTP push API |
@@ -831,7 +832,7 @@ The DOL CLI supports the following flags:
 | `top` | Live-updating TUI container monitor (top-like) with auto-refresh, keyboard controls, CPU/MEM gauge bars, filter mode, and event-driven refresh |
 | `dashboard` | Multi-panel TUI dashboard with container list, state distribution stats (histogram bars), top images, and live Docker events stream |
 | `config init` | Create a default config file at the standard config path |
-| `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`) |
+| `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`, `theme`) |
 | `config view` | Display the current merged configuration (from CLI flags + config file + defaults) |
 
 Additional REPL commands (within `dol repl`):

@@ -396,7 +396,16 @@ $ dol <span class="str">"observe containers join images on id = id | select c.na
 
 <span class="cmt"># Run a query from a .dol file</span>
 $ dol <span class="op">--file</span> examples/ping.dol
-$ dol <span class="op">-f</span> examples/list_containers.dol</pre>
+$ dol <span class="op">-f</span> examples/list_containers.dol
+
+<span class="cmt"># Light theme for terminals with light backgrounds</span>
+$ dol <span class="op">--theme</span> light <span class="str">"observe images | sort by size desc | limit 10"</span>
+
+<span class="cmt"># Set light theme permanently in config</span>
+$ dol config set theme light
+
+<span class="cmt"># Override config theme with --theme</span>
+$ dol <span class="op">--theme</span> dark <span class="op">-f</span> examples/ping.dol</pre>
     </div>
 
     <!-- Features -->

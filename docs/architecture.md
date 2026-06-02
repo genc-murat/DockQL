@@ -67,7 +67,7 @@ Evaluates conditions against live metrics/state at intervals. Manages duration g
 - **Alert history**: Fired alerts are persisted to the telemetry store's `alert_history` table when `--store` is active.
 
 ### 10. Config Loader & Subcommand (`src/config.rs`)
-Loads DOL settings from YAML or TOML files at standard paths (`~/.config/dol/config.yaml`, `.dolrc`, `dol.yaml`). Supports `store`, `output`, `host`, `metrics_interval`, and `snapshot_interval` settings. The `dol config init|set|view` subcommand provides CLI-based config management.
+Loads DOL settings from YAML or TOML files at standard paths (`~/.config/dol/config.yaml`, `.dolrc`, `dol.yaml`). Supports `store`, `output`, `host`, `metrics_interval`, `snapshot_interval`, and `theme` settings. The `dol config init|set|view` subcommand provides CLI-based config management.
 
 ### 11. Interactive REPL (`src/repl.rs`)
 A readline-based interactive shell (`dol repl`) with tab completion for DOL keywords, command history (persisted across sessions), and REPL-specific commands (`.watch`, `.export`, `.output`, `.history`, `.help`). Supports all query types: observe, events, inspect, alert, and fields.
@@ -102,12 +102,15 @@ When executing `observe containers where cpu > 80% | select name, cpu | sort cpu
 8. **Pipeline Limiting (`limit`)**: The `limit 5` node truncates the output to the top 5 rows.
 9. **Render**: The resulting `ExecutionResult` is formatted using the selected output format (`--output` flag). The default table renderer uses ratatui widget rendering with box-drawing borders, colored headers, and per-cell color coding (green/yellow/red for CPU/memory thresholds, color-coded states). Falls back to a simpler ANSI-colored markdown-style table if the terminal is too narrow. Also supports CSV, JSON, JSON-Compact, and JSONL output.
 
+The colour theme for table output can be controlled via `--theme dark|light` or the config file (`theme: dark|light`). The resolution order is: `--theme` flag > config file `theme` > `Theme::Dark` (default). The dark theme uses DarkGray alternating row backgrounds and cyan headings, while the light theme omits row backgrounds and uses blue headings for better contrast on light terminal backgrounds.
+
 ## CLI Integration
 
 The CLI (`src/cli.rs`) uses `clap` for argument parsing. The main `Cli` struct defines all flags and subcommands shown in the table above. The `run()` function handles subcommand dispatch, flag processing (including `apply_host` to set `DOCKER_HOST`), query mode selection (store/alert/events/batch/watch), timeout management via `spawn_with_timeout`, and output/export pipeline.
 
 Key flags include:
 
+- `--theme <dark|light>` — colour theme for table output (`dark` with DarkGray alternating rows and cyan headings, or `light` with blue headings and no row tint); can be set permanently in config via `theme: dark|light`
 - `--output <table|csv|json|json-compact|jsonl>` — output format selection (uses ratatui-based table rendering with ANSI colors)
 - `--explain` — show logical plan without executing
 - `--watch <s>` — repeat query every N seconds (batch and alert queries)

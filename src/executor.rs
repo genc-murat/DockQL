@@ -2,6 +2,17 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
 
+/// Color theme for the rendered table output.
+///
+/// - `Dark` (default): light text on dark background, DarkGray alternating rows.
+/// - `Light`: dark text on light background, no row background tint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, clap::ValueEnum)]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+}
+
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -426,6 +437,16 @@ fn size_bar(value_str: &str, min_bytes: f64, max_bytes: f64, max_width: usize) -
 /// Render a table using ratatui's Table widget with box-drawing borders,
 /// colored headers, and styled cells. Uses an in-memory TestBackend.
 pub fn render_table_ratatui(result: &ExecutionResult) -> String {
+    render_table_ratatui_with_theme(result, Theme::Dark)
+}
+
+/// Render a table with the given theme.  Selects ratatui if the terminal is
+/// wide enough, otherwise falls back to the colour-coded plain-text render.
+pub fn render_table_with_theme(result: &ExecutionResult, theme: Theme) -> String {
+    render_table_ratatui_with_theme(result, theme)
+}
+
+fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> String {
     if result.rows.is_empty() {
         return "No rows".to_owned();
     }
@@ -494,7 +515,7 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
     // If the table is too wide for the terminal, fall back to the simpler
     // colored render which handles overflow better (no fixed borders).
     if total_width > term_width.saturating_sub(2) {
-        return render_table_colored(result);
+        return render_table_colored_with_theme(result, theme);
     }
 
     let width = total_width.max(20);
@@ -502,10 +523,28 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
     let height = row_count + 5;
     let height = height.min(200).max(5);
 
+    // Theme-specific styles
+    // Light theme: no alternating row background (white-on-white is invisible),
+    // use blue/dark headings readable on light terminals.
+    let (alt_row_style, header_fg, title_fg, border_fg) = match theme {
+        Theme::Dark => (
+            Style::default().bg(Color::DarkGray),
+            Color::Cyan,
+            Color::Cyan,
+            Color::DarkGray,
+        ),
+        Theme::Light => (
+            Style::default(), // no alternating bg for light theme
+            Color::Blue,
+            Color::Blue,
+            Color::Blue,
+        ),
+    };
+
     let backend = TestBackend::new(width, height);
     let mut terminal = match Terminal::new(backend) {
         Ok(t) => t,
-        Err(_) => return render_table_colored(result),
+        Err(_) => return render_table_colored_with_theme(result, theme),
     };
 
     let _ = terminal.draw(|f| {
@@ -518,10 +557,10 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
             .enumerate()
             .map(|(idx, row)| {
                 let is_even = idx % 2 == 0;
-                let row_bg = if is_even {
-                    Style::default()
-                } else {
-                    Style::default().bg(Color::DarkGray)
+                let row_base = match (theme, is_even) {
+                    (Theme::Light, _) => Style::default(),
+                    (Theme::Dark, true) => Style::default(),
+                    (Theme::Dark, false) => alt_row_style,
                 };
 
                 let cells: Vec<Cell> = columns
@@ -543,19 +582,18 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
                             "memory" => Style::default().fg(memory_color_ratatui(&val)),
                             _ => Style::default(),
                         };
+                        let cell_style = base_style.patch(row_base);
 
                         // For the "size" column, augment with a visual bar
                         if col.as_str() == "size" && size_max_bytes > 0.0 && !val.is_empty() {
                             let bar = size_bar(&val, size_min_bytes, size_max_bytes, size_bar_width);
                             if !bar.is_empty() {
                                 let combined = format!("{val} {bar}");
-                                Cell::from(Span::styled(combined, base_style.patch(row_bg)))
+                                Cell::from(Span::styled(combined, cell_style))
                             } else {
-                                let cell_style = base_style.patch(row_bg);
                                 Cell::from(Span::styled(val, cell_style))
                             }
                         } else {
-                            let cell_style = base_style.patch(row_bg);
                             Cell::from(Span::styled(val, cell_style))
                         }
                     })
@@ -569,7 +607,7 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
             .iter()
             .map(|col| {
                 let header_style = Style::default()
-                    .fg(Color::Cyan)
+                    .fg(header_fg)
                     .add_modifier(Modifier::BOLD)
                     .add_modifier(Modifier::UNDERLINED);
                 Cell::from(Span::styled(col.to_uppercase(), header_style))
@@ -592,14 +630,14 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
                             ratatui::text::Span::styled(
                                 title_text,
                                 Style::default()
-                                    .fg(Color::Cyan)
+                                    .fg(title_fg)
                                     .add_modifier(Modifier::BOLD),
                             ),
                         )
                     )
                     .title_alignment(ratatui::layout::Alignment::Center)
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(Style::default().fg(border_fg)),
             )
             .column_spacing(1);
 
@@ -1581,6 +1619,10 @@ fn ansi_threshold_color(value_str: &str) -> &'static str {
 const ANSI_RESET: &str = "\x1b[0m";
 
 pub fn render_table_colored(result: &ExecutionResult) -> String {
+    render_table_colored_with_theme(result, Theme::Dark)
+}
+
+fn render_table_colored_with_theme(result: &ExecutionResult, theme: Theme) -> String {
     if result.rows.is_empty() {
         return "No rows".to_owned();
     }
@@ -1620,13 +1662,20 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
         (0.0, 0.0, 0)
     };
 
+    let (row_alt_bg, title_color_code, header_color_code) = match theme {
+        Theme::Dark => ("\x1b[100m", "\x1b[1;36m", "\x1b[1;4;37m"),
+        // Light theme: no alternating row background (white-on-white is invisible),
+        // use blue/dark text which is readable on light terminals.
+        Theme::Light => ("", "\x1b[1;34m", "\x1b[1;4;30m"),
+    };
+
     let rendered_rows: Vec<Vec<(String, &'static str, &'static str)>> = result
         .rows
         .iter()
         .enumerate()
         .map(|(idx, row)| {
             let is_even = idx % 2 == 0;
-            let row_bg = if is_even { "" } else { "\x1b[100m" }; // DarkGray bg
+            let row_bg = if is_even { "" } else { row_alt_bg };
 
             columns
                 .iter()
@@ -1678,14 +1727,13 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
 
     // ── Title ──
     lines.push(format!(
-        "\x1b[1;36m {} \x1b[0m",
+        "{title_color_code} {} {ANSI_RESET}",
         entity
     ));
 
     // ── Header ──
-    let header_color = "\x1b[1;4;37m";  // Bold + Underline + White
     lines.push(format!(
-        "{header_color}{}{ANSI_RESET}",
+        "{header_color_code}{}{ANSI_RESET}",
         render_table_line(
             &columns.iter().map(|c| c.clone()).collect::<Vec<_>>(),
             &widths

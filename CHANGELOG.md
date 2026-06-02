@@ -7,9 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-02
+
 ### Added
 
 - `--file` / `-f` CLI flag to read DOL queries directly from `.dol` files (e.g., `dol --file examples/ping.dol`)
+- `--theme dark|light` CLI flag for table output colour theme (dark with DarkGray alternating rows, or light with blue headings, no row tint)
+- `theme` config field — set default theme permanently via `dol config set theme light` (CLI `--theme` takes precedence over config)
+
+### Changed
+
+- `sort by size desc` now correctly sorts byte-size strings (MB, GB, etc.) using log-scale numeric comparison
+- Table renderer improvements: hidden empty columns, capped column widths (30 chars) with truncation, log10-scaled visual size bars, `─` separator
+- `--theme` CLI flag changed from required default to `Option<Theme>` to allow config fallback
+
+### Documentation
+
+- Updated README.md with `--theme` flag, config file `theme` field, and light/dark theme descriptions
+- Updated docs/spec.md CLI Reference and config set key list with `--theme` / `theme`
+- Updated docs/tutorial.md quick tips with `--theme light` usage note
+- Updated docs/architecture.md with theme resolution flow (CLI > config > default)
+- Updated docs/index.html landing page with theme example commands
 
 ## [0.3.0] - 2026-06-01
 
@@ -88,4 +106,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.3.0]: https://github.com/genc-murat/DockQL/compare/v0.2.0...v0.3.0
 
-[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/genc-murat/DockQL/compare/v0.3.0...v0.4.0
+
+[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.4.0...HEAD

@@ -10,6 +10,8 @@ pub struct DolConfig {
     pub metrics_interval: Option<u64>,
     pub snapshot_interval: Option<u64>,
     pub host: Option<String>,
+    /// Default colour theme: "dark" or "light".
+    pub theme: Option<String>,
 }
 
 impl DolConfig {
@@ -82,6 +84,7 @@ pub fn execute_config(action: ConfigAction) -> anyhow::Result<()> {
                     })?);
                 }
                 "host" => config.host = Some(value.clone()),
+                "theme" => config.theme = Some(value.clone()),
                 _ => anyhow::bail!("unknown config key: {key}"),
             }
             config.save()?;
