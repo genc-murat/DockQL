@@ -182,7 +182,7 @@ fields volumes
 
 ### 2.8 `compose`
 
-`compose` queries containers, networks, or volumes grouped under a Docker
+`compose` queries containers, networks, volumes, and other resources grouped under a Docker
 Compose project. It filters resources by the `com.docker.compose.project`
 label.
 
@@ -191,15 +191,25 @@ Execution mode: batch.
 Syntax:
 
 ```dol
+compose ls
 compose <project>
 compose <project> containers
 compose <project> services
 compose <project> networks
 compose <project> volumes
 compose <project> health
+compose <project> images
+compose <project> stats
+compose <project> ps
+compose <project> logs <service> [tail <n>]
+compose <project> port <service> <port>
+compose <project> config [services|networks|volumes]
+compose <project> events
 observe compose <project>
 ```
 
+- `compose ls` lists all Docker Compose projects with their container, network, and volume counts.
+  Supported fields: `project`, `containers`, `running`, `stopped`, `networks`, `volumes`, `status`.
 - Without a target keyword, defaults to `containers` — listing all containers
   in the compose project with their labels and metrics.
 - Use `containers` explicitly to make the target clear: `compose myapp containers`.
@@ -214,17 +224,45 @@ observe compose <project>
   name and health status. The `health` field is extracted from the Docker
   inspect `/State/Health/Status` endpoint. Supported fields include all
   container fields plus `service` and `health`.
+- With `images`, lists images used by containers in the compose project.
+  Supported fields: `id`, `repository`, `name`, `tag`, `digest`, `size`, `service`.
+- With `stats`, shows resource usage statistics for compose project containers.
+  Supported fields: `name`, `service`, `cpu`, `memory`, `memory_limit`, `memory_pct`,
+  `network_rx`, `network_tx`, `disk_read`, `disk_write`.
+- With `ps`, shows enhanced container status with service names.
+  Supported fields: `name`, `service`, `image`, `state`, `status`, `health`,
+  `restart_count`, `ports`.
+- With `logs <service>`, retrieves log output for a specific service.
+  Supported fields: `line`, `message`, `service`, `container`.
+- With `port <service> <port>`, shows port mappings for a service.
+  Supported fields: `service`, `container`, `ports`.
+- With `config`, inspects the Compose project configuration from running containers.
+  Supported fields (services): `name`, `image`, `state`, `status`, `ports`, `restart_count`, `health`, `depends_on`.
+  Supported fields (networks): `name`, `driver`, `scope`, `containers`.
+  Supported fields (volumes): `name`, `driver`, `mountpoint`, `scope`.
+- With `events`, streams real-time events for the compose project (requires streaming mode).
 - The `observe compose <project>` syntax is an alternative form that reads
   identically to other `observe` sub-queries.
 
 Examples:
 
 ```dol
+compose ls
+compose ls | where containers > 5 | sort by project asc
 compose myapp
 compose myapp services
 compose myapp networks
 compose myapp volumes
 compose myapp health
+compose myapp images
+compose myapp stats | where cpu > 80% | select name, service, cpu
+compose myapp ps | where state = "running" | select name, service, health
+compose myapp logs api-service tail 50
+compose myapp logs api-service tail 100 | where message contains "error"
+compose myapp port api-service 8080
+compose myapp config services
+compose myapp config networks
+compose myapp config volumes
 compose myapp | where cpu > 80% | select name, cpu
 compose myapp health | where health = "unhealthy" | select name, service, health
 alert when compose_project = 'myapp' and cpu > 85% for 2m then print "High CPU"

@@ -96,3 +96,56 @@ observe containers join images on id = id | where c.image = "nginx:latest" | sel
 ```dol
 observe containers join networks on name = name | select c.name, n.name
 ```
+
+## 30. Compose Project Queries
+
+**List all Compose projects:**
+```dol
+compose ls
+compose ls | sort by project asc
+compose ls | where containers > 5
+compose ls | where status = "running"
+```
+
+**Query Compose project images:**
+```dol
+compose myapp images
+compose myapp images | sort by size desc
+compose myapp images | select name, tag, size
+```
+
+**Compose project resource stats:**
+```dol
+compose myapp stats
+compose myapp stats | where cpu > 80% | select name, service, cpu, memory
+compose myapp stats | group by service with sum(cpu) as total_cpu
+```
+
+**Enhanced container status (ps):**
+```dol
+compose myapp ps
+compose myapp ps | where state = "running" | select name, service, health
+compose myapp ps | where health = "unhealthy"
+```
+
+**Service logs:**
+```dol
+compose myapp logs api-service tail 50
+compose myapp logs api-service tail 100 | where message contains "error"
+compose myapp logs worker tail 20 | select line, message
+```
+
+**Port mappings:**
+```dol
+compose myapp port api-service 8080
+compose myapp port web 80
+```
+
+**Inspect Compose configuration:**
+```dol
+compose myapp config
+compose myapp config services
+compose myapp config services | where image = "api:latest"
+compose myapp config networks
+compose myapp config volumes
+```

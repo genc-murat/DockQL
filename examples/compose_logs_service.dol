@@ -1,0 +1,1 @@
+compose myapp logs api-service tail 50

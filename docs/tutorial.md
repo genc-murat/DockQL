@@ -347,6 +347,72 @@ dol "compose myapp health"
 Shows each container in the compose project with its `service` name and `health`
 status (healthy, unhealthy, starting, or none).
 
+**Listing all Compose projects:**
+
+```bash
+dol "compose ls"
+dol "compose ls | sort by project asc"
+dol "compose ls | where containers > 5"
+```
+
+Lists all Docker Compose projects with their container, network, and volume counts.
+
+**Compose project images:**
+
+```bash
+dol "compose myapp images"
+dol "compose myapp images | sort by size desc"
+```
+
+Lists images used by containers in the compose project.
+
+**Compose project stats:**
+
+```bash
+dol "compose myapp stats"
+dol "compose myapp stats | where cpu > 80% | select name, service, cpu, memory"
+```
+
+Shows resource usage statistics (CPU, memory, network, disk) for compose project containers.
+
+**Compose project ps:**
+
+```bash
+dol "compose myapp ps"
+dol "compose myapp ps | where state = running | select name, service, health"
+```
+
+Enhanced container status with service names, health, and restart counts.
+
+**Service logs:**
+
+```bash
+dol "compose myapp logs api-service tail 50"
+dol "compose myapp logs api-service tail 100 | where message contains 'error'"
+```
+
+Retrieves log output for a specific service in the compose project.
+
+**Port mappings:**
+
+```bash
+dol "compose myapp port api-service 8080"
+```
+
+Shows port mappings for a service in the compose project.
+
+**Inspect Compose configuration:**
+
+```bash
+dol "compose myapp config"
+dol "compose myapp config services"
+dol "compose myapp config networks"
+dol "compose myapp config volumes"
+```
+
+Inspects the running configuration of a Compose project, showing service definitions,
+network configurations, and volume mounts.
+
 ---
 
 ## 8. Cross-Target JOIN

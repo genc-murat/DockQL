@@ -102,7 +102,9 @@ impl SemanticAnalyzer {
             }
             Query::Compose(q) => {
                 match q.target {
-                    crate::ast::ComposeTarget::Services => {
+                    crate::ast::ComposeTarget::Services
+                    | crate::ast::ComposeTarget::Ps
+                    | crate::ast::ComposeTarget::Stats => {
                         self.active_schema
                             .insert("service".to_owned(), Type::String);
                     }
@@ -112,6 +114,62 @@ impl SemanticAnalyzer {
                         if !self.active_schema.contains_key("health") {
                             self.active_schema.insert("health".to_owned(), Type::String);
                         }
+                    }
+                    crate::ast::ComposeTarget::Projects => {
+                        self.active_schema = BTreeMap::new();
+                        self.active_schema.insert("project".to_owned(), Type::String);
+                        self.active_schema.insert("containers".to_owned(), Type::Integer);
+                        self.active_schema.insert("running".to_owned(), Type::Integer);
+                        self.active_schema.insert("stopped".to_owned(), Type::Integer);
+                        self.active_schema.insert("networks".to_owned(), Type::Integer);
+                        self.active_schema.insert("volumes".to_owned(), Type::Integer);
+                        self.active_schema.insert("status".to_owned(), Type::String);
+                    }
+                    crate::ast::ComposeTarget::Images => {
+                        self.active_schema = BTreeMap::new();
+                        self.active_schema.insert("id".to_owned(), Type::String);
+                        self.active_schema.insert("repository".to_owned(), Type::String);
+                        self.active_schema.insert("name".to_owned(), Type::String);
+                        self.active_schema.insert("tag".to_owned(), Type::String);
+                        self.active_schema.insert("digest".to_owned(), Type::String);
+                        self.active_schema.insert("size".to_owned(), Type::String);
+                        self.active_schema.insert("service".to_owned(), Type::String);
+                    }
+                    crate::ast::ComposeTarget::Events => {
+                        self.active_schema = BTreeMap::new();
+                        self.active_schema.insert("time".to_owned(), Type::String);
+                        self.active_schema.insert("action".to_owned(), Type::String);
+                        self.active_schema.insert("service".to_owned(), Type::String);
+                        self.active_schema.insert("container".to_owned(), Type::String);
+                        self.active_schema.insert("image".to_owned(), Type::String);
+                    }
+                    crate::ast::ComposeTarget::Port => {
+                        self.active_schema = BTreeMap::new();
+                        self.active_schema.insert("service".to_owned(), Type::String);
+                        self.active_schema.insert("container".to_owned(), Type::String);
+                        self.active_schema.insert("ports".to_owned(), Type::Array);
+                    }
+                    crate::ast::ComposeTarget::Config => {
+                        self.active_schema = BTreeMap::new();
+                        self.active_schema.insert("name".to_owned(), Type::String);
+                        self.active_schema.insert("image".to_owned(), Type::String);
+                        self.active_schema.insert("state".to_owned(), Type::String);
+                        self.active_schema.insert("status".to_owned(), Type::String);
+                        self.active_schema.insert("ports".to_owned(), Type::Array);
+                        self.active_schema.insert("restart_count".to_owned(), Type::Integer);
+                        self.active_schema.insert("health".to_owned(), Type::String);
+                        self.active_schema.insert("depends_on".to_owned(), Type::Array);
+                        self.active_schema.insert("driver".to_owned(), Type::String);
+                        self.active_schema.insert("scope".to_owned(), Type::String);
+                        self.active_schema.insert("containers".to_owned(), Type::Integer);
+                        self.active_schema.insert("mountpoint".to_owned(), Type::String);
+                    }
+                    crate::ast::ComposeTarget::Logs => {
+                        self.active_schema = BTreeMap::new();
+                        self.active_schema.insert("line".to_owned(), Type::Integer);
+                        self.active_schema.insert("message".to_owned(), Type::String);
+                        self.active_schema.insert("service".to_owned(), Type::String);
+                        self.active_schema.insert("container".to_owned(), Type::String);
                     }
                     _ => {}
                 }
@@ -478,9 +536,17 @@ pub fn validate_semantics(query: &Query) -> Result<(), EvalError> {
         Query::Compose(q) => match q.target {
             crate::ast::ComposeTarget::Containers
             | crate::ast::ComposeTarget::Services
-            | crate::ast::ComposeTarget::Health => CollectionTarget::Containers,
+            | crate::ast::ComposeTarget::Health
+            | crate::ast::ComposeTarget::Ps
+            | crate::ast::ComposeTarget::Stats
+            | crate::ast::ComposeTarget::Events => CollectionTarget::Containers,
             crate::ast::ComposeTarget::Networks => CollectionTarget::Networks,
             crate::ast::ComposeTarget::Volumes => CollectionTarget::Volumes,
+            crate::ast::ComposeTarget::Projects
+            | crate::ast::ComposeTarget::Images
+            | crate::ast::ComposeTarget::Port
+            | crate::ast::ComposeTarget::Config
+            | crate::ast::ComposeTarget::Logs => CollectionTarget::Containers,
         },
         Query::Ping => CollectionTarget::Containers,
         Query::Inspect(_) | Query::Fields(_) => return Ok(()),

@@ -18,7 +18,14 @@ dol "observe containers | where cpu > 80% | select name, image, cpu | sort cpu d
 dol "events containers | where action = die | limit 10"
 dol "logs container my-app tail 50"
 dol "ping"
+dol "compose ls"
 dol "compose myapp services"
+dol "compose myapp images"
+dol "compose myapp stats | where cpu > 80%"
+dol "compose myapp ps | where state = running"
+dol "compose myapp logs api-service tail 50"
+dol "compose myapp port api-service 8080"
+dol "compose myapp config services"
 dol "observe compose myapp | where cpu > 80%"
 dol "compose myapp health | where health = unhealthy"
 dol "observe containers join images on id = id | select c.name, i.repository"
@@ -28,7 +35,7 @@ dol "observe containers | group by state"
 ## Features
 
 - **Live observation** — query containers, images, networks, volumes with filtering, sorting, and aggregation
-- **Docker Compose** — query containers by compose project with `compose <project>` or `observe compose <project>` syntax; also query compose-scoped networks, volumes, and container health with `compose <project> networks|volumes|health`
+- **Docker Compose** — query containers by compose project with `compose <project>` or `observe compose <project>` syntax; also query compose-scoped networks, volumes, and container health with `compose <project> networks|volumes|health`; list all projects with `compose ls`; inspect project images, stats, ps, logs, ports, and config with `compose <project> images|stats|ps|logs|port|config`
 - **Cross-target JOIN** — merge rows from two targets on a matching key with `observe containers join images on id = id`; output fields are auto-prefixed (`c.name`, `i.repository`)
 - **Real-time events** — stream Docker events with pipeline filters and group-by aggregation
 - **Historical inspection** — inspect container state at any point in the past (requires `--store`)
@@ -423,7 +430,8 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 
 - `observe containers` / `images` / `networks` / `volumes`
 - `observe containers join <target> on <key> = <key>` — cross-target JOIN with auto-prefixed output fields
-- `compose <project> [services|containers|networks|volumes|health]` — query resources in a Docker Compose project (also `observe compose <project>`)
+- `compose <project> [services|containers|networks|volumes|health|images|stats|ps|logs|port|config]` — query resources in a Docker Compose project (also `observe compose <project>`)
+- `compose ls` — list all Docker Compose projects with resource counts
 - `events containers` / `images` / `networks` / `volumes`
 - `inspect container <name>` / `image <name>` (with optional `at "<time>"`)
 - `logs container <name> [tail <n>]` — view container logs (default: last 100 lines)
@@ -518,7 +526,7 @@ dol "observe containers | where label.env = production | select name, label.vers
 
 ## Examples
 
-83 example queries are available in [`examples/`](examples/):
+91 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers
@@ -545,6 +553,17 @@ compose myapp networks
 compose myapp volumes
 compose myapp health
 compose myapp health | where health = "unhealthy" | select name, service, health
+compose myapp images
+compose myapp stats | where cpu > 50% | select name, service, cpu, memory
+compose myapp ps | where state = "running" | select name, service, state, health
+compose myapp logs api-service tail 50
+compose myapp logs api-service tail 100 | where message contains "error"
+compose myapp port api-service 8080
+compose myapp config services
+compose myapp config networks
+compose myapp config volumes
+compose ls
+compose ls | where containers > 5 | sort by project asc
 observe containers join images on id = id
 observe containers join images on id = id | select c.name, i.repository
 analyze containers find anomalies

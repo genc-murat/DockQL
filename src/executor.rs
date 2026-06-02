@@ -271,7 +271,9 @@ where
     let mut rows: Vec<Row> = match query.target {
         crate::ast::ComposeTarget::Containers
         | crate::ast::ComposeTarget::Services
-        | crate::ast::ComposeTarget::Health => latest
+        | crate::ast::ComposeTarget::Health
+        | crate::ast::ComposeTarget::Ps
+        | crate::ast::ComposeTarget::Stats => latest
             .containers
             .into_iter()
             .filter(|c| {
@@ -298,7 +300,10 @@ where
                 );
                 if matches!(
                     query.target,
-                    crate::ast::ComposeTarget::Services | crate::ast::ComposeTarget::Health
+                    crate::ast::ComposeTarget::Services
+                        | crate::ast::ComposeTarget::Health
+                        | crate::ast::ComposeTarget::Ps
+                        | crate::ast::ComposeTarget::Stats
                 ) {
                     let service = extract_label_value(&c.labels, "com.docker.compose.service")
                         .map(JsonValue::String)
@@ -348,6 +353,11 @@ where
                 Row { fields }
             })
             .collect(),
+        _ => {
+            return Err(ExecutorError::UnsupportedQuery(
+                "compose target not supported for historical queries",
+            ));
+        }
     };
 
     for node in &query.pipeline {
@@ -887,12 +897,22 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
+    if matches!(query.target, crate::ast::ComposeTarget::Projects) {
+        return execute_compose_projects(query, docker);
+    }
+
+    if matches!(query.target, crate::ast::ComposeTarget::Config) {
+        return execute_compose_config(query, docker);
+    }
+
     let compose_project_label = query.project.clone();
 
     let mut rows: Vec<Row> = match query.target {
         crate::ast::ComposeTarget::Containers
         | crate::ast::ComposeTarget::Services
-        | crate::ast::ComposeTarget::Health => {
+        | crate::ast::ComposeTarget::Health
+        | crate::ast::ComposeTarget::Ps
+        | crate::ast::ComposeTarget::Stats => {
             let samples = latest_metrics_by_container(metrics.collect()?);
             docker
                 .list_containers()?
@@ -906,7 +926,10 @@ where
                 })
                 .map(|container| {
                     let service = match query.target {
-                        crate::ast::ComposeTarget::Services | crate::ast::ComposeTarget::Health => {
+                        crate::ast::ComposeTarget::Services
+                        | crate::ast::ComposeTarget::Health
+                        | crate::ast::ComposeTarget::Ps
+                        | crate::ast::ComposeTarget::Stats => {
                             extract_label_value(&container.labels, "com.docker.compose.service")
                                 .map(JsonValue::String)
                                 .unwrap_or(JsonValue::Null)
@@ -916,13 +939,62 @@ where
                     let mut row = container_row(container, &samples);
                     if matches!(
                         query.target,
-                        crate::ast::ComposeTarget::Services | crate::ast::ComposeTarget::Health
+                        crate::ast::ComposeTarget::Services
+                            | crate::ast::ComposeTarget::Health
+                            | crate::ast::ComposeTarget::Ps
+                            | crate::ast::ComposeTarget::Stats
                     ) {
                         row.fields.insert("service".to_owned(), service);
                     }
                     row
                 })
                 .collect()
+        }
+        crate::ast::ComposeTarget::Images => {
+            let containers = docker.list_containers()?;
+            let all_images = docker.list_images()?;
+            let project_image_ids: std::collections::HashSet<String> = containers
+                .iter()
+                .filter(|c| {
+                    has_compose_label(
+                        &c.labels,
+                        "com.docker.compose.project",
+                        &compose_project_label,
+                    )
+                })
+                .map(|c| c.image.clone())
+                .collect();
+
+            all_images
+                .into_iter()
+                .filter(|img| {
+                    project_image_ids.contains(&img.id)
+                        || project_image_ids.iter().any(|pid| {
+                            img.repository == *pid
+                                || format!("{}:{}", img.repository, img.tag) == *pid
+                        })
+                        || project_image_ids.contains(&format!("{}:{}", img.repository, img.tag))
+                })
+                .map(|img| {
+                    let mut row = image_row(img);
+                    row.fields.insert(
+                        "service".to_owned(),
+                        JsonValue::String("unknown".to_owned()),
+                    );
+                    row
+                })
+                .collect()
+        }
+        crate::ast::ComposeTarget::Events => {
+            return Err(ExecutorError::UnsupportedQuery(
+                "compose events requires streaming; use events pipeline",
+            ));
+        }
+        crate::ast::ComposeTarget::Port => {
+            return execute_compose_port(query, docker);
+        }
+        crate::ast::ComposeTarget::Logs => {
+            return execute_compose_logs(query, docker);
         }
         crate::ast::ComposeTarget::Networks => docker
             .list_networks()?
@@ -948,7 +1020,301 @@ where
             })
             .map(volume_row)
             .collect(),
+        crate::ast::ComposeTarget::Projects | crate::ast::ComposeTarget::Config => {
+            unreachable!("handled above")
+        }
     };
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
+fn execute_compose_projects<C>(
+    query: &crate::ast::ComposeQuery,
+    docker: &C,
+) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + ?Sized,
+{
+    let containers = docker.list_containers()?;
+    let networks = docker.list_networks()?;
+    let volumes = docker.list_volumes()?;
+
+    let mut projects: BTreeMap<String, BTreeMap<&str, u64>> = BTreeMap::new();
+
+    for container in &containers {
+        if let Some(project) =
+            extract_label_value(&container.labels, "com.docker.compose.project")
+        {
+            let entry = projects.entry(project).or_default();
+            entry.insert("containers", entry.get("containers").unwrap_or(&0) + 1);
+            if container.state == "running" {
+                entry.insert("running", entry.get("running").unwrap_or(&0) + 1);
+            } else {
+                entry.insert("stopped", entry.get("stopped").unwrap_or(&0) + 1);
+            }
+        }
+    }
+
+    for network in &networks {
+        if let Some(project) =
+            extract_label_value(&network.labels, "com.docker.compose.project")
+        {
+            let entry = projects.entry(project).or_default();
+            entry.insert("networks", entry.get("networks").unwrap_or(&0) + 1);
+        }
+    }
+
+    for volume in &volumes {
+        if let Some(project) =
+            extract_label_value(&volume.labels, "com.docker.compose.project")
+        {
+            let entry = projects.entry(project).or_default();
+            entry.insert("volumes", entry.get("volumes").unwrap_or(&0) + 1);
+        }
+    }
+
+    let mut rows: Vec<Row> = projects
+        .into_iter()
+        .map(|(project, counts)| {
+            let containers = counts.get("containers").copied().unwrap_or(0);
+            let running = counts.get("running").copied().unwrap_or(0);
+            let stopped = counts.get("stopped").copied().unwrap_or(0);
+            let networks = counts.get("networks").copied().unwrap_or(0);
+            let volumes = counts.get("volumes").copied().unwrap_or(0);
+            Row::from_fields([
+                ("project", json_string(project)),
+                ("containers", json_u64(containers)),
+                ("running", json_u64(running)),
+                ("stopped", json_u64(stopped)),
+                ("networks", json_u64(networks)),
+                ("volumes", json_u64(volumes)),
+                (
+                    "status",
+                    if running == containers && containers > 0 {
+                        json_string("running".to_owned())
+                    } else if running == 0 {
+                        json_string("stopped".to_owned())
+                    } else {
+                        json_string("partial".to_owned())
+                    },
+                ),
+            ])
+        })
+        .collect();
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
+fn execute_compose_port<C>(
+    query: &crate::ast::ComposeQuery,
+    docker: &C,
+) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + ?Sized,
+{
+    let service_name = query.service.as_deref().unwrap_or("");
+    let port_number = query.port_number.unwrap_or(0);
+
+    let containers = docker.list_containers()?;
+    let matching: Vec<_> = containers
+        .into_iter()
+        .filter(|c| {
+            has_compose_label(&c.labels, "com.docker.compose.project", &query.project)
+                && extract_label_value(&c.labels, "com.docker.compose.service")
+                    .as_deref()
+                    .map(|s| s == service_name)
+                    .unwrap_or(false)
+        })
+        .collect();
+
+    let mut rows = Vec::new();
+    for container in matching {
+        let id_short = &container.id[..12.min(container.id.len())];
+        if let Ok(full) = docker.inspect_container(id_short)
+            && let Some(_ports_str) = full.ports.first()
+        {
+            let _ = (service_name, port_number);
+            rows.push(Row::from_fields([
+                ("service", json_string(service_name.to_owned())),
+                ("container", json_string(full.name.clone())),
+                ("ports", json_string_array(full.ports.clone())),
+            ]));
+        }
+    }
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
+fn execute_compose_logs<C>(
+    query: &crate::ast::ComposeQuery,
+    docker: &C,
+) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + ?Sized,
+{
+    let service_name = query.service.as_deref().unwrap_or("");
+    let tail = query.tail.unwrap_or(100) as usize;
+
+    let containers = docker.list_containers()?;
+    let matching: Vec<_> = containers
+        .into_iter()
+        .filter(|c| {
+            has_compose_label(&c.labels, "com.docker.compose.project", &query.project)
+                && extract_label_value(&c.labels, "com.docker.compose.service")
+                    .as_deref()
+                    .map(|s| s == service_name)
+                    .unwrap_or(false)
+        })
+        .collect();
+
+    let mut rows = Vec::new();
+    for container in matching {
+        let lines = docker.container_logs(&container.id, tail)?;
+        for (i, line) in lines.into_iter().enumerate() {
+            let mut fields = BTreeMap::new();
+            fields.insert("line".to_owned(), JsonValue::Number(Number::from(i + 1)));
+            fields.insert("message".to_owned(), JsonValue::String(line));
+            fields.insert("service".to_owned(), JsonValue::String(service_name.to_owned()));
+            fields.insert("container".to_owned(), JsonValue::String(container.name.clone()));
+            rows.push(Row { fields });
+        }
+    }
+
+    for node in &query.pipeline {
+        rows = apply_pipeline_node(rows, node)?;
+    }
+
+    Ok(ExecutionResult { rows })
+}
+
+fn execute_compose_config<C>(
+    query: &crate::ast::ComposeQuery,
+    docker: &C,
+) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + ?Sized,
+{
+    let config_target = query.config_target.unwrap_or(crate::ast::ConfigTarget::All);
+
+    let containers = docker.list_containers()?;
+    let networks = docker.list_networks()?;
+    let volumes = docker.list_volumes()?;
+
+    let project_containers: Vec<_> = containers
+        .into_iter()
+        .filter(|c| {
+            has_compose_label(&c.labels, "com.docker.compose.project", &query.project)
+        })
+        .collect();
+
+    let project_networks: Vec<_> = networks
+        .into_iter()
+        .filter(|n| {
+            has_compose_label(&n.labels, "com.docker.compose.project", &query.project)
+        })
+        .collect();
+
+    let project_volumes: Vec<_> = volumes
+        .into_iter()
+        .filter(|v| {
+            has_compose_label(&v.labels, "com.docker.compose.project", &query.project)
+        })
+        .collect();
+
+    let mut rows = Vec::new();
+
+    if matches!(
+        config_target,
+        crate::ast::ConfigTarget::Services | crate::ast::ConfigTarget::All
+    ) {
+        let mut seen_services: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for container in &project_containers {
+            if let Some(svc) =
+                extract_label_value(&container.labels, "com.docker.compose.service")
+                && seen_services.insert(svc.clone())
+            {
+                let labels = &container.labels;
+                let depends_on: Vec<String> = labels
+                    .iter()
+                    .filter(|l| l.starts_with("com.docker.compose.depends_on"))
+                    .cloned()
+                    .collect();
+                rows.push(Row::from_fields([
+                    ("name", json_string(svc)),
+                    ("image", json_string(container.image.clone())),
+                    ("state", json_string(container.state.clone())),
+                    ("status", json_string(container.status.clone())),
+                    ("ports", json_string_array(container.ports.clone())),
+                    (
+                        "restart_count",
+                        container
+                            .restart_count
+                            .map(json_u64)
+                            .unwrap_or(JsonValue::Null),
+                    ),
+                    (
+                        "health",
+                        container
+                            .health
+                            .clone()
+                            .map(JsonValue::String)
+                            .unwrap_or(JsonValue::Null),
+                    ),
+                    ("depends_on", json_string_array(depends_on)),
+                ]));
+            }
+        }
+    }
+
+    if matches!(
+        config_target,
+        crate::ast::ConfigTarget::Networks | crate::ast::ConfigTarget::All
+    ) {
+        for network in &project_networks {
+            let net_name = extract_label_value(&network.labels, "com.docker.compose.network")
+                .unwrap_or_else(|| network.name.clone());
+            rows.push(Row::from_fields([
+                ("name", json_string(net_name)),
+                ("driver", json_string(network.driver.clone())),
+                ("scope", json_string(network.scope.clone())),
+                (
+                    "containers",
+                    json_u64(network.containers.len() as u64),
+                ),
+            ]));
+        }
+    }
+
+    if matches!(
+        config_target,
+        crate::ast::ConfigTarget::Volumes | crate::ast::ConfigTarget::All
+    ) {
+        for volume in &project_volumes {
+            let vol_name = extract_label_value(&volume.labels, "com.docker.compose.volume")
+                .unwrap_or_else(|| volume.name.clone());
+            rows.push(Row::from_fields([
+                ("name", json_string(vol_name)),
+                ("driver", json_string(volume.driver.clone())),
+                (
+                    "mountpoint",
+                    json_option_string(volume.mountpoint.clone()),
+                ),
+                ("scope", json_option_string(volume.scope.clone())),
+            ]));
+        }
+    }
 
     for node in &query.pipeline {
         rows = apply_pipeline_node(rows, node)?;
@@ -2042,7 +2408,12 @@ fn group_rows(rows: Vec<Row>, group_fields: &[String], aggregates: &[AggregateEx
 
 #[cfg(test)]
 mod tests {
-    use crate::{docker::MockDockerClient, metrics::MockMetricsCollector, parser};
+    use crate::{
+        ast::{ComposeTarget, ConfigTarget, Query},
+        docker::MockDockerClient,
+        metrics::MockMetricsCollector,
+        parser,
+    };
 
     use super::*;
 
@@ -3704,6 +4075,539 @@ mod tests {
     fn executes_join_containers_volumes_no_match() {
         let client = join_mock_client();
         let parsed = parser::parse("observe containers join volumes on state = scope")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn executes_compose_ls() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose ls").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        let row = &result.rows[0];
+        assert_eq!(row.fields["project"], JsonValue::String("myapp".to_owned()));
+        assert_eq!(row.fields["containers"], JsonValue::Number(2.into()));
+        assert_eq!(row.fields["running"], JsonValue::Number(2.into()));
+        assert_eq!(row.fields["stopped"], JsonValue::Number(0.into()));
+        assert_eq!(row.fields["networks"], JsonValue::Number(2.into()));
+        assert_eq!(row.fields["volumes"], JsonValue::Number(1.into()));
+        assert_eq!(row.fields["status"], JsonValue::String("running".to_owned()));
+    }
+
+    #[test]
+    fn executes_compose_ls_with_pipeline() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose ls | where containers > 0 | sort by project asc")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["project"],
+            JsonValue::String("myapp".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_ls_partial_status() {
+        let client = MockDockerClient {
+            containers: vec![
+                Container {
+                    id: "a1".to_owned(),
+                    name: "api".to_owned(),
+                    image: "api:latest".to_owned(),
+                    status: "Up".to_owned(),
+                    state: "running".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec![
+                        "com.docker.compose.project=webapp".to_owned(),
+                        "com.docker.compose.service=api".to_owned(),
+                    ],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: None,
+                    health: None,
+                },
+                Container {
+                    id: "a2".to_owned(),
+                    name: "db".to_owned(),
+                    image: "postgres:16".to_owned(),
+                    status: "Exited".to_owned(),
+                    state: "exited".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec![
+                        "com.docker.compose.project=webapp".to_owned(),
+                        "com.docker.compose.service=db".to_owned(),
+                    ],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: None,
+                    health: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let parsed = parser::parse("compose ls").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["status"],
+            JsonValue::String("partial".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_images() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp images").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert!(result.rows.len() > 0);
+    }
+
+    #[test]
+    fn executes_compose_stats() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp stats | select name, service")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert!(row.fields.contains_key("name"));
+            assert!(row.fields.contains_key("service"));
+        }
+    }
+
+    #[test]
+    fn executes_compose_ps() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp ps | select name, service")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert!(row.fields.contains_key("name"));
+            assert!(row.fields.contains_key("service"));
+        }
+    }
+
+    #[test]
+    fn executes_compose_ps_with_filter() {
+        let client = compose_mock_client();
+        let parsed =
+            parser::parse("compose myapp ps | where service = \"api-service\"")
+                .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("api".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_logs() {
+        let mut client = compose_mock_client();
+        client.logs.insert(
+            "abc".to_owned(),
+            vec!["line1".to_owned(), "line2".to_owned()],
+        );
+        let parsed =
+            parser::parse("compose myapp logs api-service tail 10").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].fields["message"],
+            JsonValue::String("line1".to_owned())
+        );
+        assert_eq!(
+            result.rows[0].fields["service"],
+            JsonValue::String("api-service".to_owned())
+        );
+        assert_eq!(
+            result.rows[0].fields["line"],
+            JsonValue::Number(1.into())
+        );
+    }
+
+    #[test]
+    fn executes_compose_logs_with_pipeline() {
+        let mut client = compose_mock_client();
+        client.logs.insert(
+            "abc".to_owned(),
+            vec![
+                "info start".to_owned(),
+                "error: something failed".to_owned(),
+                "info end".to_owned(),
+            ],
+        );
+        let parsed = parser::parse(
+            "compose myapp logs api-service tail 10 | where message contains \"error\"",
+        )
+        .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows[0]
+            .fields["message"]
+            .as_str()
+            .unwrap()
+            .contains("error"));
+    }
+
+    #[test]
+    fn executes_compose_port() {
+        let client = compose_mock_client();
+        let parsed =
+            parser::parse("compose myapp port api-service 8080").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["service"],
+            JsonValue::String("api-service".to_owned())
+        );
+    }
+
+    #[test]
+    fn executes_compose_config_services() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp config services")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert!(row.fields.contains_key("name"));
+            assert!(row.fields.contains_key("image"));
+            assert!(row.fields.contains_key("state"));
+        }
+    }
+
+    #[test]
+    fn executes_compose_config_networks() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp config networks")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert!(row.fields.contains_key("name"));
+            assert!(row.fields.contains_key("driver"));
+        }
+    }
+
+    #[test]
+    fn executes_compose_config_volumes() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp config volumes")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows[0].fields.contains_key("name"));
+        assert!(result.rows[0].fields.contains_key("driver"));
+    }
+
+    #[test]
+    fn executes_compose_config_all() {
+        let client = compose_mock_client();
+        let parsed =
+            parser::parse("compose myapp config").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert!(result.rows.len() >= 5);
+    }
+
+    #[test]
+    fn executes_compose_config_with_pipeline() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp config services | where image = \"api:latest\"")
+            .expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].fields["name"],
+            JsonValue::String("api-service".to_owned())
+        );
+    }
+
+    #[test]
+    fn parses_compose_ls() {
+        let parsed = parser::parse("compose ls").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Projects);
+                assert!(q.project.is_empty());
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_images() {
+        let parsed = parser::parse("compose myapp images").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Images);
+                assert_eq!(q.project, "myapp");
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_stats() {
+        let parsed = parser::parse("compose myapp stats").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Stats);
+                assert_eq!(q.project, "myapp");
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_ps() {
+        let parsed = parser::parse("compose myapp ps").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Ps);
+                assert_eq!(q.project, "myapp");
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_events() {
+        let parsed = parser::parse("compose myapp events").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Events);
+                assert_eq!(q.project, "myapp");
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_logs() {
+        let parsed =
+            parser::parse("compose myapp logs api-service tail 50").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Logs);
+                assert_eq!(q.project, "myapp");
+                assert_eq!(q.service.as_deref(), Some("api-service"));
+                assert_eq!(q.tail, Some(50));
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_logs_no_tail() {
+        let parsed =
+            parser::parse("compose myapp logs api-service").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Logs);
+                assert_eq!(q.service.as_deref(), Some("api-service"));
+                assert_eq!(q.tail, None);
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_port() {
+        let parsed =
+            parser::parse("compose myapp port api-service 8080").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Port);
+                assert_eq!(q.project, "myapp");
+                assert_eq!(q.service.as_deref(), Some("api-service"));
+                assert_eq!(q.port_number, Some(8080));
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_config() {
+        let parsed = parser::parse("compose myapp config services")
+            .expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Config);
+                assert_eq!(q.project, "myapp");
+                assert_eq!(q.config_target, Some(ConfigTarget::Services));
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_config_networks() {
+        let parsed = parser::parse("compose myapp config networks")
+            .expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Config);
+                assert_eq!(q.config_target, Some(ConfigTarget::Networks));
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_config_volumes() {
+        let parsed = parser::parse("compose myapp config volumes")
+            .expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Config);
+                assert_eq!(q.config_target, Some(ConfigTarget::Volumes));
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_compose_config_all() {
+        let parsed = parser::parse("compose myapp config").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Config);
+                assert_eq!(q.config_target, Some(ConfigTarget::All));
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_observe_compose_images() {
+        let parsed = parser::parse("observe compose myapp images").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Images);
+                assert_eq!(q.project, "myapp");
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn parses_observe_compose_stats() {
+        let parsed = parser::parse("observe compose myapp stats").expect("query should parse");
+        match parsed.query {
+            Query::Compose(q) => {
+                assert_eq!(q.target, ComposeTarget::Stats);
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn semantic_compose_projects_valid() {
+        let parsed = parser::parse("compose ls | where containers > 1").expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_projects_select_valid() {
+        let parsed =
+            parser::parse("compose ls | select project, containers").expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_projects_invalid_field() {
+        let parsed =
+            parser::parse("compose ls | where cpu > 80%").expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
+    }
+
+    #[test]
+    fn semantic_compose_images_valid() {
+        let parsed = parser::parse("compose myapp images | where service = \"api\"")
+            .expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_images_select() {
+        let parsed = parser::parse("compose myapp images | select name, tag, size")
+            .expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_stats_valid() {
+        let parsed = parser::parse("compose myapp stats | where cpu > 80%")
+            .expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_logs_valid() {
+        let parsed = parser::parse("compose myapp logs api-service | where message contains \"error\"")
+            .expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_logs_select() {
+        let parsed = parser::parse("compose myapp logs api-service | select line, message")
+            .expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_config_valid() {
+        let parsed = parser::parse("compose myapp config | select name, image")
+            .expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn semantic_compose_port_valid() {
+        let parsed = parser::parse("compose myapp port web 80 | select service")
+            .expect("query should parse");
+        let res = crate::semantic::validate_semantics(&parsed.query);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn compose_events_returns_error() {
+        let client = compose_mock_client();
+        let parsed =
+            parser::parse("compose myapp events").expect("query should parse");
+        let result = execute(&parsed.query, &client);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compose_ls_empty_projects() {
+        let client = MockDockerClient::default();
+        let parsed = parser::parse("compose ls").expect("query should parse");
+        let result = execute(&parsed.query, &client).expect("query should execute");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn compose_port_no_matching_container() {
+        let client = compose_mock_client();
+        let parsed = parser::parse("compose myapp port nonexistent 9999")
             .expect("query should parse");
         let result = execute(&parsed.query, &client).expect("query should execute");
         assert_eq!(result.rows.len(), 0);

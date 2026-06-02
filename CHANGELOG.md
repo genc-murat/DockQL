@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-02
+
+### Added
+
+- `compose ls` — list all Docker Compose projects with container, network, and volume counts
+- `compose <project> images` — list images used by a Compose project
+- `compose <project> stats` — resource usage statistics for Compose project containers (CPU, memory, network, disk)
+- `compose <project> ps` — enhanced container status for a Compose project with service names
+- `compose <project> logs <service> [tail <n>]` — view logs for a specific service in a Compose project
+- `compose <project> port <service> <port>` — show port mappings for a service
+- `compose <project> config [services|networks|volumes]` — inspect Compose project configuration (services, networks, volumes)
+- `compose <project> events` — query Compose project events (streaming)
+- All new compose targets support full pipeline syntax (`where`, `select`, `sort by`, `group by`, `limit`, etc.)
+- 44 new tests covering parser, executor, and semantic validation for all new compose features
+- 8 new example `.dol` files for compose ls, images, stats, ps, logs, port, and config queries
+
+### Changed
+
+- `ComposeTarget` enum extended with: `Projects`, `Images`, `Stats`, `Ps`, `Events`, `Port`, `Config`, `Logs`
+- `ComposeQuery` struct now includes `service`, `port_number`, `tail`, and `config_target` fields
+- Semantic analyzer validates fields for all new compose targets
+- `execute_compose_projects` now applies pipeline nodes (where, select, sort, etc.)
+
 ## [0.4.0] - 2026-06-02
 
 ### Added
@@ -108,4 +131,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.4.0]: https://github.com/genc-murat/DockQL/compare/v0.3.0...v0.4.0
 
-[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.4.0...HEAD
+[0.5.0]: https://github.com/genc-murat/DockQL/compare/v0.4.0...v0.5.0
+
+[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.5.0...HEAD

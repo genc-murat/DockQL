@@ -387,9 +387,20 @@ $ dol <span class="str">"ping"</span>
 
 <span class="cmt"># Query Docker Compose project containers</span>
 $ dol <span class="str">"compose myapp | where cpu > 80% | select name, cpu"</span>
+<span class="cmt"># List all Compose projects</span>
+$ dol <span class="str">"compose ls"</span>
 <span class="cmt"># Compose networks, volumes, and health</span>
 $ dol <span class="str">"compose myapp networks"</span>
 $ dol <span class="str">"compose myapp health | where health = unhealthy"</span>
+<span class="cmt"># Compose project images, stats, and ps</span>
+$ dol <span class="str">"compose myapp images"</span>
+$ dol <span class="str">"compose myapp stats | where cpu > 80%"</span>
+$ dol <span class="str">"compose myapp ps | where state = running"</span>
+<span class="cmt"># Service logs and port mappings</span>
+$ dol <span class="str">"compose myapp logs api-service tail 50"</span>
+$ dol <span class="str">"compose myapp port api-service 8080"</span>
+<span class="cmt"># Inspect Compose configuration</span>
+$ dol <span class="str">"compose myapp config services"</span>
 
 <span class="cmt"># Cross-target JOIN: containers × images</span>
 $ dol <span class="str">"observe containers join images on id = id | select c.name, i.repository"</span>
@@ -419,6 +430,8 @@ $ dol <span class="op">--theme</span> dark <span class="op">-f</span> examples/p
             <div class="feature-item"><span class="icon"></span>Container log retrieval (logs)</div>
             <div class="feature-item"><span class="icon"></span>Docker daemon connectivity check (ping)</div>
             <div class="feature-item"><span class="icon"></span>Docker Compose project queries (compose)</div>
+            <div class="feature-item"><span class="icon"></span>Compose ls — list all projects</div>
+            <div class="feature-item"><span class="icon"></span>Compose images, stats, ps, logs, port, config</div>
             <div class="feature-item"><span class="icon"></span>Compose networks, volumes &amp; health targets</div>
             <div class="feature-item"><span class="icon"></span>Cross-target JOIN (containers × images, networks, volumes)</div>
             <div class="feature-item"><span class="icon"></span>Anomaly detection engine</div>
@@ -453,7 +466,7 @@ $ dol <span class="op">--theme</span> dark <span class="op">-f</span> examples/p
             </div>
             <div class="card">
                 <h3><a href="examples.html">Query Examples</a></h3>
-                <p>83+ categorized examples covering all query types and patterns.</p>
+                <p>101+ categorized examples covering all query types and patterns.</p>
             </div>
             <div class="card">
                 <h3><a href="architecture.html">Architecture</a></h3>

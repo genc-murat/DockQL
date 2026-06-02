@@ -48,6 +48,10 @@ pub struct ComposeQuery {
     pub project: String,
     pub target: ComposeTarget,
     pub pipeline: Vec<PipelineNode>,
+    pub service: Option<String>,
+    pub port_number: Option<u64>,
+    pub tail: Option<u64>,
+    pub config_target: Option<ConfigTarget>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
@@ -57,6 +61,22 @@ pub enum ComposeTarget {
     Networks,
     Volumes,
     Health,
+    Projects,
+    Images,
+    Stats,
+    Ps,
+    Events,
+    Port,
+    Config,
+    Logs,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+pub enum ConfigTarget {
+    All,
+    Services,
+    Networks,
+    Volumes,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

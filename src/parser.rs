@@ -2,9 +2,9 @@ use serde::Serialize;
 
 use crate::ast::{
     AlertAction, AlertRule, AnalysisTarget, AnalysisVerb, BinOp, CollectionTarget, ComposeTarget,
-    Duration, DurationUnit, EventsQuery, Expression, InspectQuery, LogsQuery, Operator,
-    PipelineNode, Query, SetValue, SingularTarget, SingularTargetKind, SortDirection, TimeSelector,
-    Value,
+    ConfigTarget, Duration, DurationUnit, EventsQuery, Expression, InspectQuery, LogsQuery,
+    Operator, PipelineNode, Query, SetValue, SingularTarget, SingularTargetKind, SortDirection,
+    TimeSelector, Value,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -172,6 +172,10 @@ impl Parser {
                 project,
                 target,
                 pipeline,
+                service: None,
+                port_number: None,
+                tail: None,
+                config_target: None,
             }));
         }
         let target = self.parse_collection_target()?;
@@ -266,13 +270,62 @@ impl Parser {
 
     fn parse_compose(&mut self) -> Result<Query, ParseError> {
         self.expect_ident("compose")?;
+
+        if self.consume_ident("ls") {
+            let pipeline = self.parse_pipeline()?;
+            return Ok(Query::Compose(crate::ast::ComposeQuery {
+                project: String::new(),
+                target: ComposeTarget::Projects,
+                pipeline,
+                service: None,
+                port_number: None,
+                tail: None,
+                config_target: None,
+            }));
+        }
+
         let project = self.expect_identifier_like("compose project name")?;
         let target = self.parse_compose_target();
+
+        let (service, port_number, tail, config_target) = match target {
+            ComposeTarget::Logs => {
+                let svc = self.expect_identifier_like("service name")?;
+                let t = if self.consume_ident("tail") {
+                    Some(self.expect_u64("tail")?)
+                } else {
+                    None
+                };
+                (Some(svc), None, t, None)
+            }
+            ComposeTarget::Port => {
+                let svc = self.expect_identifier_like("service name")?;
+                let port = Some(self.expect_u64("port number")?);
+                (Some(svc), port, None, None)
+            }
+            ComposeTarget::Config => {
+                let ct = if self.consume_ident("services") {
+                    Some(ConfigTarget::Services)
+                } else if self.consume_ident("networks") {
+                    Some(ConfigTarget::Networks)
+                } else if self.consume_ident("volumes") {
+                    Some(ConfigTarget::Volumes)
+                } else {
+                    Some(ConfigTarget::All)
+                };
+                (None, None, None, ct)
+            }
+            _ => (None, None, None, None),
+        };
+
         let pipeline = self.parse_pipeline()?;
         Ok(Query::Compose(crate::ast::ComposeQuery {
             project,
             target,
             pipeline,
+            service,
+            port_number,
+            tail,
+            config_target,
         }))
     }
 
@@ -285,6 +338,20 @@ impl Parser {
             ComposeTarget::Volumes
         } else if self.consume_ident("health") {
             ComposeTarget::Health
+        } else if self.consume_ident("images") {
+            ComposeTarget::Images
+        } else if self.consume_ident("stats") {
+            ComposeTarget::Stats
+        } else if self.consume_ident("ps") {
+            ComposeTarget::Ps
+        } else if self.consume_ident("events") {
+            ComposeTarget::Events
+        } else if self.consume_ident("port") {
+            ComposeTarget::Port
+        } else if self.consume_ident("config") {
+            ComposeTarget::Config
+        } else if self.consume_ident("logs") {
+            ComposeTarget::Logs
         } else {
             self.consume_ident("containers");
             ComposeTarget::Containers
