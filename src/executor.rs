@@ -346,6 +346,83 @@ where
     Ok(ExecutionResult { rows })
 }
 
+/// Return only columns that have at least one non-null, non-empty value across all rows.
+/// This hides columns that would appear blank and waste horizontal space.
+fn filter_display_columns(result: &ExecutionResult) -> Vec<String> {
+    let columns: Vec<String> = result.rows[0].fields.keys().cloned().collect();
+    columns
+        .into_iter()
+        .filter(|col| {
+            result.rows.iter().any(|row| match row.fields.get(col) {
+                Some(JsonValue::Null) | None => false,
+                Some(JsonValue::String(s)) => !s.is_empty(),
+                Some(JsonValue::Array(a)) => !a.is_empty(),
+                Some(JsonValue::Object(o)) => !o.is_empty(),
+                _ => true, // numbers, booleans are always kept
+            })
+        })
+        .collect()
+}
+
+/// Truncate a cell value to at most `max_width` characters, appending `…` when cut.
+fn truncate_cell(value: &str, max_width: usize) -> String {
+    if value.len() > max_width {
+        let cut = max_width.saturating_sub(1);
+        if cut == 0 {
+            return "…".to_owned();
+        }
+        format!("{}…", &value[..cut])
+    } else {
+        value.to_owned()
+    }
+}
+
+/// Infer a human-readable entity name from the column set.
+fn infer_entity_type(columns: &[String]) -> &'static str {
+    if columns.iter().any(|c| c == "repository") {
+        "Images"
+    } else if columns.iter().any(|c| c == "ports") {
+        "Containers"
+    } else if columns.iter().any(|c| c == "mountpoint") {
+        "Volumes"
+    } else if columns.iter().any(|c| c == "driver") {
+        "Networks"
+    } else {
+        "Results"
+    }
+}
+
+/// Build a visual size bar string for a cell value like "93.6MB" or "28.7GB".
+/// Uses log10 scaling so that values across orders of magnitude (MB vs GB vs TB)
+/// produce proportionally meaningful bars.  If all values cluster near the minimum
+/// a `▏` tick is shown to indicate non-zero size.
+fn size_bar(value_str: &str, min_bytes: f64, max_bytes: f64, max_width: usize) -> String {
+    if max_bytes <= 0.0 || value_str.is_empty() {
+        return String::new();
+    }
+    if let Some(bytes) = crate::eval::json_as_f64(&serde_json::Value::String(value_str.to_owned()))
+    {
+        if bytes <= 0.0 {
+            return String::new();
+        }
+        let log_max = max_bytes.max(1.0).log10();
+        let log_min = min_bytes.max(1.0).log10();
+        let log_val = bytes.log10();
+        // Normalise within [log_min, log_max] so the smallest value gets ~0 and
+        // the largest gets max_width.  Clamp to handle edge cases gracefully.
+        let range = (log_max - log_min).max(0.001);
+        let fraction = ((log_val - log_min) / range).clamp(0.0, 1.0);
+        let filled = (fraction * max_width as f64).round() as usize;
+        let filled = filled.min(max_width);
+        if filled == 0 && fraction > 0.0 {
+            return "▏".to_owned();
+        }
+        "█".repeat(filled)
+    } else {
+        String::new()
+    }
+}
+
 /// Render a table using ratatui's Table widget with box-drawing borders,
 /// colored headers, and styled cells. Uses an in-memory TestBackend.
 pub fn render_table_ratatui(result: &ExecutionResult) -> String {
@@ -353,11 +430,14 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
         return "No rows".to_owned();
     }
 
-    let columns: Vec<String> = result.rows[0].fields.keys().cloned().collect();
+    // Filter out all-null/all-empty columns
+    let columns = filter_display_columns(result);
     let col_count = columns.len() as u16;
+    let entity = infer_entity_type(&columns);
+    const MAX_COL_WIDTH: usize = 30;
 
     // Calculate column widths based on header and data
-    let mut col_widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+    let mut col_widths: Vec<usize> = columns.iter().map(|c| c.len().min(MAX_COL_WIDTH)).collect();
     for row in &result.rows {
         for (i, col) in columns.iter().enumerate() {
             let val = row
@@ -365,13 +445,35 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
                 .get(col)
                 .map(eval::render_json_cell)
                 .unwrap_or_default();
-            col_widths[i] = col_widths[i].max(val.len());
+            let truncated = truncate_cell(&val, MAX_COL_WIDTH);
+            col_widths[i] = col_widths[i].max(truncated.len());
         }
     }
-    // Add padding: min width of 8, cap at 50
+    // Add padding: min width of 6, cap at MAX_COL_WIDTH
     for w in &mut col_widths {
-        *w = (*w + 2).max(8).min(50);
+        *w = (*w + 2).max(6).min(MAX_COL_WIDTH + 2);
     }
+
+    // Pre-compute size bar data for the "size" column if present (log10 scaling)
+    let size_col_idx = columns.iter().position(|c| c == "size");
+    let (size_min_bytes, size_max_bytes, size_bar_width) = if let Some(si) = size_col_idx {
+        let mut min_b = f64::MAX;
+        let mut max_b = 0.0_f64;
+        for row in &result.rows {
+            if let Some(val) = row.fields.get("size") {
+                let s = eval::render_json_cell(val);
+                if let Some(b) = eval::json_as_f64(&serde_json::Value::String(s)) {
+                    if b > max_b { max_b = b; }
+                    if b < min_b { min_b = b; }
+                }
+            }
+        }
+        let bw = 8;
+        col_widths[si] += bw + 1;
+        (if min_b == f64::MAX { 0.0 } else { min_b }, max_b, bw)
+    } else {
+        (0.0, 0.0, 0)
+    };
 
     // Total width: sum of column widths + left/right border (2) + column spacings
     let col_spacing: u16 = 1;
@@ -397,23 +499,31 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
 
     let width = total_width.max(20);
     let row_count = result.rows.len() as u16;
-    let height = row_count + 3; // header + top/bottom border + rows
-    let height = height.min(200).max(4);
+    let height = row_count + 5;
+    let height = height.min(200).max(5);
 
     let backend = TestBackend::new(width, height);
     let mut terminal = match Terminal::new(backend) {
         Ok(t) => t,
-        Err(_) => return render_table_colored(result), // fallback
+        Err(_) => return render_table_colored(result),
     };
 
     let _ = terminal.draw(|f| {
         let area = Rect::new(0, 0, width, height);
 
-        // Build ratatui rows
+        // ── Build data rows with alternating background ──
         let ratatui_rows: Vec<RatatuiRow> = result
             .rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(idx, row)| {
+                let is_even = idx % 2 == 0;
+                let row_bg = if is_even {
+                    Style::default()
+                } else {
+                    Style::default().bg(Color::DarkGray)
+                };
+
                 let cells: Vec<Cell> = columns
                     .iter()
                     .map(|col| {
@@ -422,7 +532,10 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
                             .get(col)
                             .map(eval::render_json_cell)
                             .unwrap_or_default();
-                        let cell_style = match col.as_str() {
+                        let val = truncate_cell(&val, MAX_COL_WIDTH);
+
+                        // Compute base style from value semantics
+                        let base_style = match col.as_str() {
                             "state" | "status" => {
                                 Style::default().fg(ansi_state_color_ratatui(&val))
                             }
@@ -430,20 +543,35 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
                             "memory" => Style::default().fg(memory_color_ratatui(&val)),
                             _ => Style::default(),
                         };
-                        Cell::from(Span::styled(val, cell_style))
+
+                        // For the "size" column, augment with a visual bar
+                        if col.as_str() == "size" && size_max_bytes > 0.0 && !val.is_empty() {
+                            let bar = size_bar(&val, size_min_bytes, size_max_bytes, size_bar_width);
+                            if !bar.is_empty() {
+                                let combined = format!("{val} {bar}");
+                                Cell::from(Span::styled(combined, base_style.patch(row_bg)))
+                            } else {
+                                let cell_style = base_style.patch(row_bg);
+                                Cell::from(Span::styled(val, cell_style))
+                            }
+                        } else {
+                            let cell_style = base_style.patch(row_bg);
+                            Cell::from(Span::styled(val, cell_style))
+                        }
                     })
                     .collect();
                 RatatuiRow::new(cells).height(1)
             })
             .collect();
 
-        // Build header cells
+        // ── Build header cells ──
         let header_cells: Vec<Cell> = columns
             .iter()
             .map(|col| {
                 let header_style = Style::default()
                     .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD);
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED);
                 Cell::from(Span::styled(col.to_uppercase(), header_style))
             })
             .collect();
@@ -453,10 +581,23 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
             .map(|w| Constraint::Length(*w as u16))
             .collect();
 
+        let title_text = format!(" {} ", entity);
+
         let table = Table::new(ratatui_rows, constraints)
             .header(RatatuiRow::new(header_cells).height(1))
             .block(
                 Block::default()
+                    .title(
+                        ratatui::text::Line::from(
+                            ratatui::text::Span::styled(
+                                title_text,
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        )
+                    )
+                    .title_alignment(ratatui::layout::Alignment::Center)
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)),
             )
@@ -465,7 +606,6 @@ pub fn render_table_ratatui(result: &ExecutionResult) -> String {
         f.render_widget(table, area);
     });
 
-    // Extract the buffer content as an ANSI-colored string
     let buffer = terminal.backend().buffer();
     buffer_to_ansi_string(buffer)
 }
@@ -520,55 +660,74 @@ fn buffer_to_ansi_string(buffer: &ratatui::buffer::Buffer) -> String {
     output
 }
 
-/// Convert ratatui::style::Color to ANSI foreground color escape code.
-fn color_to_ansi(color: Color) -> &'static str {
-    match color {
-        Color::Black => "\x1b[30m",
-        Color::Red => "\x1b[31m",
-        Color::Green => "\x1b[32m",
-        Color::Yellow => "\x1b[33m",
-        Color::Blue => "\x1b[34m",
-        Color::Magenta => "\x1b[35m",
-        Color::Cyan => "\x1b[36m",
-        Color::White => "\x1b[37m",
-        Color::DarkGray => "\x1b[90m",
-        Color::LightRed => "\x1b[91m",
-        Color::LightGreen => "\x1b[92m",
-        Color::LightYellow => "\x1b[93m",
-        Color::LightBlue => "\x1b[94m",
-        Color::LightMagenta => "\x1b[95m",
-        Color::LightCyan => "\x1b[96m",
-        _ => "\x1b[0m",
-    }
-}
-
 /// Convert a full ratatui::style::Style to ANSI escape codes.
 fn style_to_ansi(style: Style) -> String {
     let mut codes = String::new();
-    
-    // Foreground
-    if let Some(fg) = style.fg {
-        codes.push_str(color_to_ansi(fg));
-    }
-    
-    // Background
-    if let Some(bg) = style.bg {
-        codes.push_str(match bg {
-            Color::Black => "\x1b[40m",
-            Color::Red => "\x1b[41m",
-            Color::Green => "\x1b[42m",
-            Color::Yellow => "\x1b[43m",
-            Color::Blue => "\x1b[44m",
-            Color::Magenta => "\x1b[45m",
-            Color::Cyan => "\x1b[46m",
-            Color::White => "\x1b[47m",
-            _ => "",
-        });
+
+    // Reset first if there's any style change
+    if style != Style::default() {
+        codes.push_str("\x1b[0m");
     }
 
     // Bold
     if style.add_modifier.contains(Modifier::BOLD) {
         codes.push_str("\x1b[1m");
+    }
+    // Dim
+    if style.add_modifier.contains(Modifier::DIM) {
+        codes.push_str("\x1b[2m");
+    }
+    // Italic
+    if style.add_modifier.contains(Modifier::ITALIC) {
+        codes.push_str("\x1b[3m");
+    }
+    // Underline
+    if style.add_modifier.contains(Modifier::UNDERLINED) {
+        codes.push_str("\x1b[4m");
+    }
+
+    // Foreground (extended 256-color support)
+    if let Some(fg) = style.fg {
+        match fg {
+            Color::Black => codes.push_str("\x1b[30m"),
+            Color::Red => codes.push_str("\x1b[31m"),
+            Color::Green => codes.push_str("\x1b[32m"),
+            Color::Yellow => codes.push_str("\x1b[33m"),
+            Color::Blue => codes.push_str("\x1b[34m"),
+            Color::Magenta => codes.push_str("\x1b[35m"),
+            Color::Cyan => codes.push_str("\x1b[36m"),
+            Color::White => codes.push_str("\x1b[37m"),
+            Color::DarkGray => codes.push_str("\x1b[90m"),
+            Color::LightRed => codes.push_str("\x1b[91m"),
+            Color::LightGreen => codes.push_str("\x1b[92m"),
+            Color::LightYellow => codes.push_str("\x1b[93m"),
+            Color::LightBlue => codes.push_str("\x1b[94m"),
+            Color::LightMagenta => codes.push_str("\x1b[95m"),
+            Color::LightCyan => codes.push_str("\x1b[96m"),
+            _ => {}
+        }
+    }
+
+    // Background (extended 256-color support)
+    if let Some(bg) = style.bg {
+        match bg {
+            Color::Black => codes.push_str("\x1b[40m"),
+            Color::Red => codes.push_str("\x1b[41m"),
+            Color::Green => codes.push_str("\x1b[42m"),
+            Color::Yellow => codes.push_str("\x1b[43m"),
+            Color::Blue => codes.push_str("\x1b[44m"),
+            Color::Magenta => codes.push_str("\x1b[45m"),
+            Color::Cyan => codes.push_str("\x1b[46m"),
+            Color::White => codes.push_str("\x1b[47m"),
+            Color::DarkGray => codes.push_str("\x1b[100m"),
+            Color::LightRed => codes.push_str("\x1b[101m"),
+            Color::LightGreen => codes.push_str("\x1b[102m"),
+            Color::LightYellow => codes.push_str("\x1b[103m"),
+            Color::LightBlue => codes.push_str("\x1b[104m"),
+            Color::LightMagenta => codes.push_str("\x1b[105m"),
+            Color::LightCyan => codes.push_str("\x1b[106m"),
+            _ => {}
+        }
     }
 
     codes
@@ -1426,31 +1585,65 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
         return "No rows".to_owned();
     }
 
-    let columns = result.rows[0].fields.keys().cloned().collect::<Vec<_>>();
+    // Filter out all-null/all-empty columns
+    let columns = filter_display_columns(result);
+    let entity = infer_entity_type(&columns);
+    const MAX_COL_WIDTH: usize = 30;
     let mut widths = columns
         .iter()
-        .map(|column| column.len())
+        .map(|column| column.len().min(MAX_COL_WIDTH))
         .collect::<Vec<_>>();
-    let rendered_rows: Vec<Vec<(String, &'static str)>> = result
+
+    // Pre-compute size bar data for the "size" column if present
+    // Uses log10 scaling to handle values across orders of magnitude (MB, GB, TB)
+    let size_col_idx = columns.iter().position(|c| c == "size");
+    let (size_min_bytes, size_max_bytes, size_bar_width) = if let Some(si) = size_col_idx {
+        let mut min_b = f64::MAX;
+        let mut max_b = 0.0_f64;
+        for row in &result.rows {
+            if let Some(val) = row.fields.get("size") {
+                let s = eval::render_json_cell(val);
+                if let Some(b) = eval::json_as_f64(&serde_json::Value::String(s)) {
+                    if b > max_b {
+                        max_b = b;
+                    }
+                    if b < min_b {
+                        min_b = b;
+                    }
+                }
+            }
+        }
+        let bw = 8; // fixed reasonable width for the bar
+        widths[si] += bw + 1;  // make room for the bar + space
+        (if min_b == f64::MAX { 0.0 } else { min_b }, max_b, bw)
+    } else {
+        (0.0, 0.0, 0)
+    };
+
+    let rendered_rows: Vec<Vec<(String, &'static str, &'static str)>> = result
         .rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(idx, row)| {
+            let is_even = idx % 2 == 0;
+            let row_bg = if is_even { "" } else { "\x1b[100m" }; // DarkGray bg
+
             columns
                 .iter()
                 .enumerate()
                 .map(|(index, column)| {
-                    let value = row
+                    let mut value = row
                         .fields
                         .get(column)
                         .map(eval::render_json_cell)
                         .unwrap_or_default();
-                    widths[index] = widths[index].max(value.len());
+                    widths[index] = widths[index].max(value.len().min(MAX_COL_WIDTH));
+                    value = truncate_cell(&value, MAX_COL_WIDTH);
 
-                    // Determine per-cell color
+                    // Determine per-cell foreground color
                     let cell_color: &'static str = match column.as_str() {
                         "cpu" => ansi_threshold_color(&value),
                         "memory" | "mem" => {
-                            // Memory in bytes: >1GB → red, >512MB → yellow
                             if let Ok(bytes) = value.parse::<f64>() {
                                 if bytes > 1_073_741_824.0 {
                                     "\x1b[31m"
@@ -1460,21 +1653,37 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
                                     "\x1b[32m"
                                 }
                             } else {
-                                "\x1b[0m"
+                                ""
                             }
                         }
                         "state" | "status" => ansi_state_color(&value),
-                        _ => "\x1b[0m",
+                        _ => "",
                     };
 
-                    (value, cell_color)
+                    // For the "size" column, augment with a visual bar
+                    if column.as_str() == "size" && size_max_bytes > 0.0 && !value.is_empty() {
+                        let bar = size_bar(&value, size_min_bytes, size_max_bytes, size_bar_width);
+                        if !bar.is_empty() {
+                            value = format!("{value} {bar}");
+                        }
+                    }
+
+                    (value, cell_color, row_bg)
                 })
                 .collect()
         })
         .collect();
 
     let mut lines = Vec::new();
-    let header_color = "\x1b[1;37m";
+
+    // ── Title ──
+    lines.push(format!(
+        "\x1b[1;36m {} \x1b[0m",
+        entity
+    ));
+
+    // ── Header ──
+    let header_color = "\x1b[1;4;37m";  // Bold + Underline + White
     lines.push(format!(
         "{header_color}{}{ANSI_RESET}",
         render_table_line(
@@ -1483,23 +1692,38 @@ pub fn render_table_colored(result: &ExecutionResult) -> String {
         )
     ));
 
+    // ── Separator ──
     lines.push(
         widths
             .iter()
-            .map(|width| "-".repeat(*width))
+            .map(|width| format!("\x1b[2m{}\x1b[0m", "─".repeat(*width)))
             .collect::<Vec<_>>()
             .join("  "),
     );
 
+    // ── Data rows ──
     for row in &rendered_rows {
         let line = row
             .iter()
             .zip(&widths)
-            .map(|((value, color), width)| format!("{color}{value:<width$}{ANSI_RESET}"))
+            .map(|((value, fg_color, bg_color), width)| {
+                if fg_color.is_empty() && bg_color.is_empty() {
+                    format!("{value:<width$}")
+                } else {
+                    format!("{bg_color}{fg_color}{value:<width$}{ANSI_RESET}")
+                }
+            })
             .collect::<Vec<_>>()
             .join("  ");
         lines.push(line);
     }
+
+    // ── Footer ──
+    lines.push(format!(
+        "\x1b[2m{} {}{ANSI_RESET}",
+        result.rows.len(),
+        entity.to_lowercase()
+    ));
 
     lines.join("\n")
 }
@@ -3331,7 +3555,7 @@ mod tests {
         };
         let table = render_table_colored(&result);
         // Header should be bold white (\x1b[1;37m)
-        assert!(table.contains("\x1b[1;37m"));
+        assert!(table.contains("\x1b[1;4;37m"));
         assert!(table.contains(ANSI_RESET));
     }
 
