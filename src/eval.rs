@@ -690,10 +690,67 @@ pub fn compare_json_values(left: &JsonValue, right: &JsonValue) -> Ordering {
     }
 }
 
+/// Parse a human-readable byte size string (e.g. "93.6MB", "28.7GB", "155MB",
+/// "13.1MB", "1024", "1.5KiB") into bytes as f64.
+fn parse_byte_size(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Split number from unit suffix.
+    // The number can be an integer or decimal.
+    let (num_str, unit) = {
+        let trimmed = s.trim_end();
+        // Find where the numeric part ends
+        let num_end = trimmed
+            .char_indices()
+            .take_while(|(_, c)| c.is_ascii_digit() || *c == '.')
+            .last()
+            .map(|(i, _)| i + 1)
+            .unwrap_or(0);
+        if num_end == 0 {
+            // No leading digits — try direct parse
+            return s.parse::<f64>().ok();
+        }
+        let num_part = &trimmed[..num_end];
+        let unit_part = trimmed[num_end..].trim();
+        (num_part, unit_part)
+    };
+
+    let number: f64 = num_str.parse().ok()?;
+
+    if unit.is_empty() {
+        return Some(number);
+    }
+
+    let multiplier = match unit.to_lowercase().as_str() {
+        "b" => 1.0,
+        "kb" | "k" => 1_000.0,
+        "mb" | "m" => 1_000_000.0,
+        "gb" | "g" => 1_000_000_000.0,
+        "tb" | "t" => 1_000_000_000_000.0,
+        "kib" | "ki" => 1024.0,
+        "mib" | "mi" => 1024.0 * 1024.0,
+        "gib" | "gi" => 1024.0 * 1024.0 * 1024.0,
+        "tib" | "ti" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+
+    Some(number * multiplier)
+}
+
 pub fn json_as_f64(value: &JsonValue) -> Option<f64> {
     match value {
         JsonValue::Number(value) => value.as_f64(),
-        JsonValue::String(value) => value.parse().ok(),
+        JsonValue::String(value) => {
+            // Try direct parse first (fast path for plain numbers)
+            if let Ok(n) = value.parse::<f64>() {
+                return Some(n);
+            }
+            // Fall back to byte-size parsing for human-readable sizes
+            parse_byte_size(value)
+        }
         _ => None,
     }
 }
