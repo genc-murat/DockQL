@@ -1,8 +1,8 @@
-# Docker Observability Language v0.1 Specification
+# Docker Observability Language Specification
 
-Status: draft v0.1
+Status: draft
 
-DOL is a domain-specific language for querying, observing, and analyzing Docker infrastructure. Version 0.1 intentionally defines a small, implementable core that can be parsed into a typed AST and executed by a Rust CLI.
+DOL is a domain-specific language for querying, observing, and analyzing Docker infrastructure. The language defines a rich, implementable core that can be parsed into a typed AST and executed by a Rust CLI.
 
 ## 1. Design Goals
 
@@ -16,17 +16,17 @@ DOL treats Docker as a live data system:
 
 DOL improves the day-to-day workflow where users otherwise combine `docker ps`, `docker stats`, `docker events`, shell scripts, Prometheus queries, and dashboard tools. The language does not replace Prometheus or Grafana; it provides a Docker-native query surface that can later export to those systems.
 
-Version 0.1 prioritizes:
+The language prioritizes:
 
-- Simple syntax.
-- Strong parser boundaries.
-- Streaming support.
-- A realistic Rust implementation path.
+- Simple, readable syntax.
+- Strong parser boundaries with detailed error messages.
+- Streaming and batch execution modes.
+- A realistic Rust implementation with comprehensive test coverage.
 - Deterministic behavior before AI-assisted insights.
 
 ## 2. Query Families
 
-DOL v0.1 has nine top-level query families.
+DOL has nine top-level query families.
 
 ### 2.1 `observe`
 
@@ -42,7 +42,7 @@ observe containers where status = running
 observe containers | where image contains "postgres" | select name, status, ports
 ```
 
-**Cross-target JOIN (v0.1):**
+**Cross-target JOIN:**
 
 A `JOIN` clause merges rows from two targets on a matching key:
 
@@ -156,7 +156,10 @@ analyze containers find drift
 analyze container api-service correlate events last 1h
 ```
 
-New analysis types (added v0.1):
+Analysis types:
+- **anomalies** (default) — detects high CPU, memory pressure, restart loops, and unhealthy states.
+- **correlate** — finds containers sharing images and labels.
+- **explain** — produces a diagnostic signal summary for one or all containers.
 - **dependencies** — maps compose project, network, and volume relationships.
 - **density** — container distribution across images, states, and compose projects.
 - **leaks** — detects memory usage growth trends from historical metrics (requires `--store`).
@@ -340,13 +343,13 @@ Common volume fields:
 
 Common event fields:
 
-- `time`
-- `type`
-- `action`
-- `actor_id`
-- `container`
-- `image`
-- `attributes`
+- `time` — event timestamp (Unix seconds, nanoseconds, or ISO 8601)
+- `type` — event type (`container`, `image`, `network`, `volume`)
+- `action` — action name (`start`, `die`, `stop`, `restart`, `pull`, etc.)
+- `actor_id` — Docker entity ID for the event actor
+- `container` — container name (when applicable)
+- `image` — image reference (when applicable)
+- `attributes` — array of `key=value` strings from the event's Actor Attributes
 
 ### 4.6 Dynamic Fields via `set`
 
@@ -386,15 +389,16 @@ DOL v0.1 supports these literal types:
 
 Bare identifiers are accepted for simple values in filters, but strings are recommended when a value contains punctuation, spaces, or mixed case.
 
-### 5.1 Static Semantic Analysis & Type Safety
+#### 5.1 Static Semantic Analysis & Type Safety
 
 DOL implements a static semantic analyzer and type safety validation pass before executing any query. This phase runs immediately after parsing and prevents execution of queries that contain structural or type errors:
 
-- **Field Existence Validation**: All referenced fields in filters, projections (`select`), and aggregations (`group by`) are checked against the static schema of the collection target (e.g., containers, images). Dynamically added fields via `set` are added to the active schema context and allowed in downstream pipeline nodes.
+- **Field Existence Validation**: All referenced fields in filters, projections (`select`), and aggregations (`group by`) are checked against the static schema of the collection target (e.g., containers, images). Dynamically added fields via `set`, `fill`, and `let` are added to the active schema context and allowed in downstream pipeline nodes.
 - **Label Prefix Support**: Dynamically resolved label lookups using the `label.` prefix (e.g., `label.env`) are recognized and statically validated as long as the base `labels` field exists on the target.
 - **Type Compatibility Checking**: High-level comparison and arithmetic operations validate that their operands are compatible. For example:
   - Comparing a String field (e.g., `state`) to an Integer literal (e.g., `50`) with binary comparison operators like `>` will be rejected at compilation/validation time.
   - Performing arithmetic operations on non-numeric types is statically rejected.
+  - `AND`, `OR`, and `NOT` operators require boolean operands.
 
 ## 6. Operators
 
@@ -440,22 +444,22 @@ Arithmetic expressions can be used in `set` assignments, `where` filters, `havin
 ### 6.6 Function Calls
 
 **String functions:**
-- `upper(s)` — uppercase
-- `lower(s)` — lowercase
-- `length(s)` — string length
-- `trim(s)` — trim whitespace
-- `concat(a, b, ...)` — string concatenation
-- `substring(s, start, len)` — substring extraction
-- `coalesce(a, b, ...)` — first non-null value
+- `upper(s)` — returns uppercase
+- `lower(s)` — returns lowercase
+- `length(s)` — returns Integer string length
+- `trim(s)` — returns trimmed whitespace
+- `concat(a, b, ...)` — returns string concatenation of all arguments
+- `substring(s, start, len)` — returns substring extraction
+- `coalesce(a, b, ...)` — returns first non-null, non-empty value
 - `starts_with(s, prefix)` — returns Boolean, true if `s` starts with `prefix`
 - `ends_with(s, suffix)` — returns Boolean, true if `s` ends with `suffix`
-- `replace(s, from, to)` — replace all occurrences of `from` with `to`
-- `reverse(s)` — reverse the string
-- `repeat(s, n)` — repeat the string `n` times
+- `replace(s, from, to)` — returns string with all occurrences of `from` replaced with `to`
+- `reverse(s)` — returns reversed string
+- `repeat(s, n)` — returns string repeated `n` times
 - `position(s, substr)` — returns Integer, 0-based index of first `substr` occurrence (0 if not found)
-- `split_part(s, delim, n)` — split by `delim`, return the `n`-th part (1-indexed)
+- `split_part(s, delim, n)` — returns split by `delim`, the `n`-th part (1-indexed)
 
-**Date/time functions (uses the existing `chrono` dependency):**
+**Date/time functions:**
 - `now()` — returns current UTC timestamp as RFC 3339 string
 - `date_format(ts, fmt)` — format a timestamp string according to `fmt` (strftime syntax, e.g., `%Y-%m-%d`)
 - `date_diff(a, b, unit)` — returns Integer difference between two timestamps in the given unit (`seconds`, `minutes`, `hours`, `days`)
@@ -737,12 +741,16 @@ In the CLI and REPL, error messages are displayed in ANSI **red** for visual pro
 
 ## 12. Reserved Keywords
 
-Reserved keywords in v0.1:
+Reserved keywords:
 
 ```text
-alert analyze and asc at between by case compose contains count desc distinct else end events
-false fill find for from group having if in inspect is join last let limit logs matches max min
-not null observe of offset or ping restart select service services set sort sum then to true webhook when where
+alert analyze and asc at between by case compose contains correlate count dashboard
+config desc distinct else end events explain extract false fields fill find for from
+group having health if in inspect is join last let limit logs matches max min networks
+not null observe of offset or ping repl repeat restart select service services set sort
+split_part starts_with ends_with sum then to top true upper lower length trim concat
+substring coalesce replace reverse position now date_format date_diff volumes
+webhook when where
 ```
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.
@@ -766,7 +774,7 @@ alert when cpu > 85% for 2m then print "High CPU"
 observe containers | where cpu > 80% | alert "High CPU detected"
 ```
 
-## 14. Out of Scope for v0.1
+## 14. Out of Scope
 
 These features are intentionally deferred:
 
@@ -777,27 +785,22 @@ These features are intentionally deferred:
 - Automatic remediation without explicit user opt-in.
 - AI-generated decisions that are not backed by deterministic signals.
 
-## 15. Implementation Notes for Phase 2
+## 15. Implementation Notes
 
-Parser phase should start with:
+The parser was implemented incrementally, starting with the core query families and gradually adding pipeline nodes. The current implementation supports all nine query families and all pipeline nodes described in this specification.
 
-1. `observe containers`
-2. Inline `where`
-3. Pipe `where`
-4. `select`, `sort by`, `limit`
-5. `events containers`
-6. `inspect container <value>`
-7. `alert when ... then print ...`
-
-Recommended AST split:
+AST types (defined in `src/ast.rs`):
 
 - `Query`
-- `Target`
+- `Target` (CollectionTarget, SingularTarget, ComposeTarget)
 - `Expression`
 - `Value`
 - `PipelineNode`
 - `TimeSelector`
 - `AlertRule`
+- `JoinClause`
+- `SetValue`
+- `AggregateExpr`
 
 ## 16. CLI Reference
 
@@ -824,12 +827,12 @@ The DOL CLI supports the following flags:
 | `--export-influx <url>` | Push results to InfluxDB v1/v2 HTTP write API |
 | `--export-grafana-loki <url>` | Push results to Grafana Loki HTTP push API |
 | `--export-prometheus <url>` | Push results to Prometheus Pushgateway |
-| `repl` | Start interactive REPL shell with tab completion and history |
-| `top` | Live-updating TUI container monitor (top-like) with auto-refresh, keyboard controls, CPU/MEM gauge bars, and filter mode |
-| `dashboard` | Multi-panel TUI dashboard with container list, state distribution stats, and live Docker events |
+| `repl` | Start interactive REPL shell with tab completion, history, and REPL commands |
+| `top` | Live-updating TUI container monitor (top-like) with auto-refresh, keyboard controls, CPU/MEM gauge bars, filter mode, and event-driven refresh |
+| `dashboard` | Multi-panel TUI dashboard with container list, state distribution stats (histogram bars), top images, and live Docker events stream |
 | `config init` | Create a default config file at the standard config path |
 | `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`) |
-| `config view` | Display the current merged configuration |
+| `config view` | Display the current merged configuration (from CLI flags + config file + defaults) |
 
 Additional REPL commands (within `dol repl`):
 
@@ -841,6 +844,7 @@ Additional REPL commands (within `dol repl`):
 | `.watch <secs>` | Re-run the last query every N seconds |
 | `.export <path>` | Write subsequent results to a file |
 | `.output <fmt>` | Set output format (`table`, `json`, `json-compact`, `csv`, `jsonl`) |
+| `.host [<addr>]` | Show or set Docker host address within the REPL session |
 
 Config file support (YAML/TOML):
 
@@ -850,5 +854,7 @@ Config file support (YAML/TOML):
 - `.dolrc`
 - `dol.yaml`
 - `dol.toml`
+- `~/.dolrc.yaml`
+- `~/.dolrc.toml`
 
-The v0.1 grammar should be treated as the source of truth for parser tests.
+The grammar defined in this specification is the source of truth for parser tests.
