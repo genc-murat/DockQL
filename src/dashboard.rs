@@ -337,58 +337,57 @@ pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
         }
 
         // ── Key events ──
-        if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc if !in_filter_mode => should_quit = true,
-                    KeyCode::Char('h') if !in_filter_mode => show_help = !show_help,
-                    KeyCode::Char('r') if !in_filter_mode => {
-                        let _ = refresh_all(
-                            &docker,
-                            &metrics_collector,
-                            &mut containers,
-                            &mut metrics_map,
-                            &mut last_refresh,
-                        );
-                        last_metrics_refresh = std::time::Instant::now();
-                        last_container_refresh = std::time::Instant::now();
-                    }
-                    KeyCode::Down | KeyCode::Char('j') if !in_filter_mode => {
-                        let i = table_state.selected().unwrap_or(0);
-                        let n = containers.len().saturating_sub(1);
-                        table_state.select(Some(i.saturating_add(1).min(n)));
-                    }
-                    KeyCode::Up | KeyCode::Char('k') if !in_filter_mode => {
-                        let i = table_state.selected().unwrap_or(0);
-                        table_state.select(Some(i.saturating_sub(1)));
-                    }
-                    KeyCode::Char('s') if !in_filter_mode => {
-                        sort_column = (sort_column + 1) % 4;
-                    }
-                    KeyCode::Char('d') if !in_filter_mode => {
-                        sort_desc = !sort_desc;
-                    }
-                    KeyCode::Char('/') if !in_filter_mode => {
-                        in_filter_mode = true;
-                        filter_text.clear();
-                    }
-                    KeyCode::Char(c) if in_filter_mode => {
-                        filter_text.push(c);
-                    }
-                    KeyCode::Backspace if in_filter_mode => {
-                        filter_text.pop();
-                    }
-                    KeyCode::Enter | KeyCode::Char(' ') if in_filter_mode => {
-                        in_filter_mode = false;
-                    }
-                    KeyCode::Esc if in_filter_mode => {
-                        in_filter_mode = false;
-                        filter_text.clear();
-                    }
-                    _ => {}
+        if event::poll(Duration::from_millis(200))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc if !in_filter_mode => should_quit = true,
+                KeyCode::Char('h') if !in_filter_mode => show_help = !show_help,
+                KeyCode::Char('r') if !in_filter_mode => {
+                    let _ = refresh_all(
+                        &docker,
+                        &metrics_collector,
+                        &mut containers,
+                        &mut metrics_map,
+                        &mut last_refresh,
+                    );
+                    last_metrics_refresh = std::time::Instant::now();
+                    last_container_refresh = std::time::Instant::now();
                 }
+                KeyCode::Down | KeyCode::Char('j') if !in_filter_mode => {
+                    let i = table_state.selected().unwrap_or(0);
+                    let n = containers.len().saturating_sub(1);
+                    table_state.select(Some(i.saturating_add(1).min(n)));
+                }
+                KeyCode::Up | KeyCode::Char('k') if !in_filter_mode => {
+                    let i = table_state.selected().unwrap_or(0);
+                    table_state.select(Some(i.saturating_sub(1)));
+                }
+                KeyCode::Char('s') if !in_filter_mode => {
+                    sort_column = (sort_column + 1) % 4;
+                }
+                KeyCode::Char('d') if !in_filter_mode => {
+                    sort_desc = !sort_desc;
+                }
+                KeyCode::Char('/') if !in_filter_mode => {
+                    in_filter_mode = true;
+                    filter_text.clear();
+                }
+                KeyCode::Char(c) if in_filter_mode => {
+                    filter_text.push(c);
+                }
+                KeyCode::Backspace if in_filter_mode => {
+                    filter_text.pop();
+                }
+                KeyCode::Enter | KeyCode::Char(' ') if in_filter_mode => {
+                    in_filter_mode = false;
+                }
+                KeyCode::Esc if in_filter_mode => {
+                    in_filter_mode = false;
+                    filter_text.clear();
+                }
+                _ => {}
             }
         }
     }
@@ -751,29 +750,28 @@ pub async fn run_dashboard(_config: &DolConfig) -> anyhow::Result<()> {
         }
 
         // ── Key events ──
-        if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc if !show_help => should_quit = true,
-                    KeyCode::Char('h') => show_help = !show_help,
-                    KeyCode::Char('r') => {
-                        let _ = refresh_all(
-                            &docker,
-                            &metrics_collector,
-                            &mut containers,
-                            &mut metrics_map,
-                            &mut last_refresh,
-                        );
-                        let _ = refresh_events(&mut events);
-                        last_metrics_refresh = std::time::Instant::now();
-                        last_container_refresh = std::time::Instant::now();
-                    }
-                    KeyCode::Tab => selected_panel = (selected_panel + 1) % 2,
-                    KeyCode::Char('c') => events.clear(),
-                    _ => {}
+        if event::poll(Duration::from_millis(200))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc if !show_help => should_quit = true,
+                KeyCode::Char('h') => show_help = !show_help,
+                KeyCode::Char('r') => {
+                    let _ = refresh_all(
+                        &docker,
+                        &metrics_collector,
+                        &mut containers,
+                        &mut metrics_map,
+                        &mut last_refresh,
+                    );
+                    let _ = refresh_events(&mut events);
+                    last_metrics_refresh = std::time::Instant::now();
+                    last_container_refresh = std::time::Instant::now();
                 }
+                KeyCode::Tab => selected_panel = (selected_panel + 1) % 2,
+                KeyCode::Char('c') => events.clear(),
+                _ => {}
             }
         }
     }

@@ -472,7 +472,7 @@ fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> St
     }
     // Add padding: min width of 6, cap at MAX_COL_WIDTH
     for w in &mut col_widths {
-        *w = (*w + 2).max(6).min(MAX_COL_WIDTH + 2);
+        *w = (*w + 2).clamp(6, MAX_COL_WIDTH + 2);
     }
 
     // Pre-compute size bar data for the "size" column if present (log10 scaling)
@@ -521,7 +521,7 @@ fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> St
     let width = total_width.max(20);
     let row_count = result.rows.len() as u16;
     let height = row_count + 5;
-    let height = height.min(200).max(5);
+    let height = height.clamp(5, 200);
 
     // Theme-specific styles
     // Light theme: no alternating row background (white-on-white is invisible),
@@ -671,7 +671,7 @@ fn buffer_to_ansi_string(buffer: &ratatui::buffer::Buffer) -> String {
 
             // Apply style if changed
             let style = cell.style();
-            if prev_style.map_or(true, |s| s != style) {
+            if prev_style != Some(style) {
                 if style != Style::default() {
                     let _ = write!(line, "{}", style_to_ansi(style));
                 } else {
@@ -685,7 +685,7 @@ fn buffer_to_ansi_string(buffer: &ratatui::buffer::Buffer) -> String {
 
         if line_has_content {
             // Trim trailing whitespace but preserve ANSI codes at the end
-            let trimmed = line.trim_end_matches(|c: char| c == ' ');
+            let trimmed = line.trim_end_matches(' ');
             output.push_str(trimmed);
             output.push('\n');
             has_content = true;
@@ -1735,7 +1735,7 @@ fn render_table_colored_with_theme(result: &ExecutionResult, theme: Theme) -> St
     lines.push(format!(
         "{header_color_code}{}{ANSI_RESET}",
         render_table_line(
-            &columns.iter().map(|c| c.clone()).collect::<Vec<_>>(),
+            &columns.iter().cloned().collect::<Vec<_>>(),
             &widths
         )
     ));
@@ -1952,9 +1952,10 @@ fn group_rows(rows: Vec<Row>, group_fields: &[String], aggregates: &[AggregateEx
         // Accumulate aggregate values
         for agg in aggregates {
             let alias = &agg.alias;
-            if let Some(v) = row.fields.get(&agg.field) {
-                if let Some(num) = eval::json_as_f64(v) {
-                    match agg.function.as_str() {
+            if let Some(v) = row.fields.get(&agg.field)
+                && let Some(num) = eval::json_as_f64(v)
+            {
+                match agg.function.as_str() {
                         "sum" => {
                             *acc.sums.entry(alias.clone()).or_insert(0.0) += num;
                         }
@@ -1968,15 +1969,14 @@ fn group_rows(rows: Vec<Row>, group_fields: &[String], aggregates: &[AggregateEx
                                 acc.min_inits.insert(alias.clone());
                             }
                         }
-                        "max" => {
-                            if !acc.max_inits.contains(alias) || num > acc.maxs[alias] {
-                                acc.maxs.insert(alias.clone(), num);
-                                acc.max_inits.insert(alias.clone());
-                            }
+                        "max"
+                            if !acc.max_inits.contains(alias) || num > acc.maxs[alias] =>
+                        {
+                            acc.maxs.insert(alias.clone(), num);
+                            acc.max_inits.insert(alias.clone());
                         }
                         _ => {}
                     }
-                }
             }
         }
     }

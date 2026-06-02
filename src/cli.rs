@@ -305,9 +305,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // Read query from --file if provided, otherwise use positional argument.
     let query = if let Some(ref file_path) = cli.file {
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| anyhow::anyhow!("failed to read file '{}': {}", file_path, e))?;
-        content
+        std::fs::read_to_string(file_path)
+            .map_err(|e| anyhow::anyhow!("failed to read file '{}': {}", file_path, e))?
     } else {
         cli.query.as_deref().unwrap_or_default().to_owned()
     };

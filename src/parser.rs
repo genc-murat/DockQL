@@ -47,7 +47,7 @@ impl std::fmt::Display for ParseError {
 
             let col = remaining.min(display_line.chars().count());
             write!(f, "\n  --> {display_line}")?;
-            write!(f, "\n     {}{}", " ".repeat(col.saturating_sub(1)), "^")?;
+            write!(f, "\n     {}^", " ".repeat(col.saturating_sub(1)))?;
         }
 
         Ok(())

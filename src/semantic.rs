@@ -59,7 +59,7 @@ impl SemanticAnalyzer {
                     let left_alias = target_alias(self.target);
                     let right_alias = target_alias(join.right);
                     let original_schema =
-                        std::mem::replace(&mut self.active_schema, BTreeMap::new());
+                        std::mem::take(&mut self.active_schema);
                     for (field, ty) in original_schema {
                         self.active_schema
                             .insert(format!("{left_alias}.{field}"), ty);

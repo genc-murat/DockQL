@@ -1886,9 +1886,8 @@ mod tests {
         // Write 5 samples with increasing memory (leak pattern)
         for i in 0..5 {
             let mem = 100_000_000 + (i * 30_000_000); // 100M, 130M, 160M, 190M, 220M
-            let sample = MetricSample {
-                container_id: format!("leaky_id"),
-                container_name: "leaky-container".to_owned(),
+            let sample = MetricSample {                    container_id: "leaky_id".to_string(),
+                    container_name: "leaky-container".to_owned(),
                 timestamp: format!("2026-01-01T12:00:{:02}Z", i),
                 cpu_percent: Some(50.0),
                 memory_usage_bytes: Some(mem),
@@ -1918,9 +1917,8 @@ mod tests {
 
         // Write 3 samples with stable memory
         for i in 0..3 {
-            let sample = MetricSample {
-                container_id: format!("stable_id"),
-                container_name: "stable".to_owned(),
+            let sample = MetricSample {                    container_id: "stable_id".to_string(),
+                    container_name: "stable".to_owned(),
                 timestamp: format!("2026-01-01T12:00:{:02}Z", i),
                 cpu_percent: Some(50.0),
                 memory_usage_bytes: Some(100_000_000),
@@ -1948,9 +1946,8 @@ mod tests {
 
         // Only 2 samples — below threshold
         for i in 0..2 {
-            let sample = MetricSample {
-                container_id: format!("few_id"),
-                container_name: "few".to_owned(),
+            let sample = MetricSample {                    container_id: "few_id".to_string(),
+                    container_name: "few".to_owned(),
                 timestamp: format!("2026-01-01T12:00:{:02}Z", i),
                 cpu_percent: Some(50.0),
                 memory_usage_bytes: Some(100_000_000 + (i * 50_000_000)),
@@ -2325,7 +2322,7 @@ mod tests {
             let mem = 100_000_000 + (i * 30_000_000);
             store
                 .write_metric(MetricSample {
-                    container_id: format!("leaky_id"),
+                    container_id: "leaky_id".to_string(),
                     container_name: "leaky".to_owned(),
                     timestamp: format!("2026-01-01T12:00:{:02}Z", i),
                     cpu_percent: Some(50.0),

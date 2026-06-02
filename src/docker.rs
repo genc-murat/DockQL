@@ -421,7 +421,7 @@ fn container_from_inspect_json(value: &Value) -> Result<Container, DockerError> 
             obj.iter()
                 .flat_map(|(container_port, bindings)| {
                     let arr = bindings.as_array();
-                    if arr.map_or(true, |a| a.is_empty()) {
+                    if arr.is_none_or(|a| a.is_empty()) {
                         vec![container_port.clone()]
                     } else {
                         arr.unwrap()
