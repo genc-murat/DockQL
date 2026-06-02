@@ -4164,7 +4164,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp images").expect("query should parse");
         let result = execute(&parsed.query, &client).expect("query should execute");
-        assert!(result.rows.len() > 0);
+        assert!(!result.rows.is_empty());
     }
 
     #[test]
