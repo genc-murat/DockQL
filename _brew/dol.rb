@@ -17,8 +17,8 @@ class Dol < Formula
   head "https://github.com/genc-murat/DockQL.git", branch: "main"
 
   stable do
-    url "https://github.com/genc-murat/DockQL/archive/refs/tags/v0.1.1.tar.gz"
-    sha256 "92e511fadf076a2f9b33e7e76d36a7e9df04b4007e3878cc317eb0cfadd22b38"
+    url "https://github.com/genc-murat/DockQL/archive/refs/tags/v0.4.0.tar.gz"
+    sha256 "d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed"
   end
 
   depends_on "rust" => :build
