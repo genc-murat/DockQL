@@ -24,7 +24,9 @@ use crate::config::DolConfig;
 use crate::docker::{DockerClient, DockerError, MetricSample};
 
 pub trait MetricsCollector {
-    fn collect(&self) -> impl std::future::Future<Output = Result<Vec<MetricSample>, MetricsError>> + Send;
+    fn collect(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<MetricSample>, MetricsError>> + Send;
 }
 
 #[derive(Debug, Error)]
@@ -79,7 +81,8 @@ where
     C: DockerClient + Send + Sync + 'static,
 {
     async fn collect(&self) -> Result<Vec<MetricSample>, MetricsError> {
-        let containers = self.docker
+        let containers = self
+            .docker
             .list_containers()
             .await
             .map_err(MetricsError::Docker)?;

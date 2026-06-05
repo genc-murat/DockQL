@@ -649,7 +649,9 @@ mod tests {
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(crate::storage::historical_events(&query, &store)).unwrap();
+        let result = rt
+            .block_on(crate::storage::historical_events(&query, &store))
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["action"],

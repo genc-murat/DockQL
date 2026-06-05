@@ -47,7 +47,9 @@ impl DolConfig {
         let paths = config_paths();
         for path in &paths {
             if path.exists() {
-                let Ok(content) = std::fs::read_to_string(path) else { continue; };
+                let Ok(content) = std::fs::read_to_string(path) else {
+                    continue;
+                };
                 if let Ok(config) = serde_yaml::from_str::<Self>(&content) {
                     return config;
                 }
@@ -181,8 +183,10 @@ fn config_paths() -> Vec<PathBuf> {
 }
 
 fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .map_or_else(|| PathBuf::from(".dolrc"), |config_dir| config_dir.join("dol").join("config.yaml"))
+    dirs::config_dir().map_or_else(
+        || PathBuf::from(".dolrc"),
+        |config_dir| config_dir.join("dol").join("config.yaml"),
+    )
 }
 
 #[cfg(test)]
@@ -384,7 +388,10 @@ api_timeout: 90
         // Non-integer values for timeout fields should fail to deserialize.
         let yaml = "api_timeout: not_a_number\n";
         let result: Result<DolConfig, _> = serde_yaml::from_str(yaml);
-        assert!(result.is_err(), "expected deserialization error for invalid value");
+        assert!(
+            result.is_err(),
+            "expected deserialization error for invalid value"
+        );
     }
 
     #[test]
@@ -392,6 +399,9 @@ api_timeout: 90
         // Negative values should fail to deserialize as u64.
         let yaml = "stats_timeout: -5\n";
         let result: Result<DolConfig, _> = serde_yaml::from_str(yaml);
-        assert!(result.is_err(), "expected deserialization error for negative value");
+        assert!(
+            result.is_err(),
+            "expected deserialization error for negative value"
+        );
     }
 }

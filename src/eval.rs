@@ -20,12 +20,10 @@ use std::collections::BTreeMap;
 use serde_json::{Number, Value as JsonValue};
 use thiserror::Error;
 
-use chrono::{NaiveDateTime, Datelike, Timelike};
+use chrono::{Datelike, NaiveDateTime, Timelike};
 
-use crate::{
-    ANSI_BOLD, ANSI_FG_CYAN, ANSI_FG_RED, ANSI_FG_YELLOW, ANSI_RESET,
-};
 use crate::ast::{BinOp, Expression, Operator, SetValue, Value};
+use crate::{ANSI_BOLD, ANSI_FG_CYAN, ANSI_FG_RED, ANSI_FG_YELLOW, ANSI_RESET};
 
 impl EvalError {
     /// Return a fully ANSI-coloured error string suitable for terminal display.
@@ -383,10 +381,10 @@ fn apply_arithmetic(
     right: &JsonValue,
 ) -> Result<JsonValue, EvalError> {
     let l = json_as_f64(left)
-        .ok_or_else(|| EvalError::Arithmetic(format!("left operand is not numeric: {left:?}"))            )?;
-            let r = json_as_f64(right)
-                .ok_or_else(|| EvalError::Arithmetic(format!("right operand is not numeric: {right:?}")))?;
-            let result = match op {
+        .ok_or_else(|| EvalError::Arithmetic(format!("left operand is not numeric: {left:?}")))?;
+    let r = json_as_f64(right)
+        .ok_or_else(|| EvalError::Arithmetic(format!("right operand is not numeric: {right:?}")))?;
+    let result = match op {
         BinOp::Add => l + r,
         BinOp::Sub => l - r,
         BinOp::Mul => l * r,
@@ -452,10 +450,7 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
                     name: name.to_owned(),
                 }
             })?;
-            let start = args
-                .get(1)
-                .and_then(json_as_f64)
-                .map_or(0, |f| f as usize);
+            let start = args.get(1).and_then(json_as_f64).map_or(0, |f| f as usize);
             let len = args
                 .get(2)
                 .and_then(json_as_f64)
@@ -476,66 +471,90 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
         }
         "starts_with" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let prefix = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             Ok(JsonValue::Bool(s.starts_with(prefix)))
         }
         "ends_with" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let suffix = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             Ok(JsonValue::Bool(s.ends_with(suffix)))
         }
         "replace" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let from = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let to = args.get(2).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             Ok(JsonValue::String(s.replace(from, to)))
         }
         "reverse" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             Ok(JsonValue::String(s.chars().rev().collect()))
         }
         "repeat" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let n = args.get(1).and_then(json_as_f64).map_or(0, |f| f as usize);
             Ok(JsonValue::String(s.repeat(n)))
         }
         "position" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let substr = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let pos = s.find(substr).map_or(0, |i| i as u64);
             Ok(JsonValue::Number(Number::from(pos)))
         }
-        "now" => {
-            Ok(JsonValue::String(chrono::Utc::now().to_rfc3339()))
-        }
+        "now" => Ok(JsonValue::String(chrono::Utc::now().to_rfc3339())),
         "date_format" => {
             let ts = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let fmt = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let dt = parse_timestamp(ts)?;
             let result = dt.format(fmt).to_string();
@@ -543,13 +562,19 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
         }
         "date_diff" => {
             let a = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let b = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let unit = args.get(2).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let dt_a = parse_timestamp(a)?;
             let dt_b = parse_timestamp(b)?;
@@ -559,16 +584,24 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
                 "minutes" | "m" => diff.num_minutes(),
                 "hours" | "h" => diff.num_hours(),
                 "days" | "d" => diff.num_days(),
-                _ => return Err(EvalError::InvalidArguments { name: name.to_owned() }),
+                _ => {
+                    return Err(EvalError::InvalidArguments {
+                        name: name.to_owned(),
+                    });
+                }
             };
             Ok(JsonValue::Number(Number::from(result)))
         }
         "extract" => {
             let ts = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let part = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let dt = parse_timestamp(ts)?;
             let result = match part {
@@ -578,19 +611,31 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
                 "hour" => i64::from(dt.hour()),
                 "minute" => i64::from(dt.minute()),
                 "second" => i64::from(dt.second()),
-                _ => return Err(EvalError::InvalidArguments { name: name.to_owned() }),
+                _ => {
+                    return Err(EvalError::InvalidArguments {
+                        name: name.to_owned(),
+                    });
+                }
             };
             Ok(JsonValue::Number(Number::from(result)))
         }
         "split_part" => {
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let delim = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
-                EvalError::InvalidArguments { name: name.to_owned() }
+                EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                }
             })?;
             let n = args.get(2).and_then(json_as_f64).map_or(1, |f| f as usize);
-            let part = s.split(delim).nth(n.saturating_sub(1)).unwrap_or("").to_owned();
+            let part = s
+                .split(delim)
+                .nth(n.saturating_sub(1))
+                .unwrap_or("")
+                .to_owned();
             Ok(JsonValue::String(part))
         }
         _ => Err(EvalError::UnknownFunction {
@@ -718,8 +763,9 @@ pub fn value_to_json(value: &Value) -> JsonValue {
     match value {
         Value::String(s) | Value::Identifier(s) => JsonValue::String(s.clone()),
         Value::Integer(n) => JsonValue::Number(Number::from(*n)),
-        Value::Float(f) | Value::Percentage(f) => Number::from_f64(*f)
-            .map_or(JsonValue::Null, JsonValue::Number),
+        Value::Float(f) | Value::Percentage(f) => {
+            Number::from_f64(*f).map_or(JsonValue::Null, JsonValue::Number)
+        }
         Value::Boolean(b) => JsonValue::Bool(*b),
     }
 }
@@ -1349,7 +1395,10 @@ mod tests {
 
     #[test]
     fn evaluates_date_diff_days() {
-        let f = fields(&[("start", "2026-01-01T00:00:00Z"), ("end", "2026-01-11T00:00:00Z")]);
+        let f = fields(&[
+            ("start", "2026-01-01T00:00:00Z"),
+            ("end", "2026-01-11T00:00:00Z"),
+        ]);
         let expr = Expression::FnCall {
             name: "date_diff".to_owned(),
             args: vec![

@@ -20,9 +20,7 @@ use crate::ast::{
     Operator, PipelineNode, Query, SetValue, SingularTarget, SingularTargetKind, SortDirection,
     TimeSelector, Value,
 };
-use crate::{
-    ANSI_BOLD, ANSI_FG_CYAN, ANSI_FG_GREEN, ANSI_FG_RED, ANSI_FG_YELLOW, ANSI_RESET,
-};
+use crate::{ANSI_BOLD, ANSI_FG_CYAN, ANSI_FG_GREEN, ANSI_FG_RED, ANSI_FG_YELLOW, ANSI_RESET};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ParsedQuery {
@@ -186,8 +184,9 @@ pub fn parse(source: &str) -> Result<ParsedQuery, ParseError> {
 
     let result = (|| {
         if trimmed.is_empty() {
-            return Err(ParseError::new(1, "empty DOL query")
-                .with_suggestion("try `observe containers`"));
+            return Err(
+                ParseError::new(1, "empty DOL query").with_suggestion("try `observe containers`")
+            );
         }
 
         let tokens = tokenize(trimmed)?;
@@ -502,21 +501,31 @@ impl Parser {
 
     fn parse_collection_target(&mut self) -> Result<CollectionTarget, ParseError> {
         match self.peek_ident() {
-            Some("containers") => { self.advance(); Ok(CollectionTarget::Containers) }
-            Some("images") => { self.advance(); Ok(CollectionTarget::Images) }
-            Some("networks") => { self.advance(); Ok(CollectionTarget::Networks) }
-            Some("volumes") => { self.advance(); Ok(CollectionTarget::Volumes) }
+            Some("containers") => {
+                self.advance();
+                Ok(CollectionTarget::Containers)
+            }
+            Some("images") => {
+                self.advance();
+                Ok(CollectionTarget::Images)
+            }
+            Some("networks") => {
+                self.advance();
+                Ok(CollectionTarget::Networks)
+            }
+            Some("volumes") => {
+                self.advance();
+                Ok(CollectionTarget::Volumes)
+            }
             Some(other) => {
                 let suggestion = suggest_similar_target(other);
                 Err(self
-                    .error_here(format!(
-                        "expected collection target, found `{other}`"
-                    ))
+                    .error_here(format!("expected collection target, found `{other}`"))
                     .with_suggestion(suggestion))
             }
-            None => Err(
-                self.error_here("expected collection target: containers, images, networks, or volumes"),
-            ),
+            None => Err(self.error_here(
+                "expected collection target: containers, images, networks, or volumes",
+            )),
         }
     }
 
@@ -541,9 +550,7 @@ impl Parser {
             Some(other) => {
                 let suggestion = suggest_similar_target(other);
                 return Err(self
-                    .error_here(format!(
-                        "expected singular target, found `{other}`"
-                    ))
+                    .error_here(format!("expected singular target, found `{other}`"))
                     .with_suggestion(suggestion));
             }
             None => {
@@ -584,14 +591,10 @@ impl Parser {
                     None => base.to_owned(),
                 };
                 Err(self
-                    .error_here(format!(
-                        "expected analysis verb, found `{other}`"
-                    ))
+                    .error_here(format!("expected analysis verb, found `{other}`"))
                     .with_suggestion(suggestion))
             }
-            None => Err(
-                self.error_here("expected analysis verb: find, correlate, or explain"),
-            ),
+            None => Err(self.error_here("expected analysis verb: find, correlate, or explain")),
         }
     }
 
@@ -620,14 +623,10 @@ impl Parser {
                     None => base.to_owned(),
                 };
                 Err(self
-                    .error_here(format!(
-                        "expected alert action, found `{other}`"
-                    ))
+                    .error_here(format!("expected alert action, found `{other}`"))
                     .with_suggestion(suggestion))
             }
-            None => Err(
-                self.error_here("expected alert action: print, webhook, or restart"),
-            ),
+            None => Err(self.error_here("expected alert action: print, webhook, or restart")),
         }
     }
 
@@ -737,7 +736,8 @@ impl Parser {
                 Some(s) => format!("{s} {base}"),
                 None => base.to_owned(),
             };
-            self.error_here("expected pipeline node").with_suggestion(suggestion)
+            self.error_here("expected pipeline node")
+                .with_suggestion(suggestion)
         })
     }
 
@@ -949,7 +949,11 @@ impl Parser {
             .ok_or_else(|| self.error_here("expected value"))?
             .clone();
         match &token.kind {
-            TokenKind::String(_) | TokenKind::Ident(_) | TokenKind::Integer(_) | TokenKind::Float(_) | TokenKind::Percentage(_) => {}
+            TokenKind::String(_)
+            | TokenKind::Ident(_)
+            | TokenKind::Integer(_)
+            | TokenKind::Float(_)
+            | TokenKind::Percentage(_) => {}
             _ => return Err(ParseError::new(token.column, "not a value")),
         }
         self.advance();
@@ -1125,7 +1129,10 @@ impl Parser {
             .clone();
         match &token.kind {
             TokenKind::Ident(v) if v == "true" || v == "false" => {}
-            TokenKind::String(_) | TokenKind::Integer(_) | TokenKind::Float(_) | TokenKind::Percentage(_) => {}
+            TokenKind::String(_)
+            | TokenKind::Integer(_)
+            | TokenKind::Float(_)
+            | TokenKind::Percentage(_) => {}
             _ => return Err(ParseError::new(token.column, "not a value")),
         }
         self.advance();
@@ -1259,12 +1266,14 @@ impl Parser {
 
     fn expect_eof(&self) -> Result<(), ParseError> {
         if let Some(token) = self.peek() {
-            return Err(ParseError::new(token.column, "unexpected token after query".to_string())
-                .with_suggestion(format!(
-                    "remove or check the `{}` at column {}",
-                    token_display(token),
-                    token.column
-                )));
+            return Err(
+                ParseError::new(token.column, "unexpected token after query".to_string())
+                    .with_suggestion(format!(
+                        "remove or check the `{}` at column {}",
+                        token_display(token),
+                        token.column
+                    )),
+            );
         }
         Ok(())
     }
@@ -1361,9 +1370,8 @@ fn token_display(token: &Token) -> String {
 
 /// Known pipeline keywords for similarity suggestions.
 const PIPELINE_KEYWORDS: &[&str] = &[
-    "where", "select", "group", "having", "sort",
-    "limit", "offset", "distinct", "alert",
-    "if", "set", "fill", "let",
+    "where", "select", "group", "having", "sort", "limit", "offset", "distinct", "alert", "if",
+    "set", "fill", "let",
 ];
 
 /// Known analysis verbs for similarity suggestions.
@@ -1410,8 +1418,6 @@ fn suggest_similar_target(input: &str) -> String {
 fn str_similarity(a: &str, b: &str) -> usize {
     strsim::levenshtein(a, b)
 }
-
-
 
 // ── Tokenizer ──
 
@@ -1530,7 +1536,7 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
             }
             if i >= chars.len() {
                 return Err(ParseError::new(start + 1, "unterminated string")
-            .with_suggestion("add a closing `\"` at the end of the string"));
+                    .with_suggestion("add a closing `\"` at the end of the string"));
             }
             i += 1; // closing "
             tokens.push(Token {
@@ -1704,8 +1710,10 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
             continue;
         }
 
-        return Err(ParseError::new(col, format!("unexpected character `{}`", chars[i]))
-            .with_suggestion("expected letters, numbers, `_`, `.`, `:`, `@`, `/`, `-`, or `$`"));
+        return Err(
+            ParseError::new(col, format!("unexpected character `{}`", chars[i]))
+                .with_suggestion("expected letters, numbers, `_`, `.`, `:`, `@`, `/`, `-`, or `$`"),
+        );
     }
 
     Ok(tokens)
@@ -2298,43 +2306,59 @@ mod tests {
     #[test]
     fn parses_fill_pipeline() {
         let q = parse_one("observe containers | fill memory with 0");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[0], PipelineNode::Fill { .. }));
     }
 
     #[test]
     fn parses_fill_with_expression() {
         let q = parse_one("observe containers | fill name with coalesce(label.name, name)");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         assert!(matches!(o.pipeline[0], PipelineNode::Fill { .. }));
     }
 
     #[test]
     fn parses_starts_with_operator() {
         let q = parse_one("observe containers where name starts_with \"api-\"");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         let filter = o.filter.as_ref().expect("expected filter");
         assert!(matches!(
             filter,
-            Expression::Comparison { operator: Operator::StartsWith, .. }
+            Expression::Comparison {
+                operator: Operator::StartsWith,
+                ..
+            }
         ));
     }
 
     #[test]
     fn parses_ends_with_operator() {
         let q = parse_one("observe containers where image ends_with \":latest\"");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         let filter = o.filter.as_ref().expect("expected filter");
         assert!(matches!(
             filter,
-            Expression::Comparison { operator: Operator::EndsWith, .. }
+            Expression::Comparison {
+                operator: Operator::EndsWith,
+                ..
+            }
         ));
     }
 
     #[test]
     fn parses_let_pipeline() {
         let q = parse_one("observe containers | let $threshold = 80");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Let { name, .. } => assert_eq!(name, "threshold"),
             other => panic!("expected Let, got {other:?}"),
@@ -2344,7 +2368,9 @@ mod tests {
     #[test]
     fn parses_let_without_dollar() {
         let q = parse_one("observe containers | let threshold = 80");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Let { name, .. } => assert_eq!(name, "threshold"),
             other => panic!("expected Let, got {other:?}"),
@@ -2354,7 +2380,9 @@ mod tests {
     #[test]
     fn parses_let_with_string_value() {
         let q = parse_one(r#"observe containers | let $app_name = "myapp""#);
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Let { name, value } => {
                 assert_eq!(name, "app_name");
@@ -2367,7 +2395,9 @@ mod tests {
     #[test]
     fn parses_let_with_expression() {
         let q = parse_one("observe containers | let $limit = cpu * 2");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         match &o.pipeline[0] {
             PipelineNode::Let { name, value } => {
                 assert_eq!(name, "limit");
@@ -2380,7 +2410,9 @@ mod tests {
     #[test]
     fn parses_dollar_var_as_field() {
         let q = parse_one("observe containers where $state = running");
-        let Query::Observe(ref o) = q.query else { panic!("expected Observe") };
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
         let filter = o.filter.as_ref().expect("expected filter");
         match filter {
             Expression::Comparison { left, .. } => {
@@ -2416,8 +2448,14 @@ mod tests {
     fn suggestion_appears_in_display() {
         let err = parse("").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("help:"), "Display should include help text: {msg}");
-        assert!(msg.contains("observe containers"), "Display should include suggestion: {msg}");
+        assert!(
+            msg.contains("help:"),
+            "Display should include help text: {msg}"
+        );
+        assert!(
+            msg.contains("observe containers"),
+            "Display should include suggestion: {msg}"
+        );
     }
 
     #[test]
@@ -2425,9 +2463,18 @@ mod tests {
         let err = parse("").unwrap_err();
         let colored = err.format_color();
         // ANSI escape code starts with \x1b (ESC character)
-        assert!(colored.contains('\x1b'), "format_color should contain ANSI escapes");
-        assert!(colored.contains("error"), "format_color should contain error label");
-        assert!(colored.contains("help:"), "format_color should contain help text");
+        assert!(
+            colored.contains('\x1b'),
+            "format_color should contain ANSI escapes"
+        );
+        assert!(
+            colored.contains("error"),
+            "format_color should contain error label"
+        );
+        assert!(
+            colored.contains("help:"),
+            "format_color should contain help text"
+        );
         // Should NOT contain the Display prefix "parse error" (it uses "error" in bold red)
         assert!(
             !colored.starts_with("parse error"),
@@ -2600,7 +2647,10 @@ mod tests {
         // Verify the Display output includes the source line and column pointer
         let err = parse("observe containers where").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("observe containers where"), "should show source");
+        assert!(
+            msg.contains("observe containers where"),
+            "should show source"
+        );
         assert!(msg.contains("^"), "should show pointer");
         // Verify arrow and source reference are present
         assert!(msg.contains("-->"), "should show arrow marker");
@@ -2691,34 +2741,67 @@ mod tests {
     #[test]
     fn suggest_keyword_function_direct() {
         // Direct tests for suggest_keyword helper
-        assert!(suggest_keyword("", PIPELINE_KEYWORDS).is_none(), "empty input should return None");
-        assert!(suggest_keyword("xyz", PIPELINE_KEYWORDS).is_none(), "no match should return None");
+        assert!(
+            suggest_keyword("", PIPELINE_KEYWORDS).is_none(),
+            "empty input should return None"
+        );
+        assert!(
+            suggest_keyword("xyz", PIPELINE_KEYWORDS).is_none(),
+            "no match should return None"
+        );
         let result = suggest_keyword("whre", PIPELINE_KEYWORDS).expect("should find suggestion");
-        assert!(result.contains("where"), "should suggest `where` for `whre`: {result}");
+        assert!(
+            result.contains("where"),
+            "should suggest `where` for `whre`: {result}"
+        );
         let result = suggest_keyword("slect", PIPELINE_KEYWORDS).expect("should find suggestion");
-        assert!(result.contains("select"), "should suggest `select` for `slect`: {result}");
+        assert!(
+            result.contains("select"),
+            "should suggest `select` for `slect`: {result}"
+        );
         let result = suggest_keyword("lmit", PIPELINE_KEYWORDS).expect("should find suggestion");
-        assert!(result.contains("limit"), "should suggest `limit` for `lmit`: {result}");
+        assert!(
+            result.contains("limit"),
+            "should suggest `limit` for `lmit`: {result}"
+        );
     }
 
     #[test]
     fn suggest_keyword_analysis_verbs() {
         let result = suggest_keyword("fnd", ANALYSIS_VERBS).expect("should find suggestion");
-        assert!(result.contains("find"), "should suggest `find` for `del`: {result}");
+        assert!(
+            result.contains("find"),
+            "should suggest `find` for `del`: {result}"
+        );
         let result = suggest_keyword("corr", ANALYSIS_VERBS).expect("should find suggestion");
-        assert!(result.contains("correlate"), "should suggest `correlate` for `corr`: {result}");
+        assert!(
+            result.contains("correlate"),
+            "should suggest `correlate` for `corr`: {result}"
+        );
         let result = suggest_keyword("expln", ANALYSIS_VERBS).expect("should find suggestion");
-        assert!(result.contains("explain"), "should suggest `explain` for `expln`: {result}");
+        assert!(
+            result.contains("explain"),
+            "should suggest `explain` for `expln`: {result}"
+        );
     }
 
     #[test]
     fn suggest_keyword_alert_actions() {
         let result = suggest_keyword("prnt", ALERT_ACTIONS).expect("should find suggestion");
-        assert!(result.contains("print"), "should suggest `print` for `prnt`: {result}");
+        assert!(
+            result.contains("print"),
+            "should suggest `print` for `prnt`: {result}"
+        );
         let result = suggest_keyword("webhk", ALERT_ACTIONS).expect("should find suggestion");
-        assert!(result.contains("webhook"), "should suggest `webhook` for `webhk`: {result}");
+        assert!(
+            result.contains("webhook"),
+            "should suggest `webhook` for `webhk`: {result}"
+        );
         let result = suggest_keyword("restt", ALERT_ACTIONS).expect("should find suggestion");
-        assert!(result.contains("restart"), "should suggest `restart` for `restt`: {result}");
+        assert!(
+            result.contains("restart"),
+            "should suggest `restart` for `restt`: {result}"
+        );
     }
 
     #[test]
@@ -2813,7 +2896,10 @@ mod tests {
             .with_source("test query".to_owned())
             .with_suggestion("try something");
         let colored = err.format_color();
-        assert!(colored.contains("try something"), "should include suggestion text");
+        assert!(
+            colored.contains("try something"),
+            "should include suggestion text"
+        );
         assert!(colored.contains('\x1b'), "should include ANSI codes");
     }
 
@@ -2834,10 +2920,7 @@ mod tests {
     #[test]
     fn source_context_shows_correct_line() {
         // Test with a multi-line query to verify line detection works
-        let err = parse(
-            "observe containers\n| where cpu > 80%\n| unknown\n| limit 5",
-        )
-        .unwrap_err();
+        let err = parse("observe containers\n| where cpu > 80%\n| unknown\n| limit 5").unwrap_err();
         let msg = err.to_string();
         // The error should point to the line with "unknown"
         assert!(
@@ -2846,7 +2929,8 @@ mod tests {
         );
         // Should not show the first line in the source pointer
         assert!(
-            !msg.lines().any(|l| l.contains("observe containers") && l.contains("-->")),
+            !msg.lines()
+                .any(|l| l.contains("observe containers") && l.contains("-->")),
             "source pointer should point to the line with unknown, not the first line"
         );
     }

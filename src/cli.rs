@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 use crate::{
+    ALERT_EVAL_INTERVAL, DEFAULT_METRICS_INTERVAL, DEFAULT_SNAPSHOT_INTERVAL,
     alerts::{self, AlertEvaluator},
     ast::Query,
     collector::{self, CollectorConfig},
@@ -25,15 +26,15 @@ use crate::{
     dashboard,
     docker::BollardDockerClient,
     events::{self, BollardEventSource},
-    executor::{self, ExecutionResult, render_csv, render_jsonl, render_table, render_table_with_theme, Theme},
+    executor::{
+        self, ExecutionResult, Theme, render_csv, render_jsonl, render_table,
+        render_table_with_theme,
+    },
     export::{self, ExportFormat},
     metrics::{BollardMetricsCollector, MetricsCollector},
     parser, planner,
     sqlite_store::SqliteTelemetryStore,
     storage::TelemetryStore,
-    ALERT_EVAL_INTERVAL,
-    DEFAULT_METRICS_INTERVAL,
-    DEFAULT_SNAPSHOT_INTERVAL,
 };
 
 #[derive(Debug, Parser)]
@@ -252,13 +253,19 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     // Resolve effective colour theme: CLI --theme > config theme > default dark
-    let effective_theme = cli.theme.or_else(|| {
-        config.theme.as_deref().and_then(|s| match s.to_lowercase().as_str() {
-            "light" => Some(Theme::Light),
-            "dark" => Some(Theme::Dark),
-            _ => None,
+    let effective_theme = cli
+        .theme
+        .or_else(|| {
+            config
+                .theme
+                .as_deref()
+                .and_then(|s| match s.to_lowercase().as_str() {
+                    "light" => Some(Theme::Light),
+                    "dark" => Some(Theme::Dark),
+                    _ => None,
+                })
         })
-    }).unwrap_or(Theme::Dark);
+        .unwrap_or(Theme::Dark);
 
     let output_format = cli.output.unwrap_or(OutputFormat::Table);
 
@@ -311,7 +318,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         let store = SqliteTelemetryStore::open(store_path)?;
         let store = Arc::new(Mutex::new(store));
         let docker_inner = BollardDockerClient::connect_with_config(&config)?;
-        let metrics = BollardMetricsCollector::with_config(std::sync::Arc::new(docker_inner.clone()), &config);
+        let metrics = BollardMetricsCollector::with_config(
+            std::sync::Arc::new(docker_inner.clone()),
+            &config,
+        );
         let docker = docker_inner;
         let config_cfg = CollectorConfig {
             snapshot_interval_secs: cli.snapshot_interval,
@@ -360,7 +370,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let query = query.trim().to_owned();
 
     if query.is_empty() {
-        anyhow::bail!("empty DOL query; pass a query such as `observe containers` or use `--file <path>`");
+        anyhow::bail!(
+            "empty DOL query; pass a query such as `observe containers` or use `--file <path>`"
+        );
     }
 
     let parsed = parser::parse(&query)?;
@@ -380,22 +392,24 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     let output_result = |result: &ExecutionResult| -> anyhow::Result<()> {
         // When --export-format is set, write in that format regardless of --output
-        if let Some(export_fmt) = cli.export_format {                    if let Some(ref writer) = export_writer {                        use std::io::Write;
-                        let mut file = writer.lock().expect("lock writer");
-                        match export_fmt {
-                            ExportFormat::Influx => {
-                                let text = export::format_as_influx(result, "containers");
-                                file.write_all(text.as_bytes())?;
-                            }
-                            ExportFormat::Loki => {
-                                let text = export::format_as_loki(result)?;
-                                file.write_all(text.as_bytes())?;
-                            }
-                            ExportFormat::Prometheus => {
-                                let text = export::format_as_prometheus(result);
-                                file.write_all(text.as_bytes())?;
-                            }
-                        }
+        if let Some(export_fmt) = cli.export_format {
+            if let Some(ref writer) = export_writer {
+                use std::io::Write;
+                let mut file = writer.lock().expect("lock writer");
+                match export_fmt {
+                    ExportFormat::Influx => {
+                        let text = export::format_as_influx(result, "containers");
+                        file.write_all(text.as_bytes())?;
+                    }
+                    ExportFormat::Loki => {
+                        let text = export::format_as_loki(result)?;
+                        file.write_all(text.as_bytes())?;
+                    }
+                    ExportFormat::Prometheus => {
+                        let text = export::format_as_prometheus(result);
+                        file.write_all(text.as_bytes())?;
+                    }
+                }
             }
             return Ok(());
         }
@@ -403,9 +417,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         match output_format {
             OutputFormat::Table => {
                 let text = render_table_with_theme(result, effective_theme);
-                if let Some(ref writer) = export_writer {                        use std::io::Write;
-                        let mut file = writer.lock().expect("lock writer");
-                        writeln!(file, "{text}")?;
+                if let Some(ref writer) = export_writer {
+                    use std::io::Write;
+                    let mut file = writer.lock().expect("lock writer");
+                    writeln!(file, "{text}")?;
                 } else {
                     print!("{text}");
                 }
@@ -490,7 +505,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 .ok()
                 .map(std::sync::Arc::new);
             let mut evaluator = AlertEvaluator::new();
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
 
             let store: Option<Arc<Mutex<SqliteTelemetryStore>>> = cli
                 .store
@@ -950,7 +966,9 @@ mod tests {
         let original = std::env::var("DOCKER_HOST").ok();
 
         // Test 1: CLI host sets env var
-        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        unsafe {
+            std::env::remove_var("DOCKER_HOST");
+        }
         apply_host(Some("tcp://192.168.1.100:2375"), None);
         assert_eq!(
             std::env::var("DOCKER_HOST").unwrap(),
@@ -962,19 +980,27 @@ mod tests {
         assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://cli:2375");
 
         // Test 3: Without CLI host, config host is used
-        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        unsafe {
+            std::env::remove_var("DOCKER_HOST");
+        }
         apply_host(None, Some("tcp://config:2375"));
         assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://config:2375");
 
         // Test 4: No args does nothing
-        unsafe { std::env::remove_var("DOCKER_HOST"); }
+        unsafe {
+            std::env::remove_var("DOCKER_HOST");
+        }
         apply_host(None, None);
         assert_eq!(std::env::var("DOCKER_HOST").unwrap_or_default(), "");
 
         // Restore original
         match original {
-            Some(v) => unsafe { std::env::set_var("DOCKER_HOST", v); },
-            None => unsafe { std::env::remove_var("DOCKER_HOST"); },
+            Some(v) => unsafe {
+                std::env::set_var("DOCKER_HOST", v);
+            },
+            None => unsafe {
+                std::env::remove_var("DOCKER_HOST");
+            },
         }
     }
 
@@ -1039,7 +1065,10 @@ mod tests {
 
     // Flaky on Windows CI due to tokio::signal::ctrl_c() behaving differently
     // in non-TTY environments, causing the loop to exit early.
-    #[cfg_attr(target_os = "windows", ignore = "flaky on Windows (ctrl_c resolves early in CI)")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "flaky on Windows (ctrl_c resolves early in CI)"
+    )]
     #[tokio::test]
     async fn watch_with_alert_with_timeout() {
         let cli = Cli {

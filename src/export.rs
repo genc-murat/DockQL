@@ -42,9 +42,7 @@ pub enum ExportError {
 ///   `http://localhost:8086/api/v2/write?org=myorg&bucket=mybucket` (v2)
 pub async fn push_to_influxdb(url: &str, result: &ExecutionResult) -> Result<(), ExportError> {
     let body = format_as_influx(result, "containers");
-    let client = reqwest::Client::builder()
-        .timeout(EXPORT_TIMEOUT)
-        .build()?;
+    let client = reqwest::Client::builder().timeout(EXPORT_TIMEOUT).build()?;
     let resp = client
         .post(url)
         .header("Content-Type", "application/octet-stream")
@@ -69,9 +67,7 @@ pub async fn push_to_influxdb(url: &str, result: &ExecutionResult) -> Result<(),
 pub async fn push_to_loki(url: &str, result: &ExecutionResult) -> Result<(), ExportError> {
     let body = format_as_loki(result)?;
     let push_url = format!("{}/loki/api/v1/push", url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(EXPORT_TIMEOUT)
-        .build()?;
+    let client = reqwest::Client::builder().timeout(EXPORT_TIMEOUT).build()?;
     let resp = client
         .post(&push_url)
         .header("Content-Type", "application/json")
@@ -96,9 +92,7 @@ pub async fn push_to_loki(url: &str, result: &ExecutionResult) -> Result<(), Exp
 pub async fn push_to_prometheus(url: &str, result: &ExecutionResult) -> Result<(), ExportError> {
     let body = format_as_prometheus(result);
     let push_url = format!("{}/metrics/job/dol", url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(EXPORT_TIMEOUT)
-        .build()?;
+    let client = reqwest::Client::builder().timeout(EXPORT_TIMEOUT).build()?;
     let resp = client
         .put(&push_url)
         .header("Content-Type", "text/plain; version=0.0.4")

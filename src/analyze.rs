@@ -10,12 +10,12 @@ use serde::Serialize;
 use serde_json::{Number, Value as JsonValue};
 
 use crate::{
+    ONE_GB,
     ast::{AnalysisTarget, AnalysisVerb, AnalyzeQuery, CollectionTarget, SingularTargetKind},
     docker::{Container, DockerClient, DockerError, DockerEvent, MetricSample},
     executor::{ExecutionResult, Row},
     metrics::{MetricsCollector, MetricsError},
     storage::{TelemetryError, TelemetryStore},
-    ONE_GB,
 };
 
 // ── Public error type ──────────────────────────────────────────────────────
@@ -196,14 +196,23 @@ where
 {
     match (&query.target, &query.verb, query.subject.as_deref()) {
         // analyze containers find anomalies (default)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
-None | Some("anomalies")) => find_container_anomalies(docker, metrics, thresholds).await,
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            None | Some("anomalies"),
+        ) => find_container_anomalies(docker, metrics, thresholds).await,
         // analyze containers find dependencies
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
-            Some("dependencies")) => analyze_dependencies(docker).await,
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("dependencies"),
+        ) => analyze_dependencies(docker).await,
         // analyze containers find density
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
-            Some("density")) => analyze_density(docker).await,
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("density"),
+        ) => analyze_density(docker).await,
         // analyze containers find leaks or drift — requires store, return error
 
         // analyze containers correlate
@@ -236,11 +245,17 @@ where
 
     match (&query.target, &query.verb, query.subject.as_deref()) {
         // analyze containers find anomalies (default, from store)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
-None | Some("anomalies")) => find_anomalies_from_store(store, &thresholds),
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            None | Some("anomalies"),
+        ) => find_anomalies_from_store(store, &thresholds),
         // analyze containers find leaks (from store)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
-            Some("leaks")) => {
+        (
+            AnalysisTarget::Collection(CollectionTarget::Containers),
+            AnalysisVerb::Find,
+            Some("leaks"),
+        ) => {
             let anomalies = detect_resource_leaks(store, &thresholds);
             if anomalies.is_empty() {
                 Ok(ExecutionResult {
@@ -521,7 +536,9 @@ pub fn detect_resource_leaks<S>(store: &S, thresholds: &AnalysisThresholds) -> V
 where
     S: TelemetryStore + ?Sized,
 {
-    let Ok(samples) = store.latest_metrics() else { return Vec::new(); };
+    let Ok(samples) = store.latest_metrics() else {
+        return Vec::new();
+    };
 
     // Group samples by container ID and sort by timestamp.
     let mut by_container: std::collections::BTreeMap<String, Vec<&MetricSample>> =
@@ -813,10 +830,16 @@ where
                         }
 
                         // Check for label drift.
-                        let prev_labels: std::collections::BTreeSet<&str> =
-                            prev_c.labels.iter().map(std::string::String::as_str).collect();
-                        let curr_labels: std::collections::BTreeSet<&str> =
-                            container.labels.iter().map(std::string::String::as_str).collect();
+                        let prev_labels: std::collections::BTreeSet<&str> = prev_c
+                            .labels
+                            .iter()
+                            .map(std::string::String::as_str)
+                            .collect();
+                        let curr_labels: std::collections::BTreeSet<&str> = container
+                            .labels
+                            .iter()
+                            .map(std::string::String::as_str)
+                            .collect();
                         let added: Vec<&&str> = curr_labels.difference(&prev_labels).collect();
                         let removed: Vec<&&str> = prev_labels.difference(&curr_labels).collect();
                         if !added.is_empty() || !removed.is_empty() {
@@ -938,7 +961,8 @@ where
                 (
                     "density_pct".to_owned(),
                     JsonValue::Number(
-                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or_else(|| Number::from(0)),
+                        Number::from_f64((pct * 10.0).round() / 10.0)
+                            .unwrap_or_else(|| Number::from(0)),
                     ),
                 ),
             ]),
@@ -970,7 +994,8 @@ where
                 (
                     "density_pct".to_owned(),
                     JsonValue::Number(
-                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or_else(|| Number::from(0)),
+                        Number::from_f64((pct * 10.0).round() / 10.0)
+                            .unwrap_or_else(|| Number::from(0)),
                     ),
                 ),
             ]),
@@ -1015,7 +1040,8 @@ where
                 (
                     "density_pct".to_owned(),
                     JsonValue::Number(
-                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or_else(|| Number::from(0)),
+                        Number::from_f64((pct * 10.0).round() / 10.0)
+                            .unwrap_or_else(|| Number::from(0)),
                     ),
                 ),
             ]),
@@ -1503,7 +1529,9 @@ mod tests {
     use super::*;
     use crate::docker::Container;
 
-    fn rt() -> tokio::runtime::Runtime { tokio::runtime::Runtime::new().unwrap() }
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Runtime::new().unwrap()
+    }
 
     fn test_container(name: &str, state: &str, restarts: u64) -> Container {
         Container {
@@ -1716,7 +1744,9 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
+        let result = rt()
+            .block_on(execute_analyze(&query, &docker, &metrics))
+            .unwrap();
 
         // Should find: restart_loop + high_cpu + memory_pressure + exited_container
         assert!(result.rows.len() >= 3);
@@ -1753,7 +1783,9 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
+        let result = rt()
+            .block_on(execute_analyze(&query, &docker, &metrics))
+            .unwrap();
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -1783,7 +1815,9 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
+        let result = rt()
+            .block_on(execute_analyze(&query, &docker, &metrics))
+            .unwrap();
 
         // Should have signals for state, restart_count, cpu, memory, network_rx, network_tx
         assert!(result.rows.len() >= 4);
@@ -1831,7 +1865,9 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
+        let result = rt()
+            .block_on(execute_analyze(&query, &docker, &metrics))
+            .unwrap();
 
         // Should find shared_image and shared_label correlations
         let correlations: Vec<String> = result
@@ -1861,8 +1897,9 @@ mod tests {
         // Write 5 samples with increasing memory (leak pattern)
         for i in 0..5 {
             let mem = 100_000_000 + (i * 30_000_000); // 100M, 130M, 160M, 190M, 220M
-            let sample = MetricSample {                    container_id: "leaky_id".to_string(),
-                    container_name: "leaky-container".to_owned(),
+            let sample = MetricSample {
+                container_id: "leaky_id".to_string(),
+                container_name: "leaky-container".to_owned(),
                 timestamp: format!("2026-01-01T12:00:{:02}Z", i),
                 cpu_percent: Some(50.0),
                 memory_usage_bytes: Some(mem),
@@ -1892,8 +1929,9 @@ mod tests {
 
         // Write 3 samples with stable memory
         for i in 0..3 {
-            let sample = MetricSample {                    container_id: "stable_id".to_string(),
-                    container_name: "stable".to_owned(),
+            let sample = MetricSample {
+                container_id: "stable_id".to_string(),
+                container_name: "stable".to_owned(),
                 timestamp: format!("2026-01-01T12:00:{:02}Z", i),
                 cpu_percent: Some(50.0),
                 memory_usage_bytes: Some(100_000_000),
@@ -1921,8 +1959,9 @@ mod tests {
 
         // Only 2 samples — below threshold
         for i in 0..2 {
-            let sample = MetricSample {                    container_id: "few_id".to_string(),
-                    container_name: "few".to_owned(),
+            let sample = MetricSample {
+                container_id: "few_id".to_string(),
+                container_name: "few".to_owned(),
                 timestamp: format!("2026-01-01T12:00:{:02}Z", i),
                 cpu_percent: Some(50.0),
                 memory_usage_bytes: Some(100_000_000 + (i * 50_000_000)),
@@ -2235,7 +2274,9 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
+        let result = rt()
+            .block_on(execute_analyze(&query, &docker, &metrics))
+            .unwrap();
         // Should have at least the "none" row
         assert!(!result.rows.is_empty());
     }
@@ -2258,7 +2299,9 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
+        let result = rt()
+            .block_on(execute_analyze(&query, &docker, &metrics))
+            .unwrap();
         let total_row = result
             .rows
             .iter()

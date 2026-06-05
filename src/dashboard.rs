@@ -134,21 +134,29 @@ fn format_event_time(event: &DockerEvent) -> String {
         let h = (secs / 3600) % 24;
         let m = (secs / 60) % 60;
         let s = secs % 60;
-        format!("{h:02}:{m:02}:{s:02}")        } else if time_raw.len() >= 19 {
-            // ISO timestamp: "2026-05-31T02:00:00.000000000Z"
-            time_raw.get(11..19).map_or_else(|| "??:??:??".to_owned(), std::borrow::ToOwned::to_owned)
-        } else {
-            "??:??:??".to_owned()
-        }
+        format!("{h:02}:{m:02}:{s:02}")
+    } else if time_raw.len() >= 19 {
+        // ISO timestamp: "2026-05-31T02:00:00.000000000Z"
+        time_raw
+            .get(11..19)
+            .map_or_else(|| "??:??:??".to_owned(), std::borrow::ToOwned::to_owned)
+    } else {
+        "??:??:??".to_owned()
+    }
 }
 
 /// Spawn a background tokio task that listens to Docker events via the
 /// bollard API and sends parsed `ParsedEvent` values through a channel.
-fn spawn_event_listener(docker: std::sync::Arc<BollardDockerClient>, events_timeout: Duration) -> mpsc::Receiver<ParsedEvent> {
+fn spawn_event_listener(
+    docker: std::sync::Arc<BollardDockerClient>,
+    events_timeout: Duration,
+) -> mpsc::Receiver<ParsedEvent> {
     let (tx, rx) = mpsc::channel();
 
     tokio::spawn(async move {
-    let Ok(stream) = docker.events_stream(None, None).await else { return; };
+        let Ok(stream) = docker.events_stream(None, None).await else {
+            return;
+        };
 
         let mut stream = stream;
         loop {
@@ -254,7 +262,8 @@ fn gauge_bar(ratio: f64, width: u16) -> String {
 pub async fn run_top(config: &DolConfig) -> anyhow::Result<()> {
     let docker_arc = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
     let docker = docker_arc.as_ref();
-    let metrics_collector = BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker_arc), config);
+    let metrics_collector =
+        BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker_arc), config);
 
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -285,7 +294,8 @@ pub async fn run_top(config: &DolConfig) -> anyhow::Result<()> {
         &mut containers,
         &mut metrics_map,
         &mut last_refresh,
-    ).await;
+    )
+    .await;
     let mut last_metrics_refresh = std::time::Instant::now();
     let mut last_container_refresh = std::time::Instant::now();
 
@@ -325,7 +335,8 @@ pub async fn run_top(config: &DolConfig) -> anyhow::Result<()> {
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            ).await;
+            )
+            .await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
         } else if last_container_refresh.elapsed() >= CONTAINER_REFRESH_INTERVAL {
@@ -336,7 +347,8 @@ pub async fn run_top(config: &DolConfig) -> anyhow::Result<()> {
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            ).await;
+            )
+            .await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
         } else if last_metrics_refresh.elapsed() >= METRICS_REFRESH_INTERVAL {
@@ -360,7 +372,8 @@ pub async fn run_top(config: &DolConfig) -> anyhow::Result<()> {
                         &mut containers,
                         &mut metrics_map,
                         &mut last_refresh,
-                    ).await;
+                    )
+                    .await;
                     last_metrics_refresh = std::time::Instant::now();
                     last_container_refresh = std::time::Instant::now();
                 }
@@ -671,7 +684,8 @@ fn draw_status_bar(
 pub async fn run_dashboard(config: &DolConfig) -> anyhow::Result<()> {
     let docker_arc = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
     let docker = docker_arc.as_ref();
-    let metrics_collector = BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker_arc), config);
+    let metrics_collector =
+        BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker_arc), config);
 
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -698,7 +712,8 @@ pub async fn run_dashboard(config: &DolConfig) -> anyhow::Result<()> {
         &mut containers,
         &mut metrics_map,
         &mut last_refresh,
-    ).await;
+    )
+    .await;
     refresh_events(docker, &mut events, events_timeout).await;
     let mut last_metrics_refresh = std::time::Instant::now();
     let mut last_container_refresh = std::time::Instant::now();
@@ -741,7 +756,8 @@ pub async fn run_dashboard(config: &DolConfig) -> anyhow::Result<()> {
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            ).await;
+            )
+            .await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
         } else if last_container_refresh.elapsed() >= CONTAINER_REFRESH_INTERVAL {
@@ -752,7 +768,8 @@ pub async fn run_dashboard(config: &DolConfig) -> anyhow::Result<()> {
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            ).await;
+            )
+            .await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
         } else if last_metrics_refresh.elapsed() >= METRICS_REFRESH_INTERVAL {
@@ -776,7 +793,8 @@ pub async fn run_dashboard(config: &DolConfig) -> anyhow::Result<()> {
                         &mut containers,
                         &mut metrics_map,
                         &mut last_refresh,
-                    ).await;
+                    )
+                    .await;
                     refresh_events(docker, &mut events, events_timeout).await;
                     last_metrics_refresh = std::time::Instant::now();
                     last_container_refresh = std::time::Instant::now();
@@ -802,14 +820,23 @@ struct ParsedEvent {
 
 /// Fetch recent Docker events (last ~5 seconds) via the bollard events API
 /// and append new unique events to the events buffer.
-async fn refresh_events(docker: &BollardDockerClient, events: &mut Vec<ParsedEvent>, events_timeout: Duration) {
+async fn refresh_events(
+    docker: &BollardDockerClient,
+    events: &mut Vec<ParsedEvent>,
+    events_timeout: Duration,
+) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
     let since = now.saturating_sub(5);
 
-    let Ok(stream) = docker.events_stream(Some(&since.to_string()), Some(&now.to_string())).await else { return };
+    let Ok(stream) = docker
+        .events_stream(Some(&since.to_string()), Some(&now.to_string()))
+        .await
+    else {
+        return;
+    };
 
     let mut stream = stream;
     loop {
@@ -826,9 +853,10 @@ async fn refresh_events(docker: &BollardDockerClient, events: &mut Vec<ParsedEve
             actor_id,
             container_name: event.container.unwrap_or_default(),
         };
-        if !events.iter().any(|e| {
-            e.actor_id == pe.actor_id && e.action == pe.action && e.time == pe.time
-        }) {
+        if !events
+            .iter()
+            .any(|e| e.actor_id == pe.actor_id && e.action == pe.action && e.time == pe.time)
+        {
             events.push(pe);
         }
     }

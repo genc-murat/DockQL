@@ -48,17 +48,15 @@ pub fn init_alert_timeouts(webhook_secs: u64, restart_secs: u64) {
 }
 
 fn webhook_timeout() -> StdDuration {
-    ALERT_TIMEOUTS.get().map_or_else(
-        || StdDuration::from_secs(10),
-        |t| t.webhook,
-    )
+    ALERT_TIMEOUTS
+        .get()
+        .map_or_else(|| StdDuration::from_secs(10), |t| t.webhook)
 }
 
 fn restart_timeout() -> StdDuration {
-    ALERT_TIMEOUTS.get().map_or_else(
-        || StdDuration::from_secs(30),
-        |t| t.restart,
-    )
+    ALERT_TIMEOUTS
+        .get()
+        .map_or_else(|| StdDuration::from_secs(30), |t| t.restart)
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -238,13 +236,11 @@ fn execute_webhook(url: &str) -> bool {
 
     let timeout = webhook_timeout();
     let url = url.to_owned();
-    match std::thread::spawn(move || {
-        match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt.block_on(do_webhook(&url, timeout)),
-            Err(e) => {
-                eprintln!("Failed to create runtime for webhook: {e}");
-                Ok(false)
-            }
+    match std::thread::spawn(move || match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt.block_on(do_webhook(&url, timeout)),
+        Err(e) => {
+            eprintln!("Failed to create runtime for webhook: {e}");
+            Ok(false)
         }
     })
     .join()
@@ -267,7 +263,10 @@ fn execute_restart(target: &str) -> bool {
             .map_err(|e| format!("bollard connect: {e}"))?;
         tokio::time::timeout(
             timeout,
-            docker.restart_container(target, None::<bollard::query_parameters::RestartContainerOptions>),
+            docker.restart_container(
+                target,
+                None::<bollard::query_parameters::RestartContainerOptions>,
+            ),
         )
         .await
         .map_err(|_| format!("restart timed out after {}s", timeout.as_secs()))?
@@ -277,13 +276,11 @@ fn execute_restart(target: &str) -> bool {
 
     let timeout = restart_timeout();
     let target = target.to_owned();
-    match std::thread::spawn(move || {
-        match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt.block_on(do_restart(&target, timeout)),
-            Err(e) => {
-                eprintln!("Failed to create runtime for restart: {e}");
-                Ok(false)
-            }
+    match std::thread::spawn(move || match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt.block_on(do_restart(&target, timeout)),
+        Err(e) => {
+            eprintln!("Failed to create runtime for restart: {e}");
+            Ok(false)
         }
     })
     .join()
@@ -452,18 +449,10 @@ mod tests {
             .evaluate_samples(&rule, &[sample("api", 90.0)], start)
             .expect("evaluation should pass");
         evaluator
-            .evaluate_samples(
-                &rule,
-                &[sample("api", 20.0)],
-                start + ONE_MINUTE,
-            )
+            .evaluate_samples(&rule, &[sample("api", 20.0)], start + ONE_MINUTE)
             .expect("evaluation should pass");
         let events = evaluator
-            .evaluate_samples(
-                &rule,
-                &[sample("api", 90.0)],
-                start + JUST_PAST_TWO_MINUTES,
-            )
+            .evaluate_samples(&rule, &[sample("api", 90.0)], start + JUST_PAST_TWO_MINUTES)
             .expect("evaluation should pass");
 
         assert!(events.is_empty());

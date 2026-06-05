@@ -19,6 +19,7 @@ use rustyline::validate::Validator;
 use rustyline::{CompletionType, Config, EditMode, Editor, Helper};
 
 use crate::{
+    ALERT_EVAL_INTERVAL, ANSI_BOLD, ANSI_FG_RED, ANSI_RESET,
     ast::Query,
     config::DolConfig,
     docker::BollardDockerClient,
@@ -27,8 +28,6 @@ use crate::{
     metrics::{BollardMetricsCollector, MetricsCollector},
     parser,
     sqlite_store::SqliteTelemetryStore,
-    ALERT_EVAL_INTERVAL,
-    ANSI_BOLD, ANSI_FG_RED, ANSI_RESET,
 };
 
 #[derive(Default)]
@@ -325,7 +324,8 @@ async fn execute_dol_query(query: &str, config: &DolConfig) -> anyhow::Result<()
         let docker = BollardDockerClient::connect_with_config(config)?;
         let metrics = BollardMetricsCollector::with_config(std::sync::Arc::new(docker), config);
         let mut evaluator = crate::alerts::AlertEvaluator::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
 
         println!("Evaluating alert... (Ctrl+C to stop)");
         loop {

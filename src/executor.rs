@@ -29,15 +29,24 @@ pub enum Theme {
     Light,
 }
 
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use ratatui::widgets::{Block, Borders, Cell, Table};
 use ratatui::widgets::Row as RatatuiRow;
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
+use ratatui::widgets::{Block, Borders, Cell, Table};
 
 use crate::{
+    ANSI_BG_BLACK, ANSI_BG_BLUE, ANSI_BG_CYAN, ANSI_BG_DARK_GRAY, ANSI_BG_GREEN,
+    ANSI_BG_LIGHT_BLUE, ANSI_BG_LIGHT_CYAN, ANSI_BG_LIGHT_GREEN, ANSI_BG_LIGHT_MAGENTA,
+    ANSI_BG_LIGHT_RED, ANSI_BG_LIGHT_YELLOW, ANSI_BG_MAGENTA, ANSI_BG_RED, ANSI_BG_WHITE,
+    ANSI_BG_YELLOW, ANSI_BOLD, ANSI_BOLD_RED, ANSI_DIM, ANSI_FG_BLACK, ANSI_FG_BLUE, ANSI_FG_CYAN,
+    ANSI_FG_DARK_GRAY, ANSI_FG_GREEN, ANSI_FG_LIGHT_BLUE, ANSI_FG_LIGHT_CYAN, ANSI_FG_LIGHT_GREEN,
+    ANSI_FG_LIGHT_MAGENTA, ANSI_FG_LIGHT_RED, ANSI_FG_LIGHT_YELLOW, ANSI_FG_MAGENTA, ANSI_FG_RED,
+    ANSI_FG_WHITE, ANSI_FG_YELLOW, ANSI_HEADER_DARK, ANSI_HEADER_LIGHT, ANSI_ITALIC, ANSI_RESET,
+    ANSI_TITLE_DARK, ANSI_TITLE_LIGHT, ANSI_UNDERLINE, CPU_RED_THRESHOLD, CPU_YELLOW_THRESHOLD,
+    HALF_GB, ONE_GB,
     analyze::{self, AnalyzeError},
     ast::{
         AggregateExpr, CollectionTarget, DurationUnit, Expression, LogsQuery, ObserveQuery,
@@ -45,54 +54,10 @@ use crate::{
     },
     docker::{Container, DockerClient, DockerError, Image, MetricSample, Network, Volume},
     eval::{self, EvalError},
+    json_string,
     metrics::{MetricsCollector, MetricsError, NoopMetricsCollector},
     storage::{self, TelemetryError, TelemetryStore},
-    json_string,
     target_alias,
-    ANSI_BOLD,
-    ANSI_DIM,
-    ANSI_FG_BLUE,
-    CPU_RED_THRESHOLD,
-    CPU_YELLOW_THRESHOLD,
-    HALF_GB,
-    ONE_GB,
-    ANSI_FG_CYAN,
-    ANSI_FG_GREEN,
-    ANSI_FG_LIGHT_RED,
-    ANSI_FG_RED,
-    ANSI_FG_YELLOW,
-    ANSI_ITALIC,
-    ANSI_RESET,
-    ANSI_UNDERLINE,
-    ANSI_BG_DARK_GRAY,
-    ANSI_FG_BLACK,
-    ANSI_FG_DARK_GRAY,
-    ANSI_FG_LIGHT_BLUE,
-    ANSI_FG_LIGHT_CYAN,
-    ANSI_FG_LIGHT_GREEN,
-    ANSI_FG_LIGHT_MAGENTA,
-    ANSI_FG_LIGHT_YELLOW,
-    ANSI_FG_MAGENTA,
-    ANSI_FG_WHITE,
-    ANSI_BOLD_RED,
-    ANSI_TITLE_DARK,
-    ANSI_HEADER_DARK,
-    ANSI_TITLE_LIGHT,
-    ANSI_HEADER_LIGHT,
-    ANSI_BG_BLACK,
-    ANSI_BG_BLUE,
-    ANSI_BG_CYAN,
-    ANSI_BG_GREEN,
-    ANSI_BG_LIGHT_BLUE,
-    ANSI_BG_LIGHT_CYAN,
-    ANSI_BG_LIGHT_GREEN,
-    ANSI_BG_LIGHT_MAGENTA,
-    ANSI_BG_LIGHT_RED,
-    ANSI_BG_LIGHT_YELLOW,
-    ANSI_BG_MAGENTA,
-    ANSI_BG_RED,
-    ANSI_BG_WHITE,
-    ANSI_BG_YELLOW,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
@@ -176,15 +141,18 @@ where
         Query::Compose(query) => execute_compose(query, docker, metrics).await,
         Query::Logs(query) => execute_logs(query, docker).await,
         Query::Ping => execute_ping(docker).await,
-        Query::Analyze(query) => {
-            analyze::execute_analyze(query, docker, metrics).await.map_err(ExecutorError::Analyze)
-        }
+        Query::Analyze(query) => analyze::execute_analyze(query, docker, metrics)
+            .await
+            .map_err(ExecutorError::Analyze),
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
         Query::Fields(target) => execute_fields(*target),
     }
 }
 
-pub async fn execute_with_store<S>(query: &Query, store: &S) -> Result<ExecutionResult, ExecutorError>
+pub async fn execute_with_store<S>(
+    query: &Query,
+    store: &S,
+) -> Result<ExecutionResult, ExecutorError>
 where
     S: TelemetryStore + ?Sized,
 {
@@ -193,9 +161,9 @@ where
         Query::Inspect(query) if query.at.is_some() => {
             storage::inspect_at(query, store).map_err(Into::into)
         }
-        Query::Events(query) if query.time.is_some() => {
-            storage::historical_events(query, store).await.map_err(Into::into)
-        }
+        Query::Events(query) if query.time.is_some() => storage::historical_events(query, store)
+            .await
+            .map_err(Into::into),
         Query::Observe(query) if query.time.is_some() => historical_observe(query, store),
         Query::Analyze(query) => {
             analyze::execute_analyze_with_store(query, store).map_err(ExecutorError::Analyze)
@@ -203,7 +171,7 @@ where
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
         Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
         Query::Observe(_) => Err(ExecutorError::UnsupportedQuery("observe historical")),
-        Query::Compose(query) =>            historical_compose(query, store),
+        Query::Compose(query) => historical_compose(query, store),
         Query::Logs(_) => Err(ExecutorError::UnsupportedQuery("logs")),
         Query::Ping => Err(ExecutorError::UnsupportedQuery("ping")),
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
@@ -434,14 +402,20 @@ where
 /// Return only columns that have at least one non-null, non-empty value across all rows.
 /// This hides columns that would appear blank and waste horizontal space.
 fn filter_display_columns(result: &ExecutionResult) -> Vec<String> {
-    result.rows[0].fields.keys().filter(|&col| {
+    result.rows[0]
+        .fields
+        .keys()
+        .filter(|&col| {
             result.rows.iter().any(|row| match row.fields.get(col) {
                 Some(JsonValue::Null) | None => false,
                 Some(JsonValue::String(s)) => !s.is_empty(),
                 Some(JsonValue::Array(a)) => !a.is_empty(),
                 Some(JsonValue::Object(o)) => !o.is_empty(),
                 _ => true, // numbers, booleans are always kept
-            })        }).cloned().collect()
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// Truncate a cell value to at most `max_width` characters, appending `…` when cut.
@@ -553,8 +527,12 @@ fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> St
             if let Some(val) = row.fields.get("size") {
                 let s = eval::render_json_cell(val);
                 if let Some(b) = eval::json_as_f64(&serde_json::Value::String(s)) {
-                    if b > max_b { max_b = b; }
-                    if b < min_b { min_b = b; }
+                    if b > max_b {
+                        max_b = b;
+                    }
+                    if b < min_b {
+                        min_b = b;
+                    }
                 }
             }
         }
@@ -578,8 +556,7 @@ fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> St
         + spacing_total;
 
     // Use terminal width if available, otherwise fall back to calculated width
-    let term_width = crossterm::terminal::size()
-        .map_or(120, |(w, _)| w);
+    let term_width = crossterm::terminal::size().map_or(120, |(w, _)| w);
 
     // If the table is too wide for the terminal, fall back to the simpler
     // colored render which handles overflow better (no fixed borders).
@@ -610,7 +587,8 @@ fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> St
         ),
     };
 
-    let backend = TestBackend::new(width, height);        let mut terminal = Terminal::new(backend).unwrap();
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
 
     let _ = terminal.draw(|f| {
         let area = Rect::new(0, 0, width, height);
@@ -650,7 +628,8 @@ fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> St
 
                         // For the "size" column, augment with a visual bar
                         if col.as_str() == "size" && size_max_bytes > 0.0 && !val.is_empty() {
-                            let bar = size_bar(&val, size_min_bytes, size_max_bytes, size_bar_width);
+                            let bar =
+                                size_bar(&val, size_min_bytes, size_max_bytes, size_bar_width);
                             if bar.is_empty() {
                                 Cell::from(Span::styled(val, cell_style))
                             } else {
@@ -689,16 +668,10 @@ fn render_table_ratatui_with_theme(result: &ExecutionResult, theme: Theme) -> St
             .header(RatatuiRow::new(header_cells).height(1))
             .block(
                 Block::default()
-                    .title(
-                        ratatui::text::Line::from(
-                            ratatui::text::Span::styled(
-                                title_text,
-                                Style::default()
-                                    .fg(title_fg)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                        )
-                    )
+                    .title(ratatui::text::Line::from(ratatui::text::Span::styled(
+                        title_text,
+                        Style::default().fg(title_fg).add_modifier(Modifier::BOLD),
+                    )))
                     .title_alignment(ratatui::layout::Alignment::Center)
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(border_fg)),
@@ -849,23 +822,27 @@ fn ansi_state_color_ratatui(value: &str) -> Color {
 fn threshold_color_ratatui_val(value_str: &str) -> Color {
     let cleaned = value_str.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
     #[allow(clippy::option_if_let_else)]
-    cleaned.parse::<f64>().map_or(Color::White, |val| if val > CPU_RED_THRESHOLD {
-        Color::Red
-    } else if val > CPU_YELLOW_THRESHOLD {
-        Color::Yellow
-    } else {
-        Color::Green
+    cleaned.parse::<f64>().map_or(Color::White, |val| {
+        if val > CPU_RED_THRESHOLD {
+            Color::Red
+        } else if val > CPU_YELLOW_THRESHOLD {
+            Color::Yellow
+        } else {
+            Color::Green
+        }
     })
 }
 
 fn memory_color_ratatui(value_str: &str) -> Color {
     #[allow(clippy::option_if_let_else)]
-    value_str.parse::<f64>().map_or(Color::White, |bytes| if bytes > ONE_GB as f64 {
-        Color::Red
-    } else if bytes > HALF_GB as f64 {
-        Color::Yellow
-    } else {
-        Color::Green
+    value_str.parse::<f64>().map_or(Color::White, |bytes| {
+        if bytes > ONE_GB as f64 {
+            Color::Red
+        } else if bytes > HALF_GB as f64 {
+            Color::Yellow
+        } else {
+            Color::Green
+        }
     })
 }
 
@@ -962,7 +939,8 @@ where
         | crate::ast::ComposeTarget::Stats => {
             let samples = latest_metrics_by_container(metrics.collect().await?);
             docker
-                .list_containers().await?
+                .list_containers()
+                .await?
                 .into_iter()
                 .filter(|c| {
                     has_compose_label(
@@ -1043,7 +1021,8 @@ where
             return execute_compose_logs(query, docker).await;
         }
         crate::ast::ComposeTarget::Networks => docker
-            .list_networks().await?
+            .list_networks()
+            .await?
             .into_iter()
             .filter(|n| {
                 has_compose_label(
@@ -1055,7 +1034,8 @@ where
             .map(network_row)
             .collect(),
         crate::ast::ComposeTarget::Volumes => docker
-            .list_volumes().await?
+            .list_volumes()
+            .await?
             .into_iter()
             .filter(|v| {
                 has_compose_label(
@@ -1092,8 +1072,7 @@ where
     let mut projects: BTreeMap<String, BTreeMap<&str, u64>> = BTreeMap::new();
 
     for container in &containers {
-        if let Some(project) =
-            extract_label_value(&container.labels, "com.docker.compose.project")
+        if let Some(project) = extract_label_value(&container.labels, "com.docker.compose.project")
         {
             let entry = projects.entry(project).or_default();
             entry.insert("containers", entry.get("containers").unwrap_or(&0) + 1);
@@ -1106,18 +1085,14 @@ where
     }
 
     for network in &networks {
-        if let Some(project) =
-            extract_label_value(&network.labels, "com.docker.compose.project")
-        {
+        if let Some(project) = extract_label_value(&network.labels, "com.docker.compose.project") {
             let entry = projects.entry(project).or_default();
             entry.insert("networks", entry.get("networks").unwrap_or(&0) + 1);
         }
     }
 
     for volume in &volumes {
-        if let Some(project) =
-            extract_label_value(&volume.labels, "com.docker.compose.project")
-        {
+        if let Some(project) = extract_label_value(&volume.labels, "com.docker.compose.project") {
             let entry = projects.entry(project).or_default();
             entry.insert("volumes", entry.get("volumes").unwrap_or(&0) + 1);
         }
@@ -1230,8 +1205,14 @@ where
             let mut fields = BTreeMap::new();
             fields.insert("line".to_owned(), JsonValue::Number(Number::from(i + 1)));
             fields.insert("message".to_owned(), JsonValue::String(line));
-            fields.insert("service".to_owned(), JsonValue::String(service_name.to_owned()));
-            fields.insert("container".to_owned(), JsonValue::String(container.name.clone()));
+            fields.insert(
+                "service".to_owned(),
+                JsonValue::String(service_name.to_owned()),
+            );
+            fields.insert(
+                "container".to_owned(),
+                JsonValue::String(container.name.clone()),
+            );
             rows.push(Row { fields });
         }
     }
@@ -1258,23 +1239,17 @@ where
 
     let project_containers: Vec<_> = containers
         .into_iter()
-        .filter(|c| {
-            has_compose_label(&c.labels, "com.docker.compose.project", &query.project)
-        })
+        .filter(|c| has_compose_label(&c.labels, "com.docker.compose.project", &query.project))
         .collect();
 
     let project_networks: Vec<_> = networks
         .into_iter()
-        .filter(|n| {
-            has_compose_label(&n.labels, "com.docker.compose.project", &query.project)
-        })
+        .filter(|n| has_compose_label(&n.labels, "com.docker.compose.project", &query.project))
         .collect();
 
     let project_volumes: Vec<_> = volumes
         .into_iter()
-        .filter(|v| {
-            has_compose_label(&v.labels, "com.docker.compose.project", &query.project)
-        })
+        .filter(|v| has_compose_label(&v.labels, "com.docker.compose.project", &query.project))
         .collect();
 
     let mut rows = Vec::new();
@@ -1285,8 +1260,7 @@ where
     ) {
         let mut seen_services: std::collections::HashSet<String> = std::collections::HashSet::new();
         for container in &project_containers {
-            if let Some(svc) =
-                extract_label_value(&container.labels, "com.docker.compose.service")
+            if let Some(svc) = extract_label_value(&container.labels, "com.docker.compose.service")
                 && seen_services.insert(svc.clone())
             {
                 let labels = &container.labels;
@@ -1303,9 +1277,7 @@ where
                     ("ports", json_string_array(container.ports.clone())),
                     (
                         "restart_count",
-                        container
-                            .restart_count
-                            .map_or(JsonValue::Null, json_u64),
+                        container.restart_count.map_or(JsonValue::Null, json_u64),
                     ),
                     (
                         "health",
@@ -1331,10 +1303,7 @@ where
                 ("name", json_string(net_name)),
                 ("driver", json_string(network.driver.clone())),
                 ("scope", json_string(network.scope.clone())),
-                (
-                    "containers",
-                    json_u64(network.containers.len() as u64),
-                ),
+                ("containers", json_u64(network.containers.len() as u64)),
             ]));
         }
     }
@@ -1349,10 +1318,7 @@ where
             rows.push(Row::from_fields([
                 ("name", json_string(vol_name)),
                 ("driver", json_string(volume.driver.clone())),
-                (
-                    "mountpoint",
-                    json_option_string(volume.mountpoint.clone()),
-                ),
+                ("mountpoint", json_option_string(volume.mountpoint.clone())),
                 ("scope", json_option_string(volume.scope.clone())),
             ]));
         }
@@ -1487,8 +1453,6 @@ fn field_descriptions(target: CollectionTarget) -> Vec<(String, String)> {
     }
 }
 
-
-
 async fn execute_observe<C, M>(
     query: &ObserveQuery,
     docker: &C,
@@ -1502,50 +1466,59 @@ where
         CollectionTarget::Containers => {
             let samples = latest_metrics_by_container(metrics.collect().await?);
             docker
-                .list_containers().await?
+                .list_containers()
+                .await?
                 .into_iter()
                 .map(|container| container_row(container, &samples))
                 .collect::<Vec<_>>()
         }
         CollectionTarget::Images => docker
-            .list_images().await?
+            .list_images()
+            .await?
             .into_iter()
             .map(image_row)
             .collect::<Vec<_>>(),
         CollectionTarget::Networks => docker
-            .list_networks().await?
+            .list_networks()
+            .await?
             .into_iter()
             .map(network_row)
             .collect::<Vec<_>>(),
         CollectionTarget::Volumes => docker
-            .list_volumes().await?
+            .list_volumes()
+            .await?
             .into_iter()
             .map(volume_row)
             .collect::<Vec<_>>(),
     };
 
     if let Some(join) = &query.join {
-        let right_alias = target_alias(join.right);            let right_rows: Vec<Row> = match join.right {
+        let right_alias = target_alias(join.right);
+        let right_rows: Vec<Row> = match join.right {
             CollectionTarget::Containers => {
                 let samples = latest_metrics_by_container(metrics.collect().await?);
                 docker
-                    .list_containers().await?
+                    .list_containers()
+                    .await?
                     .into_iter()
                     .map(|container| container_row(container, &samples))
                     .collect::<Vec<_>>()
             }
             CollectionTarget::Images => docker
-                .list_images().await?
+                .list_images()
+                .await?
                 .into_iter()
                 .map(image_row)
                 .collect::<Vec<_>>(),
             CollectionTarget::Networks => docker
-                .list_networks().await?
+                .list_networks()
+                .await?
                 .into_iter()
                 .map(network_row)
                 .collect::<Vec<_>>(),
             CollectionTarget::Volumes => docker
-                .list_volumes().await?
+                .list_volumes()
+                .await?
                 .into_iter()
                 .map(volume_row)
                 .collect::<Vec<_>>(),
@@ -1805,17 +1778,14 @@ fn container_row(container: Container, samples: &HashMap<String, MetricSample>) 
         ("labels", json_string_array(container.labels)),
         (
             "compose_project",
-            compose_project
-                .map_or(JsonValue::Null, JsonValue::String),
+            compose_project.map_or(JsonValue::Null, JsonValue::String),
         ),
         ("created_at", json_option_string(container.created_at)),
         ("started_at", json_option_string(container.started_at)),
         ("finished_at", json_option_string(container.finished_at)),
         (
             "restart_count",
-            container
-                .restart_count
-                .map_or(JsonValue::Null, json_u64),
+            container.restart_count.map_or(JsonValue::Null, json_u64),
         ),
         (
             "cpu",
@@ -1861,9 +1831,7 @@ fn container_row(container: Container, samples: &HashMap<String, MetricSample>) 
         ),
         (
             "health",
-            container
-                .health
-                .map_or(JsonValue::Null, JsonValue::String),
+            container.health.map_or(JsonValue::Null, JsonValue::String),
         ),
     ])
 }
@@ -1995,12 +1963,14 @@ fn ansi_threshold_color(value_str: &str) -> &'static str {
     // Strip trailing % or other non-numeric suffixes
     let cleaned = value_str.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
     #[allow(clippy::option_if_let_else)]
-    cleaned.parse::<f64>().map_or(ANSI_RESET, |val| if val > CPU_RED_THRESHOLD {
-        ANSI_FG_RED
-    } else if val > CPU_YELLOW_THRESHOLD {
-        ANSI_FG_YELLOW
-    } else {
-        ANSI_FG_GREEN
+    cleaned.parse::<f64>().map_or(ANSI_RESET, |val| {
+        if val > CPU_RED_THRESHOLD {
+            ANSI_FG_RED
+        } else if val > CPU_YELLOW_THRESHOLD {
+            ANSI_FG_YELLOW
+        } else {
+            ANSI_FG_GREEN
+        }
     })
 }
 
@@ -2043,7 +2013,7 @@ fn render_table_colored_with_theme(result: &ExecutionResult, theme: Theme) -> St
             }
         }
         let bw = 8; // fixed reasonable width for the bar
-        widths[si] += bw + 1;  // make room for the bar + space
+        widths[si] += bw + 1; // make room for the bar + space
         #[allow(clippy::float_cmp)]
         (if min_b == f64::MAX { 0.0 } else { min_b }, max_b, bw)
     } else {
@@ -2080,7 +2050,8 @@ fn render_table_colored_with_theme(result: &ExecutionResult, theme: Theme) -> St
                     // Determine per-cell foreground color
                     let cell_color: &'static str = match column.as_str() {
                         "cpu" => ansi_threshold_color(&value),
-                        "memory" | "mem" => {
+                        "memory" | "mem" =>
+                        {
                             #[allow(clippy::option_if_let_else)]
                             if let Ok(bytes) = value.parse::<f64>() {
                                 if bytes > ONE_GB as f64 {
@@ -2115,17 +2086,12 @@ fn render_table_colored_with_theme(result: &ExecutionResult, theme: Theme) -> St
     let mut lines = Vec::new();
 
     // ── Title ──
-    lines.push(format!(
-        "{title_color_code} {entity} {ANSI_RESET}"
-    ));
+    lines.push(format!("{title_color_code} {entity} {ANSI_RESET}"));
 
     // ── Header ──
     lines.push(format!(
         "{header_color_code}{}{ANSI_RESET}",
-        render_table_line(
-            &columns.clone(),
-            &widths
-        )
+        render_table_line(&columns.clone(), &widths)
     ));
 
     // ── Separator ──
@@ -2215,7 +2181,10 @@ where
         ));
         for id in &removed {
             if let Some(c) = snapshot.containers.iter().find(|c| c.id == *id) {
-                lines.push(format!("  {ANSI_FG_RED}- {name} ({id}){ANSI_RESET}", name = c.name));
+                lines.push(format!(
+                    "  {ANSI_FG_RED}- {name} ({id}){ANSI_RESET}",
+                    name = c.name
+                ));
             }
         }
     }
@@ -2257,8 +2226,6 @@ where
     Ok(lines.join("\n"))
 }
 
-
-
 fn json_option_string(value: Option<String>) -> JsonValue {
     value.map_or(JsonValue::Null, JsonValue::String)
 }
@@ -2272,8 +2239,7 @@ fn json_u64(value: u64) -> JsonValue {
 }
 
 fn json_f64(value: f64) -> JsonValue {
-    Number::from_f64(value)
-        .map_or(JsonValue::Null, JsonValue::Number)
+    Number::from_f64(value).map_or(JsonValue::Null, JsonValue::Number)
 }
 
 fn latest_metrics_by_container(samples: Vec<MetricSample>) -> HashMap<String, MetricSample> {
@@ -2341,27 +2307,25 @@ fn group_rows(rows: Vec<Row>, group_fields: &[String], aggregates: &[AggregateEx
                 && let Some(num) = eval::json_as_f64(v)
             {
                 match agg.function.as_str() {
-                        "sum" => {
-                            *acc.sums.entry(alias.clone()).or_insert(0.0) += num;
-                        }
-                        "avg" => {
-                            *acc.avg_sums.entry(alias.clone()).or_insert(0.0) += num;
-                            *acc.avg_counts.entry(alias.clone()).or_insert(0) += 1;
-                        }
-                        "min" => {
-                            if !acc.min_inits.contains(alias) || num < acc.mins[alias] {
-                                acc.mins.insert(alias.clone(), num);
-                                acc.min_inits.insert(alias.clone());
-                            }
-                        }
-                        "max"
-                            if !acc.max_inits.contains(alias) || num > acc.maxs[alias] =>
-                        {
-                            acc.maxs.insert(alias.clone(), num);
-                            acc.max_inits.insert(alias.clone());
-                        }
-                        _ => {}
+                    "sum" => {
+                        *acc.sums.entry(alias.clone()).or_insert(0.0) += num;
                     }
+                    "avg" => {
+                        *acc.avg_sums.entry(alias.clone()).or_insert(0.0) += num;
+                        *acc.avg_counts.entry(alias.clone()).or_insert(0) += 1;
+                    }
+                    "min" => {
+                        if !acc.min_inits.contains(alias) || num < acc.mins[alias] {
+                            acc.mins.insert(alias.clone(), num);
+                            acc.min_inits.insert(alias.clone());
+                        }
+                    }
+                    "max" if !acc.max_inits.contains(alias) || num > acc.maxs[alias] => {
+                        acc.maxs.insert(alias.clone(), num);
+                        acc.max_inits.insert(alias.clone());
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -2436,14 +2400,18 @@ mod tests {
 
     use super::*;
 
-    fn rt() -> tokio::runtime::Runtime { tokio::runtime::Runtime::new().unwrap() }
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Runtime::new().unwrap()
+    }
 
     #[test]
     fn observes_containers_from_mock_client() {
         let client = mock_client();
         let parsed = parser::parse("observe containers").expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
@@ -2458,7 +2426,9 @@ mod tests {
         let parsed =
             parser::parse("observe containers where state = running").expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -2475,7 +2445,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -2522,8 +2494,9 @@ mod tests {
         let parsed = parser::parse("observe containers | where cpu > 80% | select name, cpu")
             .expect("query should parse");
 
-        let result =
-            rt().block_on(execute_with_metrics(&parsed.query, &client, &metrics)).expect("query should execute");
+        let result = rt()
+            .block_on(execute_with_metrics(&parsed.query, &client, &metrics))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -2539,7 +2512,9 @@ mod tests {
         let parsed =
             parser::parse("observe images | select repository, tag").expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -2556,7 +2531,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let running = result
@@ -2607,8 +2584,9 @@ mod tests {
         let parsed = parser::parse("observe containers | group by state with avg(cpu) as avg_cpu")
             .expect("query should parse");
 
-        let result =
-            rt().block_on(execute_with_metrics(&parsed.query, &client, &metrics)).expect("query should execute");
+        let result = rt()
+            .block_on(execute_with_metrics(&parsed.query, &client, &metrics))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let running = result
@@ -2633,7 +2611,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let running = result
@@ -2658,7 +2638,9 @@ mod tests {
         let parsed = parser::parse("observe containers | group by state with count(id) as cnt")
             .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let running = result
@@ -2683,7 +2665,9 @@ mod tests {
         let parsed =
             parser::parse("observe containers | group by state").expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let running = result
@@ -2749,7 +2733,9 @@ mod tests {
         let parsed = parser::parse("observe containers | set tier = \"prod\" | select name, tier")
             .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
@@ -2765,7 +2751,9 @@ mod tests {
             "observe containers | set health = case when state = running then \"up\" else \"down\" end | select name, health",
         ).expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
@@ -2785,7 +2773,9 @@ mod tests {
             "observe containers | if state = running then set status_label = \"active\" else set status_label = \"inactive\" | select name, status_label",
         ).expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
@@ -2802,7 +2792,9 @@ mod tests {
     fn executes_compose_query() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         // Only myapp containers should be returned
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
@@ -2820,7 +2812,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | select name, state, compose_project")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert_eq!(
@@ -2835,7 +2829,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp services | select name, service")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         let api = result
             .rows
@@ -2861,7 +2857,9 @@ mod tests {
     fn executes_compose_empty_for_missing_project() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose nonexistent").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
 
@@ -2987,7 +2985,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed =
             parser::parse("compose myapp | where state = \"running\"").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert_eq!(row.fields["state"], JsonValue::String("running".to_owned()));
@@ -2998,7 +2998,9 @@ mod tests {
     fn executes_compose_with_sort() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | sort by name asc").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -3014,7 +3016,9 @@ mod tests {
     fn executes_compose_with_limit() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | limit 1").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
     }
 
@@ -3023,7 +3027,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed =
             parser::parse("compose myapp | select name, image").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert_eq!(row.fields.len(), 2);
@@ -3037,7 +3043,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | group by state with count(id) as cnt")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         let running_row = result
             .rows
@@ -3072,7 +3080,9 @@ mod tests {
         };
         let parsed = parser::parse("compose lonely services | select name, service")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].fields["service"], JsonValue::Null);
     }
@@ -3081,7 +3091,9 @@ mod tests {
     fn executes_compose_excludes_non_project_containers() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | select name").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         let names: Vec<&str> = result
             .rows
             .iter()
@@ -3097,7 +3109,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | sort by name asc | offset 1 | limit 1")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -3110,7 +3124,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed =
             parser::parse("compose myapp | select state | distinct").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["state"],
@@ -3184,7 +3200,9 @@ mod tests {
 
         let parsed =
             parser::parse("compose histapp | select name, state").expect("query should parse");
-        let result = rt().block_on(execute_with_store(&parsed.query, &store)).expect("should execute");
+        let result = rt()
+            .block_on(execute_with_store(&parsed.query, &store))
+            .expect("should execute");
         assert_eq!(result.rows.len(), 2);
         let names: Vec<&str> = result
             .rows
@@ -3229,7 +3247,9 @@ mod tests {
 
         let parsed = parser::parse("compose webapp services | select name, service")
             .expect("query should parse");
-        let result = rt().block_on(execute_with_store(&parsed.query, &store)).expect("should execute");
+        let result = rt()
+            .block_on(execute_with_store(&parsed.query, &store))
+            .expect("should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["service"],
@@ -3266,7 +3286,9 @@ mod tests {
             .unwrap();
 
         let parsed = parser::parse("compose nonexistent").expect("query should parse");
-        let result = rt().block_on(execute_with_store(&parsed.query, &store)).expect("should execute");
+        let result = rt()
+            .block_on(execute_with_store(&parsed.query, &store))
+            .expect("should execute");
         assert_eq!(result.rows.len(), 0);
     }
 
@@ -3274,7 +3296,9 @@ mod tests {
     fn executes_compose_networks() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp networks").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         let names: Vec<&str> = result
             .rows
@@ -3291,7 +3315,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp networks | select name, driver")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert!(row.fields.contains_key("name"));
@@ -3304,7 +3330,9 @@ mod tests {
     fn executes_compose_networks_empty_for_missing_project() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose nonexistent networks").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
 
@@ -3312,7 +3340,9 @@ mod tests {
     fn executes_compose_volumes() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp volumes").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -3325,7 +3355,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp volumes | select name, driver")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -3342,7 +3374,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp health | select name, service, health")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         let api = result
             .rows
@@ -3369,7 +3403,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp health | where health = \"unhealthy\"")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -3411,7 +3447,9 @@ mod tests {
 
         let parsed =
             parser::parse("compose histapp networks | select name").expect("query should parse");
-        let result = rt().block_on(execute_with_store(&parsed.query, &store)).expect("should execute");
+        let result = rt()
+            .block_on(execute_with_store(&parsed.query, &store))
+            .expect("should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -3442,7 +3480,9 @@ mod tests {
 
         let parsed = parser::parse("compose histapp volumes | select name, driver")
             .expect("query should parse");
-        let result = rt().block_on(execute_with_store(&parsed.query, &store)).expect("should execute");
+        let result = rt()
+            .block_on(execute_with_store(&parsed.query, &store))
+            .expect("should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -3625,7 +3665,9 @@ mod tests {
             "observe containers | where label.role = \"api\" | select name, label.role",
         )
         .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["label.role"],
@@ -3657,7 +3699,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         // Both rows pass through (matched: priority set; unmatched: unchanged)
         assert_eq!(result.rows.len(), 2);
@@ -3689,7 +3733,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let api = result
@@ -3720,7 +3766,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let api = result
@@ -3751,7 +3799,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let api = result
@@ -3781,7 +3831,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let api = result
@@ -3809,7 +3861,9 @@ mod tests {
         )
         .expect("query should parse");
 
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
         let api = result
@@ -3953,7 +4007,9 @@ mod tests {
             c
         };
         let parsed = parser::parse("logs container api tail 10").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 3);
         assert_eq!(
             result.rows[0].fields["line"],
@@ -3973,7 +4029,9 @@ mod tests {
     fn executes_logs_query_empty() {
         let client = mock_client();
         let parsed = parser::parse("logs container worker").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
 
@@ -3981,7 +4039,9 @@ mod tests {
     fn executes_ping_query() {
         let client = mock_client();
         let parsed = parser::parse("ping").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["status"],
@@ -4023,7 +4083,9 @@ mod tests {
         let client = join_mock_client();
         let parsed =
             parser::parse("observe containers join images on id = id").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert!(row.fields.contains_key("c.id"));
@@ -4062,7 +4124,9 @@ mod tests {
         let client = join_mock_client();
         let parsed = parser::parse("observe containers join networks on name = name")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
 
@@ -4073,7 +4137,9 @@ mod tests {
             "observe containers join images on id = id | where c.image = \"nginx:latest\"",
         )
         .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["c.name"],
@@ -4087,7 +4153,9 @@ mod tests {
         let parsed =
             parser::parse("observe containers join images on id = id | select c.name, i.name")
                 .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert_eq!(row.fields.len(), 2);
@@ -4101,7 +4169,9 @@ mod tests {
         let client = join_mock_client();
         let parsed = parser::parse("observe containers join volumes on state = scope")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
 
@@ -4109,7 +4179,9 @@ mod tests {
     fn executes_compose_ls() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose ls").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         let row = &result.rows[0];
         assert_eq!(row.fields["project"], JsonValue::String("myapp".to_owned()));
@@ -4118,7 +4190,10 @@ mod tests {
         assert_eq!(row.fields["stopped"], JsonValue::Number(0.into()));
         assert_eq!(row.fields["networks"], JsonValue::Number(2.into()));
         assert_eq!(row.fields["volumes"], JsonValue::Number(1.into()));
-        assert_eq!(row.fields["status"], JsonValue::String("running".to_owned()));
+        assert_eq!(
+            row.fields["status"],
+            JsonValue::String("running".to_owned())
+        );
     }
 
     #[test]
@@ -4126,7 +4201,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose ls | where containers > 0 | sort by project asc")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["project"],
@@ -4176,7 +4253,9 @@ mod tests {
             ..Default::default()
         };
         let parsed = parser::parse("compose ls").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["status"],
@@ -4188,7 +4267,9 @@ mod tests {
     fn executes_compose_images() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp images").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert!(!result.rows.is_empty());
     }
 
@@ -4197,7 +4278,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp stats | select name, service")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert!(row.fields.contains_key("name"));
@@ -4208,9 +4291,11 @@ mod tests {
     #[test]
     fn executes_compose_ps() {
         let client = compose_mock_client();
-        let parsed = parser::parse("compose myapp ps | select name, service")
-            .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let parsed =
+            parser::parse("compose myapp ps | select name, service").expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert!(row.fields.contains_key("name"));
@@ -4221,10 +4306,11 @@ mod tests {
     #[test]
     fn executes_compose_ps_with_filter() {
         let client = compose_mock_client();
-        let parsed =
-            parser::parse("compose myapp ps | where service = \"api-service\"")
-                .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let parsed = parser::parse("compose myapp ps | where service = \"api-service\"")
+            .expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -4241,7 +4327,9 @@ mod tests {
         );
         let parsed =
             parser::parse("compose myapp logs api-service tail 10").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
             result.rows[0].fields["message"],
@@ -4251,10 +4339,7 @@ mod tests {
             result.rows[0].fields["service"],
             JsonValue::String("api-service".to_owned())
         );
-        assert_eq!(
-            result.rows[0].fields["line"],
-            JsonValue::Number(1.into())
-        );
+        assert_eq!(result.rows[0].fields["line"], JsonValue::Number(1.into()));
     }
 
     #[test]
@@ -4272,13 +4357,16 @@ mod tests {
             "compose myapp logs api-service tail 10 | where message contains \"error\"",
         )
         .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
-        assert!(result.rows[0]
-            .fields["message"]
-            .as_str()
-            .unwrap()
-            .contains("error"));
+        assert!(
+            result.rows[0].fields["message"]
+                .as_str()
+                .unwrap()
+                .contains("error")
+        );
     }
 
     #[test]
@@ -4286,7 +4374,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed =
             parser::parse("compose myapp port api-service 8080").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["service"],
@@ -4297,9 +4387,10 @@ mod tests {
     #[test]
     fn executes_compose_config_services() {
         let client = compose_mock_client();
-        let parsed = parser::parse("compose myapp config services")
-            .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let parsed = parser::parse("compose myapp config services").expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert!(row.fields.contains_key("name"));
@@ -4311,9 +4402,10 @@ mod tests {
     #[test]
     fn executes_compose_config_networks() {
         let client = compose_mock_client();
-        let parsed = parser::parse("compose myapp config networks")
-            .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let parsed = parser::parse("compose myapp config networks").expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
             assert!(row.fields.contains_key("name"));
@@ -4324,9 +4416,10 @@ mod tests {
     #[test]
     fn executes_compose_config_volumes() {
         let client = compose_mock_client();
-        let parsed = parser::parse("compose myapp config volumes")
-            .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let parsed = parser::parse("compose myapp config volumes").expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert!(result.rows[0].fields.contains_key("name"));
         assert!(result.rows[0].fields.contains_key("driver"));
@@ -4335,9 +4428,10 @@ mod tests {
     #[test]
     fn executes_compose_config_all() {
         let client = compose_mock_client();
-        let parsed =
-            parser::parse("compose myapp config").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let parsed = parser::parse("compose myapp config").expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert!(result.rows.len() >= 5);
     }
 
@@ -4346,7 +4440,9 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp config services | where image = \"api:latest\"")
             .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["name"],
@@ -4431,8 +4527,7 @@ mod tests {
 
     #[test]
     fn parses_compose_logs_no_tail() {
-        let parsed =
-            parser::parse("compose myapp logs api-service").expect("query should parse");
+        let parsed = parser::parse("compose myapp logs api-service").expect("query should parse");
         match parsed.query {
             Query::Compose(q) => {
                 assert_eq!(q.target, ComposeTarget::Logs);
@@ -4460,8 +4555,7 @@ mod tests {
 
     #[test]
     fn parses_compose_config() {
-        let parsed = parser::parse("compose myapp config services")
-            .expect("query should parse");
+        let parsed = parser::parse("compose myapp config services").expect("query should parse");
         match parsed.query {
             Query::Compose(q) => {
                 assert_eq!(q.target, ComposeTarget::Config);
@@ -4474,8 +4568,7 @@ mod tests {
 
     #[test]
     fn parses_compose_config_networks() {
-        let parsed = parser::parse("compose myapp config networks")
-            .expect("query should parse");
+        let parsed = parser::parse("compose myapp config networks").expect("query should parse");
         match parsed.query {
             Query::Compose(q) => {
                 assert_eq!(q.target, ComposeTarget::Config);
@@ -4487,8 +4580,7 @@ mod tests {
 
     #[test]
     fn parses_compose_config_volumes() {
-        let parsed = parser::parse("compose myapp config volumes")
-            .expect("query should parse");
+        let parsed = parser::parse("compose myapp config volumes").expect("query should parse");
         match parsed.query {
             Query::Compose(q) => {
                 assert_eq!(q.target, ComposeTarget::Config);
@@ -4535,7 +4627,8 @@ mod tests {
 
     #[test]
     fn semantic_compose_projects_valid() {
-        let parsed = parser::parse("compose ls | where containers > 1").expect("query should parse");
+        let parsed =
+            parser::parse("compose ls | where containers > 1").expect("query should parse");
         let res = crate::semantic::validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -4550,8 +4643,7 @@ mod tests {
 
     #[test]
     fn semantic_compose_projects_invalid_field() {
-        let parsed =
-            parser::parse("compose ls | where cpu > 80%").expect("query should parse");
+        let parsed = parser::parse("compose ls | where cpu > 80%").expect("query should parse");
         let res = crate::semantic::validate_semantics(&parsed.query);
         assert!(matches!(res, Err(EvalError::UnsupportedField { .. })));
     }
@@ -4574,16 +4666,17 @@ mod tests {
 
     #[test]
     fn semantic_compose_stats_valid() {
-        let parsed = parser::parse("compose myapp stats | where cpu > 80%")
-            .expect("query should parse");
+        let parsed =
+            parser::parse("compose myapp stats | where cpu > 80%").expect("query should parse");
         let res = crate::semantic::validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
 
     #[test]
     fn semantic_compose_logs_valid() {
-        let parsed = parser::parse("compose myapp logs api-service | where message contains \"error\"")
-            .expect("query should parse");
+        let parsed =
+            parser::parse("compose myapp logs api-service | where message contains \"error\"")
+                .expect("query should parse");
         let res = crate::semantic::validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -4598,8 +4691,8 @@ mod tests {
 
     #[test]
     fn semantic_compose_config_valid() {
-        let parsed = parser::parse("compose myapp config | select name, image")
-            .expect("query should parse");
+        let parsed =
+            parser::parse("compose myapp config | select name, image").expect("query should parse");
         let res = crate::semantic::validate_semantics(&parsed.query);
         assert!(res.is_ok());
     }
@@ -4615,8 +4708,7 @@ mod tests {
     #[test]
     fn compose_events_returns_error() {
         let client = compose_mock_client();
-        let parsed =
-            parser::parse("compose myapp events").expect("query should parse");
+        let parsed = parser::parse("compose myapp events").expect("query should parse");
         let result = rt().block_on(execute(&parsed.query, &client));
         assert!(result.is_err());
     }
@@ -4625,16 +4717,20 @@ mod tests {
     fn compose_ls_empty_projects() {
         let client = MockDockerClient::default();
         let parsed = parser::parse("compose ls").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
 
     #[test]
     fn compose_port_no_matching_container() {
         let client = compose_mock_client();
-        let parsed = parser::parse("compose myapp port nonexistent 9999")
-            .expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client)).expect("query should execute");
+        let parsed =
+            parser::parse("compose myapp port nonexistent 9999").expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, &client))
+            .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
 }

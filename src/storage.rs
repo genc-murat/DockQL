@@ -224,7 +224,9 @@ where
         None => return Err(TelemetryError::MissingStore),
     };
     let source = MockEventSource { events };
-    events::collect_events(query, &source).await.map_err(Into::into)
+    events::collect_events(query, &source)
+        .await
+        .map_err(Into::into)
 }
 
 fn container_snapshot_row(timestamp: &str, container: Container) -> Row {
@@ -239,9 +241,7 @@ fn container_snapshot_row(timestamp: &str, container: Container) -> Row {
             ("state".to_owned(), json_string(container.state)),
             (
                 "restart_count".to_owned(),
-                container
-                    .restart_count
-                    .map_or(JsonValue::Null, json_u64),
+                container.restart_count.map_or(JsonValue::Null, json_u64),
             ),
         ]),
     }
@@ -282,14 +282,11 @@ fn volume_snapshot_row(timestamp: &str, volume: Volume) -> Row {
             ("driver".to_owned(), json_string(volume.driver)),
             (
                 "mountpoint".to_owned(),
-                volume
-                    .mountpoint
-                    .map_or(JsonValue::Null, JsonValue::String),
+                volume.mountpoint.map_or(JsonValue::Null, JsonValue::String),
             ),
         ]),
     }
 }
-
 
 fn json_u64(value: u64) -> JsonValue {
     JsonValue::Number(Number::from(value))

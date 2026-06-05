@@ -30,7 +30,9 @@ use crate::{
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>;
 
 pub trait EventSource {
-    fn events_stream(&self) -> impl std::future::Future<Output = Result<EventStream, EventsError>> + Send
+    fn events_stream(
+        &self,
+    ) -> impl std::future::Future<Output = Result<EventStream, EventsError>> + Send
     where
         Self: Sync;
 }
@@ -69,7 +71,10 @@ impl<C> EventSource for BollardEventSource<C>
 where
     C: DockerClient + Send + Sync + 'static,
 {
-    async fn events_stream(&self) -> Result<Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>, EventsError> {
+    async fn events_stream(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>, EventsError>
+    {
         let stream = self.docker.events_stream(None, None).await?;
         let mapped = stream.map(|result| result.map_err(EventsError::Docker));
         Ok(Box::pin(mapped))
@@ -84,14 +89,20 @@ pub struct MockEventSource {
 }
 
 impl EventSource for MockEventSource {
-    async fn events_stream(&self) -> Result<Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>, EventsError> {
+    async fn events_stream(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>, EventsError>
+    {
         let items: Vec<Result<DockerEvent, EventsError>> =
             self.events.clone().into_iter().map(Ok).collect();
         Ok(Box::pin(futures_util::stream::iter(items)))
     }
 }
 
-pub async fn collect_events<S>(query: &EventsQuery, source: &S) -> Result<ExecutionResult, EventsError>
+pub async fn collect_events<S>(
+    query: &EventsQuery,
+    source: &S,
+) -> Result<ExecutionResult, EventsError>
 where
     S: EventSource + ?Sized + Sync,
 {
@@ -514,7 +525,6 @@ fn json_value_to_string(value: &JsonValue) -> String {
     }
 }
 
-
 fn json_option_string(value: Option<String>) -> JsonValue {
     value.map_or(JsonValue::Null, JsonValue::String)
 }
@@ -557,7 +567,9 @@ mod tests {
             ],
         };
 
-        let result = rt.block_on(collect_events(&query, &source)).expect("events should collect");
+        let result = rt
+            .block_on(collect_events(&query, &source))
+            .expect("events should collect");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -587,7 +599,9 @@ mod tests {
             events: vec![event("start", "api"), event("die", "api")],
         };
 
-        let result = rt.block_on(collect_events(&query, &source)).expect("events should collect");
+        let result = rt
+            .block_on(collect_events(&query, &source))
+            .expect("events should collect");
 
         assert_eq!(result.rows.len(), 1);
     }
@@ -624,7 +638,9 @@ mod tests {
             ],
         };
 
-        let result = rt.block_on(collect_events(&query, &source)).expect("events should collect");
+        let result = rt
+            .block_on(collect_events(&query, &source))
+            .expect("events should collect");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
