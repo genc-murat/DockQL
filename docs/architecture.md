@@ -26,7 +26,7 @@ flowchart TD
 ## Core Components
 
 ### 1. Parser (`src/parser.rs`)
-A hand-written recursive descent parser that converts raw DOL strings into a strongly typed AST (`src/ast.rs`). It features detailed context-aware error reporting with source line display and a `^` pointer at the exact error column, plus explicit precedence handling for boolean operators (`and`, `or`, `not`), arithmetic operators (precedence climbing for `+`, `-`, `*`, `/`, `%`), and pipeline operators (`|`). Supports all expression types including arithmetic, function calls (`upper`, `lower`, `length`, `trim`, `concat`, `substring`, `coalesce`, `starts_with`, `ends_with`, `replace`, `reverse`, `repeat`, `position`, `split_part`, `now`, `date_format`, `date_diff`, `extract`), range checks (`between`, `is null`, `is not null`), string operators (`contains`, `matches`, `starts_with`, `ends_with`), aggregate functions (`sum`, `count`, `avg`, `min`, `max`), multi-field sort, inline comments (`#`), and all pipeline nodes (`where`, `select`, `group by`, `having`, `sort by`, `limit`, `offset`, `distinct`, `set`, `fill`, `let`, `if/then/else`, `alert`). Parser errors include the exact column position, a source context line with `-->` pointer, and a descriptive message.
+A hand-written recursive descent parser that converts raw DOL strings into a strongly typed AST (`src/ast.rs`). It features detailed context-aware error reporting with source line display and a `^` pointer at the exact error column, plus explicit precedence handling for boolean operators (`and`, `or`, `not`), arithmetic operators (precedence climbing for `+`, `-`, `*`, `/`, `%`), and pipeline operators (`|`). Supports all expression types including arithmetic, function calls (`upper`, `lower`, `length`, `trim`, `concat`, `substring`, `coalesce`, `starts_with`, `ends_with`, `replace`, `reverse`, `repeat`, `position`, `split_part`, `now`, `date_format`, `date_diff`, `extract`), range checks (`between`, `is null`, `is not null`), string operators (`contains`, `matches`, `starts_with`, `ends_with`), aggregate functions (`sum`, `count`, `avg`, `min`, `max`), multi-field sort, inline comments (`#`), and all pipeline nodes (`where`, `select`, `group by`, `having`, `sort by`, `limit`, `offset`, `distinct`, `set`, `fill`, `let`, `if/then/else`, `alert`). Parser errors include the exact column position, a source context line with `-->` pointer, and a descriptive message. Each error can include an optional **suggestion** (e.g., "try one of: `observe`, `events`, `inspect`..." or "did you mean `containers`?"). In the CLI and REPL, errors are formatted in ANSI **red** with bold `error:` prefix, **cyan** `-->` source pointer, **green** `^` caret, and **yellow** `help:` suggestion via the `format_color()` method on `ParseError` and `EvalError`.
 
 ### 2. Semantic Analyzer (`src/semantic.rs`)
 A static semantic analysis and type checking pass that runs immediately after parsing and before planning/execution. It validates:
@@ -43,7 +43,20 @@ Produces a `LogicalPlan` from the AST, performing filter push-down optimizations
 The central coordinator that matches the AST against the requested query type (`observe`, `events`, `inspect`, `analyze`, `alert`, `logs`, `ping`, `fields`, `compose`). It dispatches to the correct engine module based on the verb, applies pipeline stages (where, select, group by, having, sort by, limit, offset, distinct, set, if/else, alert), and formats results. Supports five output formats: table, CSV, JSON, JSON-Compact (minified JSON), and JSONL. ANSI-colored table output is auto-detected when the terminal supports it. The `render_diff` function compares current results against a stored snapshot. Parser errors are displayed in ANSI red with a source context line and `^` pointer at the error column.
 
 ### 5. Data Providers
-- **Docker Client (`src/docker.rs`):** Interfaces with the Docker Engine daemon (currently via Docker CLI wrapping) to list containers, images, volumes, networks, stream events, and inspect individual containers for enriched fields (`started_at`, `finished_at`, `restart_count`).
+- **Docker Client (`src/docker.rs`):** Interfaces with the Docker Engine daemon via the **bollard** crate (native Rust Docker API). The `DockerClient` trait provides fully async methods: `list_containers`, `list_images`, `list_networks`, `list_volumes`, `inspect_container`, `container_logs`, `container_stats`, `events_stream`, and `ping`. The `BollardDockerClient` implementation uses `connect_with_local_defaults()` or `connect_with_host()` for remote hosts. Container inspection enriches results with `started_at`, `finished_at`, `restart_count`, and health status. A `MockDockerClient` is available for unit testing.
+
+  All bollard API calls have configurable **timeouts** via `DockerApiConfig` (stored in `BollardDockerClient.api_cfg`):
+  - `call_timeout` (default 30s): general API calls (list, inspect, logs chunks)
+  - `quick_timeout` (default 10s): lightweight calls (ping)
+  - `max_retries` (default 2): retry count for unreliable operations (inspect, stats)
+  - `retry_base_ms` (default 200ms): exponential backoff base (200ms, 400ms for retries 0 and 1)
+
+  Three helper functions wrap all async calls with timeouts:
+  - `docker_call(fut)` — wraps a future with `call_timeout`
+  - `docker_call_quick(fut)` — wraps with `quick_timeout`
+  - `docker_call_with_retry(|| fut)` — wraps with `call_timeout` plus exponential backoff retries (for `inspect_container` and `container_stats`)
+
+  The `DockerError::Timeout(u64)` variant signals when a bollard operation exceeds its configured timeout.
 - **Metrics Collector (`src/metrics.rs`):** Collects and normalizes live container metrics (CPU, Memory, Network I/O). Uses a ring buffer in memory to provide rolling averages if needed.
 - **Telemetry Store (`src/storage.rs`, `src/sqlite_store.rs`):** Embedded SQLite database that persists metrics, events, and state snapshots for historical "time-travel" queries and retention.
 
@@ -61,13 +74,30 @@ A recursive expression evaluation engine that resolves `Expression` AST nodes ag
 The `eval_expr` function returns `JsonValue` (any type), while `eval_bool` wraps it with truthiness checking. The evaluator also provides `evaluate_set_value` for `SetValue` AST nodes (literal, expression, case/when, and if/else variants). Helper functions include `compare_json_values` for sorting and `render_json_cell` for display formatting.
 
 ### 9. Alerting Engine (`src/alerts.rs`)
-Evaluates conditions against live metrics/state at intervals. Manages duration guards (e.g., `for 2m`) to prevent flapping, and triggers actions when conditions are met. Actions are executed in real time:
-- **Webhook**: Sends an HTTP POST to the configured URL via `reqwest`.
-- **Restart**: Runs `docker restart <container>` via `std::process::Command`.
+Evaluates conditions against live metrics/state at intervals. Uses async `MetricsCollector` for data collection. Manages duration guards (e.g., `for 2m`) to prevent flapping, and triggers actions when conditions are met. Actions are executed in real time:
+- **Webhook**: Sends an HTTP POST to the configured URL via `reqwest` (uses a dedicated tokio runtime in a background thread for async HTTP). Timeout is configurable via `webhook_timeout` (default 10s).
+- **Restart**: Restarts the target container via bollard's `restart_container()` API (uses a dedicated tokio runtime in a background thread). Timeout is configurable via `restart_timeout` (default 30s).
 - **Alert history**: Fired alerts are persisted to the telemetry store's `alert_history` table when `--store` is active.
 
 ### 10. Config Loader & Subcommand (`src/config.rs`)
-Loads DOL settings from YAML or TOML files at standard paths (`~/.config/dol/config.yaml`, `.dolrc`, `dol.yaml`). Supports `store`, `output`, `host`, `metrics_interval`, `snapshot_interval`, and `theme` settings. The `dol config init|set|view` subcommand provides CLI-based config management.
+Loads DOL settings from YAML or TOML files at standard paths (`~/.config/dol/config.yaml`, `.dolrc`, `dol.yaml`). Supports the following settings:
+
+| Key | Default | Description |
+|---|---|---|
+| `store` | `~/.dol/store` | Path to telemetry store directory |
+| `output` | `table` | Default output format (`table`, `csv`, `json`, `json-compact`, `jsonl`) |
+| `host` | `unix:///var/run/docker.sock` | Docker daemon address |
+| `metrics_interval` | `30` | Metrics collection interval (seconds) |
+| `snapshot_interval` | `300` | State snapshot interval (seconds) |
+| `theme` | `dark` | Table colour theme (`dark` or `light`) |
+| `api_timeout` | `30` | Docker API call timeout (seconds) |
+| `api_quick_timeout` | `10` | Lightweight API call timeout (seconds) |
+| `stats_timeout` | `10` | Per-container stats timeout (seconds) |
+| `events_timeout` | `30` | Events stream per-item timeout (seconds) |
+| `webhook_timeout` | `10` | Alert webhook HTTP timeout (seconds) |
+| `restart_timeout` | `30` | Alert container restart timeout (seconds) |
+
+The `dol config init|set|view` subcommand provides CLI-based config management.
 
 ### 11. Interactive REPL (`src/repl.rs`)
 A readline-based interactive shell (`dol repl`) with tab completion for DOL keywords, command history (persisted across sessions), and REPL-specific commands (`.watch`, `.export`, `.output`, `.history`, `.help`). Supports all query types: observe, events, inspect, alert, and fields.
@@ -77,7 +107,7 @@ A ratatui-based TUI module providing two modes:
 - **`dol top`**: Full-screen live-updating container table with auto-refresh (2s), color-coded states, sort controls, and keyboard navigation.
 - **`dol dashboard`**: Multi-panel view with a container list and a live Docker events panel, focus-switchable via Tab.
 
-Both modes use `crossterm` for raw terminal input and alternate screen rendering. The dashboard spawns a background thread listening to `docker events --format "{{json .}}"` and uses an event-driven refresh model — container state changes trigger an immediate full refresh (containers + metrics), metrics are polled every 2 seconds, and a 30-second fallback timer ensures stale data is never shown if the events listener fails.
+Both modes use `crossterm` for raw terminal input and alternate screen rendering. Both modes (`dol top` and `dol dashboard`) spawn a background tokio task listening to Docker events via bollard's `events_stream()` API and use an event-driven refresh model — container state changes trigger an immediate full refresh (containers + metrics), metrics are polled every 2 seconds (asynchronously, without `block_on`), and a 30-second fallback timer ensures stale data is never shown if the events listener fails.
 
 ### 13. External Export Module (`src/export.rs`)
 Provides push-based integration with three external monitoring systems:

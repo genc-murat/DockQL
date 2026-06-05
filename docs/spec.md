@@ -277,7 +277,7 @@ Execution mode: stream or scheduled evaluation loop.
 Alert actions are executed in real time:
 - **print**: Outputs a formatted message to stdout.
 - **webhook**: Sends an HTTP POST to the specified URL. Requires network access.
-- **restart**: Runs `docker restart <container>` to restart the target container.
+- **restart**: Restarts the target container via the bollard native Docker API (`restart_container()`), without shelling out to the `docker` CLI.
 
 When `--store` is active, all fired alerts are persisted to the `alert_history` table for audit and review.
 
@@ -774,8 +774,9 @@ Parser errors show:
 - A source context line with `-->` pointing to the offending query.
 - A `^` pointer under the exact column where parsing failed.
 - A descriptive message explaining what was expected.
+- An optional **suggestion** with concrete fix guidance (e.g., "try one of: `observe`, `events`, `inspect`..." or "did you mean `containers`?")
 
-In the CLI and REPL, error messages are displayed in ANSI **red** for visual prominence.
+In the CLI and REPL, error messages are displayed in ANSI **red** with bold formatting for visual prominence. Source pointers appear in **cyan** (`-->`), caret in **green** (`^`), and suggestions in **yellow** (`help:`).
 
 ## 12. Reserved Keywords
 
@@ -870,7 +871,7 @@ The DOL CLI supports the following flags:
 | `top` | Live-updating TUI container monitor (top-like) with auto-refresh, keyboard controls, CPU/MEM gauge bars, filter mode, and event-driven refresh |
 | `dashboard` | Multi-panel TUI dashboard with container list, state distribution stats (histogram bars), top images, and live Docker events stream |
 | `config init` | Create a default config file at the standard config path |
-| `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`, `theme`) |
+| `config set <key> <value>` | Update a configuration value (`store`, `output`, `host`, `metrics-interval`, `snapshot-interval`, `theme`, `api-timeout`, `api-quick-timeout`, `stats-timeout`, `events-timeout`, `webhook-timeout`, `restart-timeout`) |
 | `config view` | Display the current merged configuration (from CLI flags + config file + defaults) |
 
 Additional REPL commands (within `dol repl`):
@@ -895,5 +896,34 @@ Config file support (YAML/TOML):
 - `dol.toml`
 - `~/.dolrc.yaml`
 - `~/.dolrc.toml`
+
+## 17. Docker API Timeout Configuration
+
+DOL uses configurable timeouts for all Docker API calls. These can be set in
+the config file or via `dol config set`:
+
+| Config Key | Default | Description |
+|------------|---------|-------------|
+| `api-timeout` | `30` | Timeout (seconds) for standard Docker API calls (list containers, images, networks, volumes, inspect, logs). |
+| `api-quick-timeout` | `10` | Timeout (seconds) for lightweight calls (ping). |
+| `stats-timeout` | `10` | Timeout (seconds) for per-container stats collection. |
+| `events-timeout` | `30` | Max seconds to wait for a single event from the Docker events stream (used by `dol top`, `dol dashboard`). |
+| `webhook-timeout` | `10` | HTTP request timeout for alert webhook POST actions. |
+| `restart-timeout` | `30` | Timeout (seconds) for alert container restart actions. |
+
+Example config:
+
+```yaml
+store: /path/to/telemetry.db
+output: table
+theme: light
+api_timeout: 60
+stats_timeout: 15
+events_timeout: 60
+webhook_timeout: 5
+restart_timeout: 45
+```
+
+All timeout values are optional — defaults are used when not set.
 
 The grammar defined in this specification is the source of truth for parser tests.

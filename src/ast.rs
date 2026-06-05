@@ -1,3 +1,17 @@
+//! Abstract syntax tree (AST) types for parsed DOL queries.
+//!
+//! Defines all node types produced by the parser: [`Query`] (top-level),
+//! [`Expression`] (conditions), [`PipelineNode`] (transformations), and
+//! their supporting enums/structs. All types are [`Serialize`] for
+//! debugging and analysis.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use dol::ast::*;
+//! let query = Query::Ping;
+//! ```
+
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -37,7 +51,7 @@ pub struct EventsQuery {
     pub pipeline: Vec<PipelineNode>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InspectQuery {
     pub target: SingularTarget,
     pub at: Option<String>,
@@ -111,7 +125,7 @@ pub enum CollectionTarget {
     Volumes,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SingularTarget {
     pub kind: SingularTargetKind,
     pub value: String,
@@ -125,7 +139,7 @@ pub enum SingularTargetKind {
     Volume,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum AnalysisTarget {
     Collection(CollectionTarget),
     Singular(SingularTarget),
@@ -156,8 +170,8 @@ pub enum PipelineNode {
     Alert(String),
     If {
         condition: Expression,
-        then_branch: Vec<PipelineNode>,
-        else_branch: Option<Vec<PipelineNode>>,
+        then_branch: Vec<Self>,
+        else_branch: Option<Vec<Self>>,
     },
     Set {
         field: String,
@@ -173,7 +187,7 @@ pub enum PipelineNode {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AggregateExpr {
     pub function: String,
     pub field: String,
@@ -201,7 +215,7 @@ pub enum SortDirection {
     Desc,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TimeSelector {
     Last(Duration),
     Range { from: String, to: String },
@@ -221,7 +235,7 @@ pub enum DurationUnit {
     Days,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum AlertAction {
     Print(String),
     Webhook(String),
@@ -233,33 +247,33 @@ pub enum Expression {
     Field(String),
     Literal(Value),
     Arithmetic {
-        left: Box<Expression>,
+        left: Box<Self>,
         op: BinOp,
-        right: Box<Expression>,
+        right: Box<Self>,
     },
     Comparison {
-        left: Box<Expression>,
+        left: Box<Self>,
         operator: Operator,
-        right: Box<Expression>,
+        right: Box<Self>,
     },
     In {
-        expr: Box<Expression>,
+        expr: Box<Self>,
         values: Vec<Value>,
     },
     Between {
-        expr: Box<Expression>,
-        low: Box<Expression>,
-        high: Box<Expression>,
+        expr: Box<Self>,
+        low: Box<Self>,
+        high: Box<Self>,
     },
-    IsNull(Box<Expression>),
-    IsNotNull(Box<Expression>),
+    IsNull(Box<Self>),
+    IsNotNull(Box<Self>),
     FnCall {
         name: String,
-        args: Vec<Expression>,
+        args: Vec<Self>,
     },
-    And(Box<Expression>, Box<Expression>),
-    Or(Box<Expression>, Box<Expression>),
-    Not(Box<Expression>),
+    And(Box<Self>, Box<Self>),
+    Or(Box<Self>, Box<Self>),
+    Not(Box<Self>),
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]

@@ -33,7 +33,7 @@ cargo install dol --git https://github.com/genc-murat/DockQL
 
 ```bash
 $ dol --version
-dol 0.1.1
+dol 0.5.0
 ```
 
 ---
@@ -745,110 +745,6 @@ a field name might collide with a keyword or when writing scripts.
 ---
 
 ## 15. Streaming Events
-
-`events` opens a live stream from the Docker event bus. It keeps running until
-you press Ctrl+C.
-
-Group rows by field values to see summaries.
-
-**Count containers by state:**
-
-```bash
-dol "observe containers | group by state"
-```
-
-```text
-┌──────────┬───────┐
-│ state    │ count │
-├──────────┼───────┤
-│ running  │ 4     │
-│ exited   │ 1     │
-│ paused   │ 1     │
-└──────────┴───────┘
-```
-
-**Top 5 images by container count:**
-
-```bash
-dol "observe containers | group by image | sort by count desc | limit 5"
-```
-
-**With aggregate functions (avg, sum, min, max):**
-
-```bash
-# Average CPU per image
-dol "observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc"
-
-# Total memory per compose project
-dol "observe containers | group by compose_project with sum(memory) as total_mem |
-     sort by total_mem desc"
-```
-
-**Filter groups with `having`:**
-
-Only show images with more than 2 containers:
-
-```bash
-dol "observe containers | group by image with count(id) as cnt | having cnt > 2"
-```
-
-The `having` clause is like `where` but operates on aggregate values *after*
-grouping.
-
----
-
-## 13. Date and Time Functions
-
-DOL provides a set of date/time functions for timestamp manipulation. These
-are especially useful for events, logs, and historical queries.
-
-**Current time:**
-
-```bash
-dol "observe containers | set now = now() | select name, now"
-```
-
-**Format a timestamp:**
-
-```bash
-dol "observe containers | set day = date_format(created_at, '%Y-%m-%d') | select name, day"
-```
-
-**Difference between two timestamps:**
-
-```bash
-# Hours between creation and last start
-dol "observe containers | set uptime = date_diff(created_at, started_at, 'hours') | select name, uptime"
-```
-
-**Extract a component from a timestamp:**
-
-```bash
-dol "observe containers | set month = extract(created_at, 'month') | select name, month"
-```
-
-Supported `extract` parts: `year`, `month`, `day`, `hour`, `minute`, `second`
-
-Supported `date_diff` units: `seconds`, `minutes`, `hours`, `days`
-
-#### `$var` Field References
-
-Field names can be prefixed with `$` for explicit field access. This is
-particularly useful on the right side of a comparison where bare identifiers
-are treated as literal values:
-
-```bash
-# Without $, 'running' is a literal value
-dol "observe containers where state = running"
-
-# With $, $state is explicitly a field reference
-dol "observe containers where $state = running"
-```
-
-Both forms produce the same result. The `$` prefix is especially helpful when
-a field name might collide with a keyword or when writing scripts.
-
-## 14. Streaming Events
 
 `events` opens a live stream from the Docker event bus. It keeps running until
 you press Ctrl+C.

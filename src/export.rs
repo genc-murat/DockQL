@@ -1,6 +1,22 @@
+//! Export query results to external monitoring systems.
+//!
+//! Supports three formats:
+//! - **InfluxDB** — line protocol via HTTP POST
+//! - **Grafana Loki** — JSON push API
+//! - **Prometheus** — exposition format via Pushgateway
+//!
+//! # Example
+//!
+//! ```ignore
+//! export::push_to_influxdb("http://localhost:8086/write?db=mydb", &result).await?;
+//! ```
+
 use serde_json::Value as JsonValue;
 
 use crate::executor::ExecutionResult;
+
+/// HTTP request timeout for export push operations.
+const EXPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum ExportFormat {
@@ -19,15 +35,15 @@ pub enum ExportError {
     BadStatus { status: u16, body: String },
 }
 
-/// Push a query result to InfluxDB v1/v2 HTTP write API.
+/// Push a query result to `InfluxDB` v1/v2 HTTP write API.
 ///
 /// `url` should be the full write endpoint, e.g.:
-///   `http://localhost:8086/write?db=mydb` (InfluxDB v1)
+///   `http://localhost:8086/write?db=mydb` (`InfluxDB` v1)
 ///   `http://localhost:8086/api/v2/write?org=myorg&bucket=mybucket` (v2)
 pub async fn push_to_influxdb(url: &str, result: &ExecutionResult) -> Result<(), ExportError> {
     let body = format_as_influx(result, "containers");
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(EXPORT_TIMEOUT)
         .build()?;
     let resp = client
         .post(url)
@@ -54,7 +70,7 @@ pub async fn push_to_loki(url: &str, result: &ExecutionResult) -> Result<(), Exp
     let body = format_as_loki(result)?;
     let push_url = format!("{}/loki/api/v1/push", url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(EXPORT_TIMEOUT)
         .build()?;
     let resp = client
         .post(&push_url)
@@ -81,7 +97,7 @@ pub async fn push_to_prometheus(url: &str, result: &ExecutionResult) -> Result<(
     let body = format_as_prometheus(result);
     let push_url = format!("{}/metrics/job/dol", url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(EXPORT_TIMEOUT)
         .build()?;
     let resp = client
         .put(&push_url)
@@ -100,10 +116,11 @@ pub async fn push_to_prometheus(url: &str, result: &ExecutionResult) -> Result<(
     Ok(())
 }
 
-/// Format execution result as InfluxDB line protocol.
+/// Format execution result as `InfluxDB` line protocol.
 ///
 /// Each row becomes a line in the format:
 ///   `<measurement>,name=<name>,image=<image>,state=<state> <field_kv>`
+#[must_use]
 pub fn format_as_influx(result: &ExecutionResult, measurement: &str) -> String {
     let mut lines = Vec::new();
     for row in &result.rows {
@@ -191,6 +208,7 @@ pub fn format_as_loki(result: &ExecutionResult) -> Result<String, serde_json::Er
 ///
 /// Numeric fields become gauge metrics:
 ///   `dol_<field>{container="<name>",image="<image>",state="<state>"} <value>`
+#[must_use]
 pub fn format_as_prometheus(result: &ExecutionResult) -> String {
     let mut lines = Vec::new();
     lines.push("# HELP dol_query Docker query results from DOL".to_owned());

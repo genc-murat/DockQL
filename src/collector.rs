@@ -25,8 +25,8 @@ pub struct CollectorConfig {
 impl Default for CollectorConfig {
     fn default() -> Self {
         Self {
-            snapshot_interval_secs: 300, // 5 minutes
-            metrics_interval_secs: 30,   // 30 seconds
+            snapshot_interval_secs: crate::DEFAULT_SNAPSHOT_INTERVAL,
+            metrics_interval_secs: crate::DEFAULT_METRICS_INTERVAL,
         }
     }
 }
@@ -43,6 +43,7 @@ pub struct CollectionStats {
 ///
 /// Returns a `watch::Receiver<CollectionStats>` that can be polled for progress
 /// and a `JoinHandle` to the background task.
+#[allow(clippy::needless_pass_by_value)]
 pub fn spawn_metrics_collector<S, C, M>(
     store: Arc<Mutex<S>>,
     docker: C,
@@ -52,8 +53,8 @@ pub fn spawn_metrics_collector<S, C, M>(
 ) -> tokio::task::JoinHandle<()>
 where
     S: TelemetryStore + Send + 'static,
-    C: DockerClient + Send + 'static,
-    M: MetricsCollector + Send + 'static,
+    C: DockerClient + Send + Sync + 'static,
+    M: MetricsCollector + Send + Sync + 'static,
 {
     tokio::spawn(async move {
         let mut metrics_interval =
@@ -67,7 +68,7 @@ where
         snapshot_interval.tick().await;
 
         // Take initial snapshot.
-        collect_snapshot(&store, &docker);
+        collect_snapshot(&store, &docker).await;
 
         loop {
             tokio::select! {
@@ -75,22 +76,22 @@ where
                     break;
                 }
                 _ = metrics_interval.tick() => {
-                    collect_metrics(&store, &metrics_collector);
+                    collect_metrics(&store, &metrics_collector).await;
                 }
                 _ = snapshot_interval.tick() => {
-                    collect_snapshot(&store, &docker);
+                    collect_snapshot(&store, &docker).await;
                 }
             }
         }
     })
 }
 
-fn collect_metrics<S, M>(store: &Arc<Mutex<S>>, metrics_collector: &M)
+async fn collect_metrics<S, M>(store: &Arc<Mutex<S>>, metrics_collector: &M)
 where
     S: TelemetryStore,
-    M: MetricsCollector,
+    M: MetricsCollector + ?Sized,
 {
-    match metrics_collector.collect() {
+    match metrics_collector.collect().await {
         Ok(samples) => {
             if let Ok(mut store) = store.lock() {
                 for sample in samples {
@@ -106,16 +107,16 @@ where
     }
 }
 
-fn collect_snapshot<S, C>(store: &Arc<Mutex<S>>, docker: &C)
+async fn collect_snapshot<S, C>(store: &Arc<Mutex<S>>, docker: &C)
 where
     S: TelemetryStore,
     C: DockerClient,
 {
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let containers = docker.list_containers().unwrap_or_default();
-    let images = docker.list_images().unwrap_or_default();
-    let networks = docker.list_networks().unwrap_or_default();
-    let volumes = docker.list_volumes().unwrap_or_default();
+    let containers = docker.list_containers().await.unwrap_or_default();
+    let images = docker.list_images().await.unwrap_or_default();
+    let networks = docker.list_networks().await.unwrap_or_default();
+    let volumes = docker.list_volumes().await.unwrap_or_default();
 
     let snapshot = TelemetrySnapshot {
         timestamp,
@@ -138,6 +139,9 @@ mod tests {
     use crate::{
         docker::MockDockerClient, metrics::MockMetricsCollector, storage::InMemoryTelemetryStore,
     };
+
+    /// How long to wait for the background collector to run before checking results.
+    const COLLECTOR_WAIT_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
 
     #[tokio::test]
     async fn collector_writes_snapshot_and_metrics() {
@@ -184,7 +188,7 @@ mod tests {
             spawn_metrics_collector(Arc::clone(&store), docker, metrics, config, shutdown_rx);
 
         // Wait a bit for collector to run.
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        tokio::time::sleep(COLLECTOR_WAIT_DURATION).await;
 
         // Signal shutdown.
         shutdown_tx.send(true).unwrap();

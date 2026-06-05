@@ -1,3 +1,18 @@
+//! Expression evaluation engine.
+//!
+//! Evaluates DOL [`Expression`] nodes against JSON-like field maps.
+//! Supports arithmetic, comparison, boolean logic, function calls
+//! (`upper`, `lower`, `date_format`, `coalesce`, etc.), and `CASE`/`IF`
+//! expressions.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let fields = BTreeMap::from([("cpu", json!(87.5))]);
+//! let expr = Expression::Comparison { left: ..., operator: Gt, right: ... };
+//! assert!(eval::evaluate_expression(&fields, &expr)?);
+//! ```
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -6,7 +21,84 @@ use serde_json::{Number, Value as JsonValue};
 use thiserror::Error;
 
 use chrono::{NaiveDateTime, Datelike, Timelike};
+
+use crate::{
+    ANSI_BOLD, ANSI_FG_CYAN, ANSI_FG_RED, ANSI_FG_YELLOW, ANSI_RESET,
+};
 use crate::ast::{BinOp, Expression, Operator, SetValue, Value};
+
+impl EvalError {
+    /// Return a fully ANSI-coloured error string suitable for terminal display.
+    #[must_use]
+    pub fn format_color(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+
+        write!(
+            out,
+            "{bold}{red}error{reset}: {msg}",
+            bold = ANSI_BOLD,
+            red = ANSI_FG_RED,
+            reset = ANSI_RESET,
+            msg = self,
+        )
+        .expect("write! to String is infallible");
+
+        match self {
+            EvalError::UnsupportedField { field } => {
+                write!(
+                    out,
+                    "\n  {yellow}help{reset}: field `{field}` does not exist on this target",
+                    yellow = ANSI_FG_YELLOW,
+                    reset = ANSI_RESET,
+                    field = field,
+                )
+                .expect("write! to String is infallible");
+                write!(
+                    out,
+                    "\n  {cyan}note{reset}: use `fields <target>` to list available fields",
+                    cyan = ANSI_FG_CYAN,
+                    reset = ANSI_RESET,
+                )
+                .expect("write! to String is infallible");
+            }
+            EvalError::InvalidComparison { field, operator } => {
+                write!(
+                    out,
+                    "\n  {yellow}help{reset}: field `{field}` cannot be used with operator `{operator}`",
+                    yellow = ANSI_FG_YELLOW,
+                    reset = ANSI_RESET,
+                    field = field,
+                    operator = operator,
+                )
+                .expect("write! to String is infallible");
+            }
+            EvalError::UnknownFunction { name } => {
+                write!(
+                    out,
+                    "\n  {yellow}help{reset}: `{name}` is not a known function",
+                    yellow = ANSI_FG_YELLOW,
+                    reset = ANSI_RESET,
+                    name = name,
+                )
+                .expect("write! to String is infallible");
+            }
+            EvalError::InvalidArguments { name } => {
+                write!(
+                    out,
+                    "\n  {yellow}help{reset}: check the arguments for `{name}()`",
+                    yellow = ANSI_FG_YELLOW,
+                    reset = ANSI_RESET,
+                    name = name,
+                )
+                .expect("write! to String is infallible");
+            }
+            _ => {}
+        }
+
+        out
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum EvalError {
@@ -28,14 +120,14 @@ pub fn eval_expr(
     expression: &Expression,
 ) -> Result<JsonValue, EvalError> {
     match expression {
-        Expression::Field(field) => resolve_field(fields, field).map(|cow| cow.into_owned()),
+        Expression::Field(field) => resolve_field(fields, field).map(std::borrow::Cow::into_owned),
 
         Expression::Literal(value) => Ok(value_to_json(value)),
 
         Expression::Arithmetic { left, op, right } => {
             let l = eval_expr(fields, left)?;
             let r = eval_expr(fields, right)?;
-            apply_arithmetic(&l, op, &r)
+            apply_arithmetic(&l, *op, &r)
         }
 
         Expression::Comparison {
@@ -43,7 +135,7 @@ pub fn eval_expr(
             operator,
             right,
         } => {
-            let result = eval_bool_expr(fields, left, operator, right)?;
+            let result = eval_bool_expr(fields, left, *operator, right)?;
             Ok(JsonValue::Bool(result))
         }
 
@@ -73,8 +165,7 @@ pub fn eval_expr(
         Expression::IsNull(expr) => {
             let val = eval_expr_opt(fields, expr);
             let is_null = match val {
-                None => true,
-                Some(JsonValue::Null) => true,
+                None | Some(JsonValue::Null) => true,
                 Some(val) if val.is_string() && val.as_str().unwrap_or("").is_empty() => true,
                 _ => false,
             };
@@ -84,8 +175,7 @@ pub fn eval_expr(
         Expression::IsNotNull(expr) => {
             let val = eval_expr_opt(fields, expr);
             let is_not_null = match val {
-                None => false,
-                Some(JsonValue::Null) => false,
+                None | Some(JsonValue::Null) => false,
                 Some(val) if val.is_string() && val.as_str().unwrap_or("").is_empty() => false,
                 _ => true,
             };
@@ -123,7 +213,7 @@ pub fn eval_expr(
     }
 }
 
-/// Like eval_expr but returns None instead of erroring on missing fields.
+/// Like `eval_expr` but returns None instead of erroring on missing fields.
 fn eval_expr_opt(
     fields: &BTreeMap<String, JsonValue>,
     expression: &Expression,
@@ -174,7 +264,7 @@ fn json_is_truthy(val: &JsonValue) -> bool {
     match val {
         JsonValue::Null => false,
         JsonValue::Bool(b) => *b,
-        JsonValue::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        JsonValue::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
         JsonValue::String(s) => !s.is_empty() && s != "0" && s.to_lowercase() != "false",
         JsonValue::Array(a) => !a.is_empty(),
         JsonValue::Object(_) => true,
@@ -184,7 +274,7 @@ fn json_is_truthy(val: &JsonValue) -> bool {
 fn eval_bool_expr(
     fields: &BTreeMap<String, JsonValue>,
     left: &Expression,
-    operator: &Operator,
+    operator: Operator,
     right: &Expression,
 ) -> Result<bool, EvalError> {
     let l = eval_expr(fields, left)?;
@@ -289,14 +379,14 @@ fn eval_bool_expr(
 
 fn apply_arithmetic(
     left: &JsonValue,
-    op: &BinOp,
+    op: BinOp,
     right: &JsonValue,
 ) -> Result<JsonValue, EvalError> {
     let l = json_as_f64(left)
-        .ok_or_else(|| EvalError::Arithmetic(format!("left operand is not numeric: {left:?}")))?;
-    let r = json_as_f64(right)
-        .ok_or_else(|| EvalError::Arithmetic(format!("right operand is not numeric: {right:?}")))?;
-    let result = match op {
+        .ok_or_else(|| EvalError::Arithmetic(format!("left operand is not numeric: {left:?}"))            )?;
+            let r = json_as_f64(right)
+                .ok_or_else(|| EvalError::Arithmetic(format!("right operand is not numeric: {right:?}")))?;
+            let result = match op {
         BinOp::Add => l + r,
         BinOp::Sub => l - r,
         BinOp::Mul => l * r,
@@ -365,13 +455,11 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             let start = args
                 .get(1)
                 .and_then(json_as_f64)
-                .map(|f| f as usize)
-                .unwrap_or(0);
+                .map_or(0, |f| f as usize);
             let len = args
                 .get(2)
                 .and_then(json_as_f64)
-                .map(|f| f as usize)
-                .unwrap_or(s.len());
+                .map_or(s.len(), |f| f as usize);
             let end = (start + len).min(s.len());
             let sub = if start < s.len() { &s[start..end] } else { "" };
             Ok(JsonValue::String(sub.to_owned()))
@@ -426,7 +514,7 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             let s = args.first().and_then(|v| v.as_str()).ok_or_else(|| {
                 EvalError::InvalidArguments { name: name.to_owned() }
             })?;
-            let n = args.get(1).and_then(json_as_f64).map(|f| f as usize).unwrap_or(0);
+            let n = args.get(1).and_then(json_as_f64).map_or(0, |f| f as usize);
             Ok(JsonValue::String(s.repeat(n)))
         }
         "position" => {
@@ -436,7 +524,7 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             let substr = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
                 EvalError::InvalidArguments { name: name.to_owned() }
             })?;
-            let pos = s.find(substr).map(|i| i as u64).unwrap_or(0);
+            let pos = s.find(substr).map_or(0, |i| i as u64);
             Ok(JsonValue::Number(Number::from(pos)))
         }
         "now" => {
@@ -484,12 +572,12 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             })?;
             let dt = parse_timestamp(ts)?;
             let result = match part {
-                "year" => dt.year() as i64,
-                "month" => dt.month() as i64,
-                "day" => dt.day() as i64,
-                "hour" => dt.hour() as i64,
-                "minute" => dt.minute() as i64,
-                "second" => dt.second() as i64,
+                "year" => i64::from(dt.year()),
+                "month" => i64::from(dt.month()),
+                "day" => i64::from(dt.day()),
+                "hour" => i64::from(dt.hour()),
+                "minute" => i64::from(dt.minute()),
+                "second" => i64::from(dt.second()),
                 _ => return Err(EvalError::InvalidArguments { name: name.to_owned() }),
             };
             Ok(JsonValue::Number(Number::from(result)))
@@ -501,7 +589,7 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
             let delim = args.get(1).and_then(|v| v.as_str()).ok_or_else(|| {
                 EvalError::InvalidArguments { name: name.to_owned() }
             })?;
-            let n = args.get(2).and_then(json_as_f64).map(|f| f as usize).unwrap_or(1);
+            let n = args.get(2).and_then(json_as_f64).map_or(1, |f| f as usize);
             let part = s.split(delim).nth(n.saturating_sub(1)).unwrap_or("").to_owned();
             Ok(JsonValue::String(part))
         }
@@ -608,8 +696,7 @@ pub fn evaluate_set_value(
             }
             Ok(else_value
                 .as_ref()
-                .map(|expr| eval_expr(fields, expr))
-                .unwrap_or(Ok(JsonValue::Null))?)
+                .map_or(Ok(JsonValue::Null), |expr| eval_expr(fields, expr))?)
         }
         SetValue::IfElse {
             condition,
@@ -621,8 +708,7 @@ pub fn evaluate_set_value(
             } else {
                 Ok(else_value
                     .as_ref()
-                    .map(|expr| eval_expr(fields, expr))
-                    .unwrap_or(Ok(JsonValue::Null))?)
+                    .map_or(Ok(JsonValue::Null), |expr| eval_expr(fields, expr))?)
             }
         }
     }
@@ -630,16 +716,15 @@ pub fn evaluate_set_value(
 
 pub fn value_to_json(value: &Value) -> JsonValue {
     match value {
-        Value::String(s) => JsonValue::String(s.clone()),
-        Value::Identifier(s) => JsonValue::String(s.clone()),
+        Value::String(s) | Value::Identifier(s) => JsonValue::String(s.clone()),
         Value::Integer(n) => JsonValue::Number(Number::from(*n)),
         Value::Float(f) | Value::Percentage(f) => Number::from_f64(*f)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null),
+            .map_or(JsonValue::Null, JsonValue::Number),
         Value::Boolean(b) => JsonValue::Bool(*b),
     }
 }
 
+#[must_use]
 pub fn json_eq(left: &JsonValue, right: &JsonValue) -> bool {
     match (left, right) {
         (JsonValue::String(a), JsonValue::String(b)) => a == b,
@@ -651,6 +736,7 @@ pub fn json_eq(left: &JsonValue, right: &JsonValue) -> bool {
 }
 
 // Kept for backward compat with the few external callers
+#[must_use]
 pub fn json_value_eq(actual: &JsonValue, expected: &Value) -> bool {
     match (actual, expected) {
         (JsonValue::String(actual), Value::String(expected) | Value::Identifier(expected)) => {
@@ -662,6 +748,7 @@ pub fn json_value_eq(actual: &JsonValue, expected: &Value) -> bool {
     }
 }
 
+#[must_use]
 pub fn json_contains_val(actual: &JsonValue, expected: &JsonValue) -> Option<bool> {
     let expected_str = match expected {
         JsonValue::String(s) => s.clone(),
@@ -679,10 +766,12 @@ pub fn json_contains_val(actual: &JsonValue, expected: &JsonValue) -> Option<boo
 }
 
 // Keep old signature for backward compat
+#[must_use]
 pub fn json_contains(actual: &JsonValue, expected: &Value) -> Option<bool> {
     json_contains_val(actual, &value_to_json(expected))
 }
 
+#[must_use]
 pub fn compare_json_values(left: &JsonValue, right: &JsonValue) -> Ordering {
     match (json_as_f64(left), json_as_f64(right)) {
         (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
@@ -707,8 +796,7 @@ fn parse_byte_size(s: &str) -> Option<f64> {
             .char_indices()
             .take_while(|(_, c)| c.is_ascii_digit() || *c == '.')
             .last()
-            .map(|(i, _)| i + 1)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i + 1);
         if num_end == 0 {
             // No leading digits — try direct parse
             return s.parse::<f64>().ok();
@@ -740,6 +828,7 @@ fn parse_byte_size(s: &str) -> Option<f64> {
     Some(number * multiplier)
 }
 
+#[must_use]
 pub fn json_as_f64(value: &JsonValue) -> Option<f64> {
     match value {
         JsonValue::Number(value) => value.as_f64(),
@@ -755,6 +844,7 @@ pub fn json_as_f64(value: &JsonValue) -> Option<f64> {
     }
 }
 
+#[must_use]
 pub fn value_as_f64(value: &Value) -> Option<f64> {
     match value {
         Value::Integer(value) => Some(*value as f64),
@@ -764,6 +854,7 @@ pub fn value_as_f64(value: &Value) -> Option<f64> {
     }
 }
 
+#[must_use]
 pub fn value_as_text(value: &Value) -> Option<String> {
     match value {
         Value::String(value) | Value::Identifier(value) => Some(value.clone()),

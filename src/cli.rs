@@ -1,3 +1,17 @@
+//! CLI argument parsing and command dispatch.
+//!
+//! Uses [`clap`] to define the `dol` command-line interface: subcommands
+//! (config, repl, top, dashboard), flags (`--output`, `--store`, `--watch`,
+//! etc.), and the positional DOL query string. The [`run`] function
+//! dispatches execution based on the parsed arguments.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let cli = Cli::parse_from(["dol", "observe containers"]);
+//! cli::run(cli).await?;
+//! ```
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -9,24 +23,71 @@ use crate::{
     collector::{self, CollectorConfig},
     config::{self, ConfigAction, DolConfig},
     dashboard,
-    docker::DockerCliClient,
-    events::{self, DockerCliEventSource},
+    docker::BollardDockerClient,
+    events::{self, BollardEventSource},
     executor::{self, ExecutionResult, render_csv, render_jsonl, render_table, render_table_with_theme, Theme},
     export::{self, ExportFormat},
-    metrics::{DockerCliMetricsCollector, MetricsCollector},
+    metrics::{BollardMetricsCollector, MetricsCollector},
     parser, planner,
     sqlite_store::SqliteTelemetryStore,
     storage::TelemetryStore,
+    ALERT_EVAL_INTERVAL,
+    DEFAULT_METRICS_INTERVAL,
+    DEFAULT_SNAPSHOT_INTERVAL,
 };
 
 #[derive(Debug, Parser)]
 #[command(
     name = "dol",
     version,
-    about = "Docker Observability Language command line interface",
+    about = "Docker Observability Language — query, monitor, and analyze your Docker infrastructure",
+    long_about = "DOL (Docker Observability Language) is a query language for Docker infrastructure.
+Use SQL-like pipelines to observe containers, stream events, set up alerts,
+analyze anomalies, and inspect historical data — all from a single CLI.
+
+See the full language reference at: https://github.com/genc-murat/DockQL",
     subcommand_value_name = "COMMAND",
-    subcommand_negates_reqs = true
+    subcommand_negates_reqs = true,
+    after_help = r#"
+EXAMPLES:
+
+  Basic queries:
+    dol "observe containers"                                   List all containers
+    dol "observe containers | where state = running"           Filter running containers
+    dol "observe containers | select name, image, status"      Select specific fields
+    dol "observe containers | sort by memory desc | limit 5"   Top 5 by memory usage
+    dol "events containers"                                    Stream Docker events live
+
+  Advanced queries:
+    dol "observe containers | group by image | count"          Count containers per image
+    dol "alert when cpu > 80% for 2m then webhook http://..."  CPU alert with webhook
+    dol "inspect container <name>"                             Inspect a single container
+    dol "compose ls"                                           List compose projects
+    dol "analyze containers find anomalies"                    Detect issues automatically
+    dol "analyze containers explain"                           Full diagnostic summary
+
+  Working with files and store:
+    dol -f examples/ping.dol                                   Run query from file
+    dol --explain "observe containers"                         Show query plan (dry run)
+    dol --store ./dol.db --collect                             Start background collector
+
+  Output and integration:
+    dol "observe containers" --output json                     JSON output
+    dol "observe containers" --output csv --export results.csv Export to CSV file
+    dol "observe containers" --watch 5                         Re-run every 5 seconds
+    dol "observe containers" --theme light                     Light theme for tables
+
+  Interactive modes:
+    dol repl              Interactive REPL with tab completion
+    dol top               Live container monitor (top-like)
+    dol dashboard         Multi-panel dashboard with events
+    dol config view       Show current configuration
+    dol config set theme light  Set default theme to light
+
+For more: https://github.com/genc-murat/DockQL
+"#
 )]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Cli {
     /// DOL query to execute (positional).
     pub query: Option<String>,
@@ -39,7 +100,7 @@ pub struct Cli {
     #[arg(long, value_enum)]
     pub output: Option<OutputFormat>,
 
-    /// Path to the SQLite telemetry store file.
+    /// Path to the `SQLite` telemetry store file.
     #[arg(long)]
     pub store: Option<String>,
 
@@ -48,11 +109,11 @@ pub struct Cli {
     pub collect: bool,
 
     /// Metrics collection interval in seconds (used with --collect).
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = DEFAULT_METRICS_INTERVAL)]
     pub metrics_interval: u64,
 
     /// Snapshot collection interval in seconds (used with --collect).
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = DEFAULT_SNAPSHOT_INTERVAL)]
     pub snapshot_interval: u64,
 
     /// Show telemetry store statistics.
@@ -84,19 +145,19 @@ pub struct Cli {
     #[arg(long)]
     pub export_format: Option<ExportFormat>,
 
-    /// Push results to InfluxDB v1 HTTP write API (e.g. http://localhost:8086/write?db=mydb).
+    /// Push results to `InfluxDB` v1 HTTP write API (e.g. <http://localhost:8086/write?db=mydb>).
     #[arg(long)]
     pub export_influx: Option<String>,
 
-    /// Push results to Grafana Loki HTTP push API (e.g. http://localhost:3100).
+    /// Push results to Grafana Loki HTTP push API (e.g. <http://localhost:3100>).
     #[arg(long)]
     pub export_grafana_loki: Option<String>,
 
-    /// Push results to Prometheus Pushgateway (e.g. http://localhost:9091).
+    /// Push results to Prometheus Pushgateway (e.g. <http://localhost:9091>).
     #[arg(long)]
     pub export_prometheus: Option<String>,
 
-    /// Remote Docker host (e.g. tcp://192.168.1.100:2375).
+    /// Remote Docker host (e.g. <tcp://192.168.1.100:2375>).
     #[arg(long)]
     pub host: Option<String>,
 
@@ -125,11 +186,11 @@ pub enum CliCommand {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Interactive REPL shell.
+    /// Interactive REPL shell with tab completion, history, and syntax-colored error messages.
     Repl,
-    /// Live-updating TUI container monitor (top-like).
+    /// Live-updating TUI container monitor (top-like) with CPU, memory, and network stats.
     Top,
-    /// Multi-panel dashboard with containers and events.
+    /// Multi-panel dashboard with container list, live event stream, and resource usage gauges.
     Dashboard,
 }
 
@@ -158,33 +219,18 @@ fn apply_host(cli_host: Option<&str>, config_host: Option<&str>) {
     }
 }
 
-/// Run a blocking function with an optional timeout by spawning it on a
-/// dedicated blocking thread. The closure must own all its data (`'static`).
-async fn spawn_with_timeout<T, F>(timeout_secs: Option<u64>, f: F) -> Result<T, anyhow::Error>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, anyhow::Error> + Send + 'static,
-{
-    match timeout_secs {
-        Some(secs) => {
-            let handle = tokio::task::spawn_blocking(f);
-            match tokio::time::timeout(std::time::Duration::from_secs(secs), handle).await {
-                Ok(Ok(Ok(result))) => Ok(result),
-                Ok(Ok(Err(e))) => Err(e),
-                Ok(Err(join_err)) => Err(anyhow::anyhow!("blocking task failed: {join_err}")),
-                Err(_elapsed) => Err(anyhow::anyhow!("query timed out after {}s", secs)),
-            }
-        }
-        None => f(),
-    }
-}
-
+#[allow(clippy::significant_drop_tightening)]
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let config = DolConfig::load();
 
+    // Initialise global alert timeout config from loaded config.
+    alerts::init_alert_timeouts(
+        config.webhook_timeout.unwrap_or(10),
+        config.restart_timeout.unwrap_or(30),
+    );
+
     // Set DOCKER_HOST *before* any subcommand or query execution so that
-    // DockerCliClient, DockerCliMetricsCollector, DockerCliEventSource,
-    // and all direct `docker` CLI calls pick up the correct host.
+    // all Docker clients pick up the correct host.
     apply_host(cli.host.as_deref(), config.host.as_deref());
 
     // Handle subcommands.
@@ -264,8 +310,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("--collect requires --store <path>"))?;
         let store = SqliteTelemetryStore::open(store_path)?;
         let store = Arc::new(Mutex::new(store));
-        let docker = DockerCliClient::default();
-        let metrics = DockerCliMetricsCollector::default();
+        let docker_inner = BollardDockerClient::connect_with_config(&config)?;
+        let metrics = BollardMetricsCollector::with_config(std::sync::Arc::new(docker_inner.clone()), &config);
+        let docker = docker_inner;
         let config_cfg = CollectorConfig {
             snapshot_interval_secs: cli.snapshot_interval,
             metrics_interval_secs: cli.metrics_interval,
@@ -306,7 +353,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     // Read query from --file if provided, otherwise use positional argument.
     let query = if let Some(ref file_path) = cli.file {
         std::fs::read_to_string(file_path)
-            .map_err(|e| anyhow::anyhow!("failed to read file '{}': {}", file_path, e))?
+            .map_err(|e| anyhow::anyhow!("failed to read file '{file_path}': {e}"))?
     } else {
         cli.query.as_deref().unwrap_or_default().to_owned()
     };
@@ -319,7 +366,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let parsed = parser::parse(&query)?;
 
     if cli.explain {
-        let plan = planner::plan(&parsed.query).map_err(|e| anyhow::anyhow!("plan error: {e}"))?;
+        let plan = planner::plan(&parsed.query);
         println!("{plan}");
         return Ok(());
     }
@@ -333,24 +380,22 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     let output_result = |result: &ExecutionResult| -> anyhow::Result<()> {
         // When --export-format is set, write in that format regardless of --output
-        if let Some(export_fmt) = cli.export_format {
-            if let Some(ref writer) = export_writer {
-                use std::io::Write;
-                let mut file = writer.lock().unwrap();
-                match export_fmt {
-                    ExportFormat::Influx => {
-                        let text = export::format_as_influx(result, "containers");
-                        file.write_all(text.as_bytes())?;
-                    }
-                    ExportFormat::Loki => {
-                        let text = export::format_as_loki(result)?;
-                        file.write_all(text.as_bytes())?;
-                    }
-                    ExportFormat::Prometheus => {
-                        let text = export::format_as_prometheus(result);
-                        file.write_all(text.as_bytes())?;
-                    }
-                }
+        if let Some(export_fmt) = cli.export_format {                    if let Some(ref writer) = export_writer {                        use std::io::Write;
+                        let mut file = writer.lock().expect("lock writer");
+                        match export_fmt {
+                            ExportFormat::Influx => {
+                                let text = export::format_as_influx(result, "containers");
+                                file.write_all(text.as_bytes())?;
+                            }
+                            ExportFormat::Loki => {
+                                let text = export::format_as_loki(result)?;
+                                file.write_all(text.as_bytes())?;
+                            }
+                            ExportFormat::Prometheus => {
+                                let text = export::format_as_prometheus(result);
+                                file.write_all(text.as_bytes())?;
+                            }
+                        }
             }
             return Ok(());
         }
@@ -358,10 +403,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         match output_format {
             OutputFormat::Table => {
                 let text = render_table_with_theme(result, effective_theme);
-                if let Some(ref writer) = export_writer {
-                    use std::io::Write;
-                    let mut file = writer.lock().unwrap();
-                    writeln!(file, "{text}")?;
+                if let Some(ref writer) = export_writer {                        use std::io::Write;
+                        let mut file = writer.lock().expect("lock writer");
+                        writeln!(file, "{text}")?;
                 } else {
                     print!("{text}");
                 }
@@ -370,7 +414,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 if let Ok(json) = serde_json::to_string_pretty(&result) {
                     if let Some(ref writer) = export_writer {
                         use std::io::Write;
-                        let mut file = writer.lock().unwrap();
+                        let mut file = writer.lock().expect("lock writer");
                         file.write_all(json.as_bytes())?;
                     } else {
                         println!("{json}");
@@ -381,7 +425,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 if let Ok(json) = serde_json::to_string(&result) {
                     if let Some(ref writer) = export_writer {
                         use std::io::Write;
-                        let mut file = writer.lock().unwrap();
+                        let mut file = writer.lock().expect("lock writer");
                         file.write_all(json.as_bytes())?;
                     } else {
                         println!("{json}");
@@ -392,7 +436,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 let csv = render_csv(result);
                 if let Some(ref writer) = export_writer {
                     use std::io::Write;
-                    let mut file = writer.lock().unwrap();
+                    let mut file = writer.lock().expect("lock writer");
                     writeln!(file, "{csv}")?;
                 } else {
                     println!("{csv}");
@@ -402,7 +446,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 let jsonl = render_jsonl(result);
                 if let Some(ref writer) = export_writer {
                     use std::io::Write;
-                    let mut file = writer.lock().unwrap();
+                    let mut file = writer.lock().expect("lock writer");
                     file.write_all(jsonl.as_bytes())?;
                     if !jsonl.is_empty() {
                         writeln!(file)?;
@@ -423,10 +467,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             )
         })?;
         let store = SqliteTelemetryStore::open(store_path)?;
-        let result = spawn_with_timeout(cli.timeout, move || {
-            executor::execute_with_store(&parsed.query, &store).map_err(Into::into)
-        })
-        .await?;
+        let result = if let Some(secs) = cli.timeout {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(secs),
+                executor::execute_with_store(&parsed.query, &store),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("query timed out after {secs}s"))??
+        } else {
+            executor::execute_with_store(&parsed.query, &store).await?
+        };
         output_result(&result)?;
         run_exports(&cli, &result).await?;
         return Ok(());
@@ -436,8 +486,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     if let Query::Alert(rule) = &parsed.query {
         // When --watch is set, alert is handled in the watch loop below with the specified interval.
         if cli.watch.is_none() {
+            let alert_docker = BollardDockerClient::connect_with_config(&config)
+                .ok()
+                .map(std::sync::Arc::new);
             let mut evaluator = AlertEvaluator::new();
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
 
             let store: Option<Arc<Mutex<SqliteTelemetryStore>>> = cli
                 .store
@@ -456,42 +509,55 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     _ = interval.tick() => {
                         // Only the metrics.collect() call is blocking; the evaluator
                         // is in-memory computation. Spawn just the collect.
-                        let samples = if let Some(secs) = cli.timeout {
-                            let m = DockerCliMetricsCollector::default();
-                            tokio::time::timeout(
+                        let samples = if let (Some(secs), Some(ad)) = (cli.timeout, alert_docker.as_ref()) {
+                            let m = BollardMetricsCollector::with_config(std::sync::Arc::clone(ad), &config);
+                            match tokio::time::timeout(
                                 std::time::Duration::from_secs(secs),
-                                tokio::task::spawn_blocking(move || m.collect()),
+                                m.collect(),
                             )
                             .await
-                            .map_err(|_| anyhow::anyhow!("metrics collection timed out after {}s", secs))?
-                            .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
-                        } else {
-                            DockerCliMetricsCollector::default().collect()
-                        };
-
-                        match samples {
-                            Ok(samples) => {
-                                if let Some(ref store) = store
-                                    && let Ok(mut s) = store.lock() {
-                                        for sample in &samples {
-                                            let _ = s.write_metric(sample.clone());
-                                        }
-                                    }
-
-                                match evaluator.evaluate_samples(rule, &samples, std::time::Instant::now()) {
-                                    Ok(events) => {
-                                        for event in events {
-                                            match output_format {
-                                                OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
-                                                OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
-                                                OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
-                                            }
-                                        }
-                                    }
-                                    Err(e) => eprintln!("Alert evaluation error: {e}"),
+                            {
+                                Ok(Ok(s)) => s,
+                                Ok(Err(e)) => {
+                                    eprintln!("Metrics collection error: {e}");
+                                    continue;
+                                }
+                                Err(_) => {
+                                    eprintln!("metrics collection timed out after {secs}s");
+                                    continue;
                                 }
                             }
-                            Err(e) => eprintln!("Metrics collection error: {e}"),
+                        } else if let Some(ref ad) = alert_docker {
+                            match BollardMetricsCollector::with_config(std::sync::Arc::clone(ad), &config).collect().await {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    eprintln!("Metrics collection error: {e}");
+                                    continue;
+                                }
+                            }
+                        } else {
+                            eprintln!("[metrics] Docker not connected — skipping collection");
+                            continue;
+                        };
+
+                        if let Some(ref store) = store
+                            && let Ok(mut s) = store.lock() {
+                                for sample in &samples {
+                                    let _ = s.write_metric(sample.clone());
+                                }
+                            }
+
+                        match evaluator.evaluate_samples(rule, &samples, std::time::Instant::now()) {
+                            Ok(events) => {
+                                for event in events {
+                                    match output_format {
+                                        OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
+                                        OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
+                                        OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("Alert evaluation error: {e}"),
                         }
                     }
                 }
@@ -502,7 +568,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // ── Events streaming with optional auto-stop timeout ──────────────
     if let Query::Events(events_query) = &parsed.query {
-        let source = DockerCliEventSource::default();
+        let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(&config)?);
+        let source = BollardEventSource::new(std::sync::Arc::clone(&docker));
 
         let store: Option<Arc<Mutex<SqliteTelemetryStore>>> = cli
             .store
@@ -557,7 +624,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     OutputFormat::Table => {
                         println!("{}", render_table(&result));
                     }
-                    OutputFormat::Json | OutputFormat::JsonCompact => {
+                    OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => {
                         println!(
                             "{}",
                             serde_json::to_string(&result.rows[0])
@@ -580,27 +647,19 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                             .collect();
                         println!("{}", vals.join(","));
                     }
-                    OutputFormat::Jsonl => {
-                        println!(
-                            "{}",
-                            serde_json::to_string(&result.rows[0])
-                                .map_err(crate::events::EventsError::Json)?
-                        );
-                    }
                 }
                 Ok(())
             };
 
         if let Some(secs) = cli.timeout {
-            // Run the synchronous stream on a blocking thread with a timeout.
-            let q = events_query.clone();
-            let s = DockerCliEventSource::default();
-            spawn_with_timeout(Some(secs), move || {
-                crate::events::stream_events(&q, &s, &event_callback).map_err(Into::into)
-            })
-            .await?;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(secs),
+                events::stream_events(events_query, &source, &event_callback),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("events stream timed out after {secs}s"))??;
         } else {
-            events::stream_events(events_query, &source, &event_callback)?;
+            events::stream_events(events_query, &source, &event_callback).await?;
         }
         return Ok(());
     }
@@ -626,8 +685,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     };
 
     // ── Batch query with optional --watch ──────────────────────────────
-    let docker = DockerCliClient::default();
-    let metrics = DockerCliMetricsCollector::default();
+    let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(&config)?);
+    let metrics = BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker), &config);
 
     if let Some(interval_secs) = cli.watch {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
@@ -638,59 +697,62 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     if let (Some(ev), Some(rule)) = (&mut alert_evaluator, &alert_rule) {
                         // ── Alert evaluation in --watch loop ──
                         let samples = if let Some(secs) = cli.timeout {
-                            let m = DockerCliMetricsCollector::default();
-                            tokio::time::timeout(
+                            match tokio::time::timeout(
                                 std::time::Duration::from_secs(secs),
-                                tokio::task::spawn_blocking(move || m.collect()),
+                                BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker), &config).collect(),
                             )
                             .await
-                            .map_err(|_| anyhow::anyhow!("metrics collection timed out after {}s", secs))?
-                            .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
-                        } else {
-                            DockerCliMetricsCollector::default().collect()
-                        };
-
-                        match samples {
-                            Ok(samples) => {
-                                if let Some(ref store) = alert_store
-                                    && let Ok(mut s) = store.lock() {
-                                        for sample in &samples {
-                                            let _ = s.write_metric(sample.clone());
-                                        }
-                                    }
-
-                                match ev.evaluate_samples(rule, &samples, std::time::Instant::now()) {
-                                    Ok(events) => {
-                                        for event in events {
-                                            match output_format {
-                                                OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
-                                                OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
-                                                OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
-                                            }
-                                        }
-                                    }
-                                    Err(e) => eprintln!("Alert evaluation error: {e}"),
+                            {
+                                Ok(Ok(s)) => s,
+                                Ok(Err(e)) => {
+                                    eprintln!("Metrics collection error: {e}");
+                                    continue;
+                                }
+                                Err(_) => {
+                                    eprintln!("metrics collection timed out after {secs}s");
+                                    continue;
                                 }
                             }
-                            Err(e) => eprintln!("Metrics collection error: {e}"),
+                        } else {
+                            match                        BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker), &config).collect().await {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    eprintln!("Metrics collection error: {e}");
+                                    continue;
+                                }
+                            }
+                        };
+
+                        if let Some(ref store) = alert_store
+                            && let Ok(mut s) = store.lock() {
+                                for sample in &samples {
+                                    let _ = s.write_metric(sample.clone());
+                                }
+                            }
+
+                        match ev.evaluate_samples(rule, &samples, std::time::Instant::now()) {
+                            Ok(events) => {
+                                for event in events {
+                                    match output_format {
+                                        OutputFormat::Table => println!("{}", alerts::render_alert_event(&event)),
+                                        OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => println!("{}", serde_json::to_string(&event)?),
+                                        OutputFormat::Csv => println!("{},{},{:?}", event.container_name, event.message, event.action),
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("Alert evaluation error: {e}"),
                         }
                     } else {
                         // ── Batch query execution ──
                         let result = if let Some(secs) = cli.timeout {
-                            let q = parsed.query.clone();
-                            let d = DockerCliClient::default();
-                            let m = DockerCliMetricsCollector::default();
-                            tokio::time::timeout(
+                            let q = parsed.query.clone();                                    tokio::time::timeout(
                                 std::time::Duration::from_secs(secs),
-                                tokio::task::spawn_blocking(move || {
-                                    executor::execute_with_metrics(&q, &d, &m)
-                                }),
+                                executor::execute_with_metrics(&q, docker.as_ref(), &metrics),
                             )
                             .await
-                            .map_err(|_| anyhow::anyhow!("query timed out after {}s", secs))?
-                            .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+                            .map_err(|_| anyhow::anyhow!("query timed out after {secs}s"))?
                         } else {
-                            executor::execute_with_metrics(&parsed.query, &docker, &metrics)
+                            executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics).await
                         };
 
                         match result {
@@ -713,18 +775,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // ── Single batch query with optional timeout ──────────────────────
     let result = if let Some(secs) = cli.timeout {
-        let q = parsed.query.clone();
-        let d = DockerCliClient::default();
-        let m = DockerCliMetricsCollector::default();
         tokio::time::timeout(
             std::time::Duration::from_secs(secs),
-            tokio::task::spawn_blocking(move || executor::execute_with_metrics(&q, &d, &m)),
+            executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("query timed out after {}s", secs))?
-        .map_err(|_| anyhow::anyhow!("blocking task panicked"))?
+        .map_err(|_| anyhow::anyhow!("query timed out after {secs}s"))?
     } else {
-        executor::execute_with_metrics(&parsed.query, &docker, &metrics)
+        executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics).await
     }?;
 
     if cli.diff {
@@ -770,7 +828,7 @@ async fn run_exports(cli: &Cli, result: &ExecutionResult) -> anyhow::Result<()> 
     }
     Ok(())
 }
-fn needs_store(query: &Query) -> bool {
+const fn needs_store(query: &Query) -> bool {
     match query {
         Query::Inspect(q) => q.at.is_some(),
         Query::Events(q) => q.time.is_some(),
@@ -782,6 +840,9 @@ fn needs_store(query: &Query) -> bool {
 mod tests {
     use super::*;
 
+    /// Timeout for tests that expect run() to loop indefinitely (no Docker available).
+    const TEST_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
     #[tokio::test]
     async fn rejects_empty_query() {
         let cli = Cli {
@@ -790,8 +851,8 @@ mod tests {
             output: None,
             store: None,
             collect: false,
-            metrics_interval: 30,
-            snapshot_interval: 300,
+            metrics_interval: DEFAULT_METRICS_INTERVAL,
+            snapshot_interval: DEFAULT_SNAPSHOT_INTERVAL,
             store_stats: false,
             apply_retention: false,
             explain: false,
@@ -822,8 +883,8 @@ mod tests {
             output: None,
             store: None,
             collect: false,
-            metrics_interval: 30,
-            snapshot_interval: 300,
+            metrics_interval: DEFAULT_METRICS_INTERVAL,
+            snapshot_interval: DEFAULT_SNAPSHOT_INTERVAL,
             store_stats: false,
             apply_retention: false,
             explain: false,
@@ -949,8 +1010,8 @@ mod tests {
             output: None,
             store: None,
             collect: false,
-            metrics_interval: 30,
-            snapshot_interval: 300,
+            metrics_interval: DEFAULT_METRICS_INTERVAL,
+            snapshot_interval: DEFAULT_SNAPSHOT_INTERVAL,
             store_stats: false,
             apply_retention: false,
             explain: false,
@@ -968,7 +1029,7 @@ mod tests {
         };
 
         // Watch loop runs indefinitely; use timeout to verify no panic
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), run(cli)).await;
+        let result = tokio::time::timeout(TEST_RUN_TIMEOUT, run(cli)).await;
 
         assert!(
             result.is_err(),
@@ -988,8 +1049,8 @@ mod tests {
             output: None,
             store: None,
             collect: false,
-            metrics_interval: 30,
-            snapshot_interval: 300,
+            metrics_interval: DEFAULT_METRICS_INTERVAL,
+            snapshot_interval: DEFAULT_SNAPSHOT_INTERVAL,
             store_stats: false,
             apply_retention: false,
             explain: false,
@@ -1008,7 +1069,7 @@ mod tests {
 
         // With --timeout, the collect() call uses spawn_blocking inside the watch loop.
         // Without docker, metrics collection fails and prints error, loop continues.
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), run(cli)).await;
+        let result = tokio::time::timeout(TEST_RUN_TIMEOUT, run(cli)).await;
 
         assert!(
             result.is_err(),
@@ -1025,8 +1086,8 @@ mod tests {
             output: None,
             store: None,
             collect: false,
-            metrics_interval: 30,
-            snapshot_interval: 300,
+            metrics_interval: DEFAULT_METRICS_INTERVAL,
+            snapshot_interval: DEFAULT_SNAPSHOT_INTERVAL,
             store_stats: false,
             apply_retention: false,
             explain: false,
@@ -1044,7 +1105,7 @@ mod tests {
         };
 
         // Dedicated alert loop also runs indefinitely
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), run(cli)).await;
+        let result = tokio::time::timeout(TEST_RUN_TIMEOUT, run(cli)).await;
 
         assert!(
             result.is_err(),

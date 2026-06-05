@@ -1,3 +1,16 @@
+//! Logical query plan generation.
+//!
+//! Converts a parsed [`Query`] into a [`LogicalPlan`] for display and
+//! optimisation. Plans can be shown via `dol --explain "observe containers"`.
+//! Includes a simple filter push-down optimisation.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let plan = planner::plan(&query);
+//! println!("{plan}"); // Shows execution plan
+//! ```
+
 use std::fmt;
 
 use crate::ast::{
@@ -31,7 +44,7 @@ pub struct EventsPlan {
     pub steps: Vec<PlanStep>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectPlan {
     pub target: crate::ast::SingularTarget,
     pub at: Option<String>,
@@ -82,8 +95,8 @@ pub enum PlanStep {
     Alert(String),
     If {
         condition: crate::ast::Expression,
-        then_branch: Vec<PlanStep>,
-        else_branch: Option<Vec<PlanStep>>,
+        then_branch: Vec<Self>,
+        else_branch: Option<Vec<Self>>,
     },
     Set {
         field: String,
@@ -91,18 +104,10 @@ pub enum PlanStep {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum PlanError {
-    #[error("empty pipeline after group by: select is required")]
-    EmptyPipelineAfterGroupBy,
-    #[error("group by without subsequent aggregation is not yet supported")]
-    GroupByWithoutAggregation,
-}
-
 impl fmt::Display for LogicalPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LogicalPlan::Observe(p) => {
+            Self::Observe(p) => {
                 writeln!(f, "ObservePlan {{ target: {:?} }}", p.target)?;
                 if let Some(join) = &p.join {
                     writeln!(f, "  JOIN {:?} ON ...", join.right)?;
@@ -112,14 +117,14 @@ impl fmt::Display for LogicalPlan {
                 }
                 Ok(())
             }
-            LogicalPlan::Events(p) => {
+            Self::Events(p) => {
                 writeln!(f, "EventsPlan {{ target: {:?} }}", p.target)?;
                 for step in &p.steps {
                     writeln!(f, "  {step}")?;
                 }
                 Ok(())
             }
-            LogicalPlan::Inspect(p) => {
+            Self::Inspect(p) => {
                 write!(f, "InspectPlan {{ target: {:?}, at: ", p.target.kind)?;
                 match &p.at {
                     Some(t) => write!(f, "Some(\"{t}\")")?,
@@ -127,7 +132,7 @@ impl fmt::Display for LogicalPlan {
                 }
                 writeln!(f, " }}")
             }
-            LogicalPlan::Analyze(p) => {
+            Self::Analyze(p) => {
                 writeln!(
                     f,
                     "AnalyzePlan {{ verb: {:?}, subject: {:?} }}",
@@ -138,10 +143,10 @@ impl fmt::Display for LogicalPlan {
                 }
                 Ok(())
             }
-            LogicalPlan::Alert(p) => {
+            Self::Alert(p) => {
                 writeln!(f, "AlertPlan {{ condition: {:?} }}", p.rule.condition)
             }
-            LogicalPlan::Logs(p) => {
+            Self::Logs(p) => {
                 writeln!(
                     f,
                     "LogsPlan {{ container: {}, tail: {:?} }}",
@@ -152,7 +157,7 @@ impl fmt::Display for LogicalPlan {
                 }
                 Ok(())
             }
-            LogicalPlan::Compose(p) => {
+            Self::Compose(p) => {
                 writeln!(
                     f,
                     "ComposePlan {{ project: {}, target: {:?} }}",
@@ -163,10 +168,10 @@ impl fmt::Display for LogicalPlan {
                 }
                 Ok(())
             }
-            LogicalPlan::Ping => {
+            Self::Ping => {
                 writeln!(f, "Ping {{ test Docker connectivity }}")
             }
-            LogicalPlan::Fields(target) => {
+            Self::Fields(target) => {
                 writeln!(f, "FieldsPlan {{ target: {target:?} }}")
             }
         }
@@ -176,20 +181,20 @@ impl fmt::Display for LogicalPlan {
 impl fmt::Display for PlanStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlanStep::Fetch(target) => write!(f, "Fetch({target:?})"),
-            PlanStep::Filter(_) => write!(f, "Filter(<expression>)"),
-            PlanStep::In { field, values } => {
+            Self::Fetch(target) => write!(f, "Fetch({target:?})"),
+            Self::Filter(_) => write!(f, "Filter(<expression>)"),
+            Self::In { field, values } => {
                 write!(f, "In({field}, [")?;
                 let vals: Vec<String> = values.iter().map(|v| format!("{v:?}")).collect();
                 write!(f, "{}", vals.join(", "))?;
                 write!(f, "])")
             }
-            PlanStep::Select(fields) => write!(f, "Select({})", fields.join(", ")),
-            PlanStep::GroupBy(fields) => write!(f, "GroupBy({})", fields.join(", ")),
-            PlanStep::SortBy { field, direction } => write!(f, "SortBy({field}, {direction:?})"),
-            PlanStep::Limit(n) => write!(f, "Limit({n})"),
-            PlanStep::Alert(msg) => write!(f, "Alert(\"{msg}\")"),
-            PlanStep::If {
+            Self::Select(fields) => write!(f, "Select({})", fields.join(", ")),
+            Self::GroupBy(fields) => write!(f, "GroupBy({})", fields.join(", ")),
+            Self::SortBy { field, direction } => write!(f, "SortBy({field}, {direction:?})"),
+            Self::Limit(n) => write!(f, "Limit({n})"),
+            Self::Alert(msg) => write!(f, "Alert(\"{msg}\")"),
+            Self::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -214,26 +219,27 @@ impl fmt::Display for PlanStep {
                 }
                 write!(f, ")")
             }
-            PlanStep::Set { field, value: _ } => write!(f, "Set({field}, <value>)"),
+            Self::Set { field, value: _ } => write!(f, "Set({field}, <value>)"),
         }
     }
 }
 
-pub fn plan(query: &Query) -> Result<LogicalPlan, PlanError> {
+#[must_use]
+pub fn plan(query: &Query) -> LogicalPlan {
     match query {
         Query::Observe(q) => plan_observe(q),
         Query::Events(q) => plan_events(q),
         Query::Inspect(q) => plan_inspect(q),
         Query::Analyze(q) => plan_analyze(q),
-        Query::Alert(rule) => Ok(LogicalPlan::Alert(AlertPlan { rule: rule.clone() })),
+        Query::Alert(rule) => LogicalPlan::Alert(AlertPlan { rule: rule.clone() }),
         Query::Compose(q) => plan_compose(q),
         Query::Logs(q) => plan_logs(q),
-        Query::Ping => Ok(LogicalPlan::Ping),
-        Query::Fields(target) => Ok(LogicalPlan::Fields(*target)),
+        Query::Ping => LogicalPlan::Ping,
+        Query::Fields(target) => LogicalPlan::Fields(*target),
     }
 }
 
-fn plan_observe(query: &ObserveQuery) -> Result<LogicalPlan, PlanError> {
+fn plan_observe(query: &ObserveQuery) -> LogicalPlan {
     let mut steps = vec![PlanStep::Fetch(query.target)];
 
     if let Some(filter) = &query.filter {
@@ -246,14 +252,14 @@ fn plan_observe(query: &ObserveQuery) -> Result<LogicalPlan, PlanError> {
 
     optimize_steps(&mut steps);
 
-    Ok(LogicalPlan::Observe(ObservePlan {
+    LogicalPlan::Observe(ObservePlan {
         target: query.target,
         join: query.join.clone(),
         steps,
-    }))
+    })
 }
 
-fn plan_events(query: &EventsQuery) -> Result<LogicalPlan, PlanError> {
+fn plan_events(query: &EventsQuery) -> LogicalPlan {
     let mut steps = vec![PlanStep::Fetch(query.target)];
 
     if let Some(filter) = &query.filter {
@@ -264,20 +270,20 @@ fn plan_events(query: &EventsQuery) -> Result<LogicalPlan, PlanError> {
         steps.push(node_to_step(node));
     }
 
-    Ok(LogicalPlan::Events(EventsPlan {
+    LogicalPlan::Events(EventsPlan {
         target: query.target,
         steps,
-    }))
+    })
 }
 
-fn plan_inspect(query: &InspectQuery) -> Result<LogicalPlan, PlanError> {
-    Ok(LogicalPlan::Inspect(InspectPlan {
+fn plan_inspect(query: &InspectQuery) -> LogicalPlan {
+    LogicalPlan::Inspect(InspectPlan {
         target: query.target.clone(),
         at: query.at.clone(),
-    }))
+    })
 }
 
-fn plan_logs(query: &LogsQuery) -> Result<LogicalPlan, PlanError> {
+fn plan_logs(query: &LogsQuery) -> LogicalPlan {
     let mut steps = Vec::new();
 
     if let Some(filter) = &query.filter {
@@ -288,39 +294,39 @@ fn plan_logs(query: &LogsQuery) -> Result<LogicalPlan, PlanError> {
         steps.push(node_to_step(node));
     }
 
-    Ok(LogicalPlan::Logs(LogsPlan {
+    LogicalPlan::Logs(LogsPlan {
         container: query.container.clone(),
         tail: query.tail,
         steps,
-    }))
+    })
 }
 
-fn plan_compose(query: &crate::ast::ComposeQuery) -> Result<LogicalPlan, PlanError> {
+fn plan_compose(query: &crate::ast::ComposeQuery) -> LogicalPlan {
     let mut steps = Vec::new();
 
     for node in &query.pipeline {
         steps.push(node_to_step(node));
     }
 
-    Ok(LogicalPlan::Compose(ComposePlan {
+    LogicalPlan::Compose(ComposePlan {
         project: query.project.clone(),
         target: query.target,
         steps,
-    }))
+    })
 }
 
-fn plan_analyze(query: &AnalyzeQuery) -> Result<LogicalPlan, PlanError> {
+fn plan_analyze(query: &AnalyzeQuery) -> LogicalPlan {
     let mut steps = Vec::new();
     for node in &query.pipeline {
         steps.push(node_to_step(node));
     }
 
-    Ok(LogicalPlan::Analyze(AnalyzePlan {
+    LogicalPlan::Analyze(AnalyzePlan {
         target: query.target.clone(),
         verb: query.verb,
         subject: query.subject.clone(),
         steps,
-    }))
+    })
 }
 
 fn node_to_step(node: &PipelineNode) -> PlanStep {
@@ -357,7 +363,7 @@ fn node_to_step(node: &PipelineNode) -> PlanStep {
                 }
             }
         }
-        PipelineNode::Limit(n) => PlanStep::Limit(*n),
+        PipelineNode::Limit(n) | PipelineNode::Offset(n) => PlanStep::Limit(*n),
         PipelineNode::Alert(msg) => PlanStep::Alert(msg.clone()),
         PipelineNode::If {
             condition,
@@ -384,7 +390,6 @@ fn node_to_step(node: &PipelineNode) -> PlanStep {
         },
         PipelineNode::Having(expr) => PlanStep::Filter(expr.clone()),
         PipelineNode::Distinct => PlanStep::Select(vec!["*".to_owned()]),
-        PipelineNode::Offset(n) => PlanStep::Limit(*n),
     }
 }
 
@@ -436,7 +441,7 @@ mod tests {
         else {
             panic!("expected observe");
         };
-        let p = plan_observe(&q).unwrap();
+        let p = plan_observe(&q);
         assert!(matches!(p, LogicalPlan::Observe(_)));
         if let LogicalPlan::Observe(op) = p {
             assert_eq!(op.target, CollectionTarget::Containers);
@@ -453,7 +458,7 @@ mod tests {
         else {
             panic!("expected events");
         };
-        let p = plan_events(&q).unwrap();
+        let p = plan_events(&q);
         if let LogicalPlan::Events(ep) = p {
             assert_eq!(ep.target, CollectionTarget::Containers);
         }
@@ -467,7 +472,7 @@ mod tests {
         else {
             panic!("expected inspect");
         };
-        let p = plan_inspect(&q).unwrap();
+        let p = plan_inspect(&q);
         if let LogicalPlan::Inspect(ip) = p {
             assert!(ip.at.is_some());
         }
@@ -482,7 +487,7 @@ mod tests {
         else {
             panic!("expected alert");
         };
-        let p = plan(&Query::Alert(rule)).unwrap();
+        let p = plan(&Query::Alert(rule));
         assert!(matches!(p, LogicalPlan::Alert(_)));
     }
 
@@ -513,7 +518,7 @@ mod tests {
     #[test]
     fn plans_compose_query() {
         let q = parser::parse("compose myapp").unwrap();
-        let p = plan(&q.query).unwrap();
+        let p = plan(&q.query);
         if let LogicalPlan::Compose(cp) = p {
             assert_eq!(cp.project, "myapp");
             assert_eq!(cp.target, crate::ast::ComposeTarget::Containers);
@@ -527,7 +532,7 @@ mod tests {
     fn plans_compose_services_with_pipeline() {
         let q =
             parser::parse("compose myapp services | where cpu > 80% | select name, cpu").unwrap();
-        let p = plan(&q.query).unwrap();
+        let p = plan(&q.query);
         if let LogicalPlan::Compose(cp) = p {
             assert_eq!(cp.project, "myapp");
             assert_eq!(cp.target, crate::ast::ComposeTarget::Services);
@@ -540,7 +545,7 @@ mod tests {
     #[test]
     fn plans_compose_with_sort_limit() {
         let q = parser::parse("compose myapp | sort by name asc | limit 5").unwrap();
-        let p = plan(&q.query).unwrap();
+        let p = plan(&q.query);
         if let LogicalPlan::Compose(cp) = p {
             assert_eq!(cp.steps.len(), 2);
             assert!(matches!(cp.steps[0], PlanStep::SortBy { .. }));
@@ -553,7 +558,7 @@ mod tests {
     #[test]
     fn compose_plan_display() {
         let q = parser::parse("compose myapp services").unwrap();
-        let p = plan(&q.query).unwrap();
+        let p = plan(&q.query);
         let s = format!("{p}");
         assert!(s.contains("myapp"));
         assert!(s.contains("Services"));
@@ -562,7 +567,7 @@ mod tests {
     #[test]
     fn plans_observe_join_images() {
         let q = parser::parse("observe containers join images on id = id").unwrap();
-        let p = plan(&q.query).unwrap();
+        let p = plan(&q.query);
         if let LogicalPlan::Observe(op) = p {
             assert!(op.join.is_some());
             let join = op.join.unwrap();
@@ -575,7 +580,7 @@ mod tests {
     #[test]
     fn plans_observe_join_without_pipeline() {
         let q = parser::parse("observe containers join networks on name = name").unwrap();
-        let p = plan(&q.query).unwrap();
+        let p = plan(&q.query);
         if let LogicalPlan::Observe(op) = p {
             assert!(op.join.is_some());
             assert_eq!(op.steps.len(), 1);
@@ -591,7 +596,7 @@ mod tests {
     #[test]
     fn observe_join_plan_display() {
         let q = parser::parse("observe containers join images on id = id").unwrap();
-        let p = plan(&q.query).unwrap();
+        let p = plan(&q.query);
         let s = format!("{p}");
         assert!(s.contains("JOIN"));
         assert!(s.contains("Images"));

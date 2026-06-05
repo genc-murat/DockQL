@@ -21,6 +21,8 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: Check
         run: cargo check --locked --all-targets
 
@@ -32,3 +34,8 @@ jobs:
 
       - name: Test
         run: cargo test
+
+      - name: Validate example .dol files
+        run: |
+          cargo build --locked
+          DOL=./target/debug/dol ./scripts/validate_examples.sh

@@ -15,6 +15,7 @@ use crate::{
     executor::{ExecutionResult, Row},
     metrics::{MetricsCollector, MetricsError},
     storage::{TelemetryError, TelemetryStore},
+    ONE_GB,
 };
 
 // ── Public error type ──────────────────────────────────────────────────────
@@ -45,9 +46,9 @@ pub enum Severity {
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Severity::Info => write!(f, "info"),
-            Severity::Warning => write!(f, "warning"),
-            Severity::Critical => write!(f, "critical"),
+            Self::Info => write!(f, "info"),
+            Self::Warning => write!(f, "warning"),
+            Self::Critical => write!(f, "critical"),
         }
     }
 }
@@ -122,9 +123,9 @@ pub enum SignalStatus {
 impl std::fmt::Display for SignalStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SignalStatus::Normal => write!(f, "normal"),
-            SignalStatus::Elevated => write!(f, "elevated"),
-            SignalStatus::Critical => write!(f, "critical"),
+            Self::Normal => write!(f, "normal"),
+            Self::Elevated => write!(f, "elevated"),
+            Self::Critical => write!(f, "critical"),
         }
     }
 }
@@ -170,7 +171,7 @@ impl Default for AnalysisThresholds {
 // ── Main analysis dispatcher ───────────────────────────────────────────────
 
 /// Execute an analysis query using live Docker data + metrics.
-pub fn execute_analyze<C, M>(
+pub async fn execute_analyze<C, M>(
     query: &AnalyzeQuery,
     docker: &C,
     metrics: &M,
@@ -179,11 +180,11 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    execute_analyze_with_thresholds(query, docker, metrics, &AnalysisThresholds::default())
+    execute_analyze_with_thresholds(query, docker, metrics, &AnalysisThresholds::default()).await
 }
 
 /// Execute an analysis query with custom thresholds.
-pub fn execute_analyze_with_thresholds<C, M>(
+pub async fn execute_analyze_with_thresholds<C, M>(
     query: &AnalyzeQuery,
     docker: &C,
     metrics: &M,
@@ -195,49 +196,29 @@ where
 {
     match (&query.target, &query.verb, query.subject.as_deref()) {
         // analyze containers find anomalies (default)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, None)
-        | (
-            AnalysisTarget::Collection(CollectionTarget::Containers),
-            AnalysisVerb::Find,
-            Some("anomalies"),
-        ) => find_container_anomalies(docker, metrics, thresholds),
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
+None | Some("anomalies")) => find_container_anomalies(docker, metrics, thresholds).await,
         // analyze containers find dependencies
-        (
-            AnalysisTarget::Collection(CollectionTarget::Containers),
-            AnalysisVerb::Find,
-            Some("dependencies"),
-        ) => analyze_dependencies(docker),
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
+            Some("dependencies")) => analyze_dependencies(docker).await,
         // analyze containers find density
-        (
-            AnalysisTarget::Collection(CollectionTarget::Containers),
-            AnalysisVerb::Find,
-            Some("density"),
-        ) => analyze_density(docker),
-        // analyze containers find leaks — requires store, return error
-        (
-            AnalysisTarget::Collection(CollectionTarget::Containers),
-            AnalysisVerb::Find,
-            Some("leaks"),
-        ) => Err(AnalyzeError::Unsupported),
-        // analyze containers find drift — requires store, return error
-        (
-            AnalysisTarget::Collection(CollectionTarget::Containers),
-            AnalysisVerb::Find,
-            Some("drift"),
-        ) => Err(AnalyzeError::Unsupported),
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
+            Some("density")) => analyze_density(docker).await,
+        // analyze containers find leaks or drift — requires store, return error
+
         // analyze containers correlate
         (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Correlate, _) => {
-            correlate_containers(docker, metrics, thresholds)
+            correlate_containers(docker, metrics, thresholds).await
         }
         // analyze container <name> explain
         (AnalysisTarget::Singular(target), AnalysisVerb::Explain, _)
             if target.kind == SingularTargetKind::Container =>
         {
-            explain_container(&target.value, docker, metrics, thresholds)
+            explain_container(&target.value, docker, metrics, thresholds).await
         }
         // analyze containers explain (explain all)
         (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Explain, _) => {
-            explain_all_containers(docker, metrics, thresholds)
+            explain_all_containers(docker, metrics, thresholds).await
         }
         _ => Err(AnalyzeError::Unsupported),
     }
@@ -255,18 +236,11 @@ where
 
     match (&query.target, &query.verb, query.subject.as_deref()) {
         // analyze containers find anomalies (default, from store)
-        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find, None)
-        | (
-            AnalysisTarget::Collection(CollectionTarget::Containers),
-            AnalysisVerb::Find,
-            Some("anomalies"),
-        ) => find_anomalies_from_store(store, &thresholds),
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
+None | Some("anomalies")) => find_anomalies_from_store(store, &thresholds),
         // analyze containers find leaks (from store)
-        (
-            AnalysisTarget::Collection(CollectionTarget::Containers),
-            AnalysisVerb::Find,
-            Some("leaks"),
-        ) => {
+        (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Find,
+            Some("leaks")) => {
             let anomalies = detect_resource_leaks(store, &thresholds);
             if anomalies.is_empty() {
                 Ok(ExecutionResult {
@@ -328,7 +302,8 @@ where
 
 // ── Detectors ──────────────────────────────────────────────────────────────
 
-/// Detect restart loops: containers with restart_count >= threshold.
+/// Detect restart loops: containers with `restart_count` >= threshold.
+#[must_use]
 pub fn detect_restart_loops(containers: &[Container], threshold: u64) -> Vec<Anomaly> {
     containers
         .iter()
@@ -362,6 +337,7 @@ pub fn detect_restart_loops(containers: &[Container], threshold: u64) -> Vec<Ano
 }
 
 /// Detect high CPU usage anomalies.
+#[must_use]
 pub fn detect_high_cpu(
     samples: &[MetricSample],
     high_threshold: f64,
@@ -407,6 +383,7 @@ pub fn detect_high_cpu(
 }
 
 /// Detect memory pressure: containers with memory usage/limit ratio above threshold.
+#[must_use]
 pub fn detect_memory_pressure(
     samples: &[MetricSample],
     pressure_ratio: f64,
@@ -463,6 +440,7 @@ pub fn detect_memory_pressure(
 }
 
 /// Detect deployment-related error spikes from historical events.
+#[must_use]
 pub fn detect_deployment_errors(events: &[DockerEvent], threshold: u64) -> Vec<Anomaly> {
     // Count "die" events per container.
     let mut die_counts: HashMap<String, u64> = HashMap::new();
@@ -497,16 +475,16 @@ pub fn detect_deployment_errors(events: &[DockerEvent], threshold: u64) -> Vec<A
                 kind: "deployment_errors".to_owned(),
                 container: container.clone(),
                 message: format!(
-                    "Container '{}' has died {} times (threshold: {})",
-                    container, count, threshold
+                    "Container '{container}' has died {count} times (threshold: {threshold})"
                 ),
-                evidence: times.into_iter().map(|t| format!("die_at={}", t)).collect(),
+                evidence: times.into_iter().map(|t| format!("die_at={t}")).collect(),
             }
         })
         .collect()
 }
 
 /// Detect containers in unhealthy states (exited, dead, restarting).
+#[must_use]
 pub fn detect_unhealthy_states(containers: &[Container]) -> Vec<Anomaly> {
     containers
         .iter()
@@ -543,10 +521,7 @@ pub fn detect_resource_leaks<S>(store: &S, thresholds: &AnalysisThresholds) -> V
 where
     S: TelemetryStore + ?Sized,
 {
-    let samples = match store.latest_metrics() {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+    let Ok(samples) = store.latest_metrics() else { return Vec::new(); };
 
     // Group samples by container ID and sort by timestamp.
     let mut by_container: std::collections::BTreeMap<String, Vec<&MetricSample>> =
@@ -569,8 +544,7 @@ where
     for (container_id, container_samples) in &by_container {
         let container_name = id_to_name
             .get(container_id)
-            .map(|s| s.as_str())
-            .unwrap_or(container_id.as_str());
+            .map_or(container_id.as_str(), std::string::String::as_str);
         if container_samples.len() < thresholds.resource_leak_min_samples as usize {
             continue;
         }
@@ -631,13 +605,13 @@ where
 
 /// Analyze container dependencies: which containers share networks,
 /// compose projects, and images.
-pub fn analyze_dependencies<C>(docker: &C) -> Result<ExecutionResult, AnalyzeError>
+pub async fn analyze_dependencies<C>(docker: &C) -> Result<ExecutionResult, AnalyzeError>
 where
     C: DockerClient + ?Sized,
 {
-    let containers = docker.list_containers()?;
-    let networks = docker.list_networks().unwrap_or_default();
-    let volumes = docker.list_volumes().unwrap_or_default();
+    let containers = docker.list_containers().await?;
+    let networks = docker.list_networks().await.unwrap_or_default();
+    let volumes = docker.list_volumes().await.unwrap_or_default();
 
     let mut rows = Vec::new();
 
@@ -765,7 +739,7 @@ where
     }
 
     // Snapshots are sorted by timestamp ascending.
-    let latest = all.pop().unwrap();
+    let latest = all.pop().expect("at least one snapshot after empty check");
     let previous = all.pop();
 
     // If there's only one snapshot, emit baselines.
@@ -802,7 +776,6 @@ where
                         if prev_c.state != container.state {
                             let severity = match container.state.as_str() {
                                 "running" => Severity::Info,
-                                "exited" | "dead" => Severity::Warning,
                                 _ => Severity::Warning,
                             };
                             anomalies.push(Anomaly {
@@ -841,9 +814,9 @@ where
 
                         // Check for label drift.
                         let prev_labels: std::collections::BTreeSet<&str> =
-                            prev_c.labels.iter().map(|s| s.as_str()).collect();
+                            prev_c.labels.iter().map(std::string::String::as_str).collect();
                         let curr_labels: std::collections::BTreeSet<&str> =
-                            container.labels.iter().map(|s| s.as_str()).collect();
+                            container.labels.iter().map(std::string::String::as_str).collect();
                         let added: Vec<&&str> = curr_labels.difference(&prev_labels).collect();
                         let removed: Vec<&&str> = prev_labels.difference(&curr_labels).collect();
                         if !added.is_empty() || !removed.is_empty() {
@@ -928,11 +901,11 @@ where
 
 /// Analyze container density / distribution across images, states,
 /// and compose projects.
-pub fn analyze_density<C>(docker: &C) -> Result<ExecutionResult, AnalyzeError>
+pub async fn analyze_density<C>(docker: &C) -> Result<ExecutionResult, AnalyzeError>
 where
     C: DockerClient + ?Sized,
 {
-    let containers = docker.list_containers()?;
+    let containers = docker.list_containers().await?;
     let total = containers.len();
     let mut rows = Vec::new();
 
@@ -965,7 +938,7 @@ where
                 (
                     "density_pct".to_owned(),
                     JsonValue::Number(
-                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or(Number::from(0)),
+                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or_else(|| Number::from(0)),
                     ),
                 ),
             ]),
@@ -997,7 +970,7 @@ where
                 (
                     "density_pct".to_owned(),
                     JsonValue::Number(
-                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or(Number::from(0)),
+                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or_else(|| Number::from(0)),
                     ),
                 ),
             ]),
@@ -1042,7 +1015,7 @@ where
                 (
                     "density_pct".to_owned(),
                     JsonValue::Number(
-                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or(Number::from(0)),
+                        Number::from_f64((pct * 10.0).round() / 10.0).unwrap_or_else(|| Number::from(0)),
                     ),
                 ),
             ]),
@@ -1074,7 +1047,7 @@ where
 // ── Composite analysis functions ───────────────────────────────────────────
 
 /// `analyze containers find anomalies` — runs all detectors on live data.
-fn find_container_anomalies<C, M>(
+async fn find_container_anomalies<C, M>(
     docker: &C,
     metrics: &M,
     thresholds: &AnalysisThresholds,
@@ -1083,8 +1056,8 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    let containers = docker.list_containers()?;
-    let samples = metrics.collect()?;
+    let containers = docker.list_containers().await?;
+    let samples = metrics.collect().await?;
 
     let mut anomalies = Vec::new();
     anomalies.extend(detect_restart_loops(
@@ -1180,7 +1153,7 @@ where
 }
 
 /// `analyze containers correlate` — find containers sharing images/networks.
-fn correlate_containers<C, M>(
+async fn correlate_containers<C, M>(
     docker: &C,
     _metrics: &M,
     _thresholds: &AnalysisThresholds,
@@ -1189,7 +1162,7 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    let containers = docker.list_containers()?;
+    let containers = docker.list_containers().await?;
 
     // Group containers by image.
     let mut by_image: HashMap<String, Vec<String>> = HashMap::new();
@@ -1279,7 +1252,7 @@ where
 }
 
 /// `explain container <name>` — produce a diagnostic summary for one container.
-fn explain_container<C, M>(
+async fn explain_container<C, M>(
     name: &str,
     docker: &C,
     metrics: &M,
@@ -1289,13 +1262,13 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    let containers = docker.list_containers()?;
+    let containers = docker.list_containers().await?;
     let container = containers
         .iter()
         .find(|c| c.name == name || c.id == name)
         .ok_or(AnalyzeError::Unsupported)?;
 
-    let samples = metrics.collect()?;
+    let samples = metrics.collect().await?;
     let sample = samples
         .iter()
         .find(|s| s.container_name == name || s.container_id == name);
@@ -1306,7 +1279,7 @@ where
 }
 
 /// `analyze containers explain` — produce diagnostic summaries for all containers.
-fn explain_all_containers<C, M>(
+async fn explain_all_containers<C, M>(
     docker: &C,
     metrics: &M,
     thresholds: &AnalysisThresholds,
@@ -1315,8 +1288,8 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    let containers = docker.list_containers()?;
-    let samples = metrics.collect()?;
+    let containers = docker.list_containers().await?;
+    let samples = metrics.collect().await?;
     let samples_by_name: HashMap<&str, &MetricSample> = samples
         .iter()
         .map(|s| (s.container_name.as_str(), s))
@@ -1406,7 +1379,7 @@ fn build_explanation(
             };
             signals.push(Signal {
                 name: "cpu".to_owned(),
-                value: format!("{:.1}%", cpu),
+                value: format!("{cpu:.1}%"),
                 status,
             });
         }
@@ -1503,7 +1476,7 @@ fn explanation_to_result(explanation: &ContainerExplanation) -> ExecutionResult 
     ExecutionResult { rows }
 }
 
-fn severity_rank(severity: Severity) -> u8 {
+const fn severity_rank(severity: Severity) -> u8 {
     match severity {
         Severity::Info => 0,
         Severity::Warning => 1,
@@ -1512,14 +1485,14 @@ fn severity_rank(severity: Severity) -> u8 {
 }
 
 fn format_bytes(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    if bytes >= ONE_GB {
+        format!("{:.1} GB", bytes as f64 / ONE_GB as f64)
     } else if bytes >= 1_048_576 {
         format!("{:.1} MB", bytes as f64 / 1_048_576.0)
     } else if bytes >= 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
@@ -1529,6 +1502,8 @@ fn format_bytes(bytes: u64) -> String {
 mod tests {
     use super::*;
     use crate::docker::Container;
+
+    fn rt() -> tokio::runtime::Runtime { tokio::runtime::Runtime::new().unwrap() }
 
     fn test_container(name: &str, state: &str, restarts: u64) -> Container {
         Container {
@@ -1741,7 +1716,7 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
 
         // Should find: restart_loop + high_cpu + memory_pressure + exited_container
         assert!(result.rows.len() >= 3);
@@ -1778,7 +1753,7 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -1808,7 +1783,7 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
 
         // Should have signals for state, restart_count, cpu, memory, network_rx, network_tx
         assert!(result.rows.len() >= 4);
@@ -1856,7 +1831,7 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
 
         // Should find shared_image and shared_label correlations
         let correlations: Vec<String> = result
@@ -1999,7 +1974,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = analyze_dependencies(&docker).unwrap();
+        let result = rt().block_on(analyze_dependencies(&docker)).unwrap();
 
         let dep_kinds: Vec<String> = result
             .rows
@@ -2019,7 +1994,7 @@ mod tests {
     #[test]
     fn dependencies_empty_returns_none_row() {
         let docker = crate::docker::MockDockerClient::default();
-        let result = analyze_dependencies(&docker).unwrap();
+        let result = rt().block_on(analyze_dependencies(&docker)).unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["dependency"],
@@ -2195,7 +2170,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = analyze_density(&docker).unwrap();
+        let result = rt().block_on(analyze_density(&docker)).unwrap();
 
         // Should have image rows (nginx, api) + state rows (running, exited) + project rows (web, standalone) + total
         let dimensions: Vec<String> = result
@@ -2228,7 +2203,7 @@ mod tests {
     #[test]
     fn density_with_no_containers_returns_total_zero() {
         let docker = crate::docker::MockDockerClient::default();
-        let result = analyze_density(&docker).unwrap();
+        let result = rt().block_on(analyze_density(&docker)).unwrap();
         let total_row = result
             .rows
             .iter()
@@ -2260,7 +2235,7 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
         // Should have at least the "none" row
         assert!(!result.rows.is_empty());
     }
@@ -2283,7 +2258,7 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = execute_analyze(&query, &docker, &metrics).unwrap();
+        let result = rt().block_on(execute_analyze(&query, &docker, &metrics)).unwrap();
         let total_row = result
             .rows
             .iter()
@@ -2310,7 +2285,7 @@ mod tests {
             pipeline: Vec::new(),
         };
 
-        let result = execute_analyze(&query, &docker, &metrics);
+        let result = rt().block_on(execute_analyze(&query, &docker, &metrics));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AnalyzeError::Unsupported));
     }

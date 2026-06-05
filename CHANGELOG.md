@@ -5,30 +5,155 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-## [0.5.0] - 2026-06-02
+## [0.6.0] - 2026-06-05
 
 ### Added
+
+#### Configurable Docker API Timeouts
+
+- **Timeout configuration system** — all Docker API call timeouts are now configurable via `dol config set` or YAML/TOML config file
+- `DockerApiConfig` struct with `call_timeout`, `quick_timeout`, `max_retries`, `retry_base_ms` — read from `DolConfig` via `From<&DolConfig>`
+- `docker_call()`, `docker_call_quick()`, `docker_call_with_retry()` — timeout-aware helper functions with exponential backoff retry
+- `BollardDockerClient::connect_with_config()` — create client with configurable timeout settings
+- `BollardMetricsCollector::with_config()` — create collector with configurable stats timeout
+- `alerts::init_alert_timeouts()` — global `OnceLock`-based alert timeout initialization from config
+- `DockerError::Timeout(u64)` — dedicated timeout error variant
+- 6 new config keys: `api-timeout` (30s), `api-quick-timeout` (10s), `stats-timeout` (10s), `events-timeout` (30s), `webhook-timeout` (10s), `restart-timeout` (30s)
+- 13 unit tests covering YAML/TOML round-trip, deserialization, `DockerApiConfig` conversion, and error handling
+
+#### Parser Error Message Improvements
+
+- **`expect_ident()` and `expect()` now show both expected and found tokens** — e.g., `expected \`then\`, found \`emai\`` instead of just `expected \`then\``
+- **Keyword similarity suggestions** — `suggest_keyword()` with Levenshtein distance via `strsim` crate for pipeline nodes, analysis verbs, and alert actions (`fltr` → `fill`, `grp` → `group`, `prnt` → `print`, `fnd` → `find`)
+- **`suggest_keyword(input, keywords)`** — reusable helper filtering by first character + `strsim::levenshtein()` minimum
+- 9 new unit tests for keyword suggestions with close and distant misspellings
+
+#### CLI Polish
+
+- **Rich `--help` output** — `about` field rewritten with descriptive text; new `long_about` with DOL overview; `after_help` with 23 categorized example queries (basic, advanced, files/store, output/integration, interactive modes)
+- **Improved subcommand descriptions** — `repl` (+tab completion, history, syntax-colored errors), `top` (+CPU, memory, network stats), `dashboard` (+event stream, resource gauges)
+- **`dol config --help` enriched** — `ConfigAction` variants (`init`, `set`, `view`) now have doc comments with usage hints
+
+#### API Documentation
+
+- **Module-level `//!` docs with examples** — added to all 18 library modules (`alerts`, `ast`, `cli`, `config`, `dashboard`, `docker`, `eval`, `events`, `executor`, `export`, `lib`, `metrics`, `parser`, `planner`, `repl`, `semantic`, `sqlite_store`, `storage`)
+- **`lib.rs` crate root doc** — module overview table with one-line descriptions for all 19 submodules
+- All examples use `ignore` blocks (require Docker), format: description + `# Example` + code
+- `cargo doc --no-deps`: 0 warnings
+
+### Changed
+
+#### Non-breaking
+
+- `BollardDockerClient::connect()` now uses `DockerApiConfig::default()` for backward compatibility
+- `BollardDockerClient::connect_with_host()` accepts `&DolConfig` for timeout configuration
+- `str_similarity()` replaced with `strsim::levenshtein()` for accurate Levenshtein edit distance
+- `suggest_similar_target()` refactored to use `suggest_keyword()` internally
+
+#### Documentation
+
+- **README.md restructured** — features list condensed from 30+ to 15 items; duplicate "Query Timeout" section removed; REPL/Dashboard sections shortened with links to docs/; new "Error Messages" section showcasing improved parser errors; CLI Flags table deduplicated
+- **docs/spec.md** — new "Docker API Timeout Configuration" section with all 6 timeout keys, defaults, and example YAML
+- **docs/architecture.md** — updated Docker Client (timeout/retry helpers), Alerting Engine (configurable timeouts), and Config Loader (12-key table) sections
+- **docs/examples.md** — new section 32 "Configurable Timeouts" with `dol config set` examples and YAML config template
+- **docs/examples.html** — regenerated from examples.md via pandoc, includes new section 32
+- **docs/index.html** — feature grid updated with "Configurable Docker API timeouts (with retry)"
+- Fixed `metrics_interval` (10→30) and `snapshot_interval` (60→300) defaults in architecture.md to match code constants
+
+#### Code Quality
+
+- 21 new tests (13 config + 8 parser)
+- Test count: 413 total (+21), 0 failed, 1 ignored
+- `cargo clippy` — zero warnings
+- `cargo audit` — zero vulnerabilities
+- **CI: example validation** — `scripts/validate_examples.sh` now runs in CI after tests, validating all 101 `.dol` example files with `dol --explain`
+- **CI: rust-cache** — `Swatinem/rust-cache@v2` added for faster incremental builds
+
+### Dependencies
+
+- Added: `strsim = "0.11.1"` (Levenshtein distance for keyword suggestions)
+- Updated: `bitflags` 2.11.1 → 2.12.1, `chrono` 0.4.44 → 0.4.45, `log` 0.4.30 → 0.4.32, `yoke` 0.8.2 → 0.8.3 (`cargo update`, 2026-06-05)
+- Added: `DEPENDENCY_POLICY.md` — formal dependency upgrade policy (cadence, pinning, audit requirements, adding new dependencies)
+
+## [Unreleased]
+
+### Added
+
+- (future)
+
+## [0.5.0] - 2026-06-04
+
+### Added
+
+#### Docker SDK — Bollard Migration
+
+- `BollardDockerClient` — native Rust Docker API integration via `bollard` crate, replacing `Command::new("docker")` CLI wrapper
+- `DockerClient` trait with fully async methods: `list_containers`, `list_images`, `list_networks`, `list_volumes`, `inspect_container`, `container_logs`, `container_stats`, `events_stream`, `ping`
+- `BollardMetricsCollector` — async metrics collection via bollard stats API (CPU, memory, network)
+- `BollardEventSource` — async Docker event streaming via bollard events API
+- `connect_with_host()` — remote Docker host support (tcp://, http://, unix://)
+- `MockDockerClient` and `MockMetricsCollector` — test doubles for unit testing
+- Async container inspection with health, restart count, and timestamp enrichment
+
+#### Compose Queries
 
 - `compose ls` — list all Docker Compose projects with container, network, and volume counts
 - `compose <project> images` — list images used by a Compose project
 - `compose <project> stats` — resource usage statistics for Compose project containers (CPU, memory, network, disk)
 - `compose <project> ps` — enhanced container status for a Compose project with service names
-- `compose <project> logs <service> [tail <n>]` — view logs for a specific service in a Compose project
+- `compose <project> logs <service> [tail <n>]` — view logs for a specific service
 - `compose <project> port <service> <port>` — show port mappings for a service
-- `compose <project> config [services|networks|volumes]` — inspect Compose project configuration (services, networks, volumes)
+- `compose <project> config [services|networks|volumes]` — inspect Compose project configuration
 - `compose <project> events` — query Compose project events (streaming)
-- All new compose targets support full pipeline syntax (`where`, `select`, `sort by`, `group by`, `limit`, etc.)
-- 44 new tests covering parser, executor, and semantic validation for all new compose features
-- 8 new example `.dol` files for compose ls, images, stats, ps, logs, port, and config queries
+- All new compose targets support full pipeline syntax (where, select, sort by, group by, limit, etc.)
+
+#### Analysis Engine
+
+- `analyze containers find leaks` — detect memory leaks from historical trend data
+- `analyze containers find drift` — detect configuration drift between snapshots
+- `analyze containers find density` — container distribution analysis by image, state, and compose project
+- `analyze containers find dependencies` — dependency graph across compose projects, networks, and volumes
+- `analyze containers explain` — diagnostic summary for all containers
+- `explain container <name>` — per-container diagnostic with signals (CPU, memory, network, restart count)
+- `AnalysisThresholds` — configurable thresholds for all detectors
+
+#### CLI & Dashboard
+
+- Event-driven TUI refresh — `dol top` and `dol dashboard` now listen to Docker events via bollard for instant UI updates
+- `--diff` flag — compare current state with last store snapshot
+- `--export-format` for InfluxDB, Grafana Loki, and Prometheus Pushgateway
+#### Code Quality
+
+- 44 new tests covering compose parser, executor, and semantic validation
+- 10 new example `.dol` files (total: 101)
+- Extensive clippy lint fixes: `#[must_use]`, `Self::` usage, `map_or`/`map_or_else` simplifications, `to_vec()` over `.iter().cloned().collect()`, let-else patterns, `expect()` over `unwrap()`
+- `cargo clippy` — zero warnings
 
 ### Changed
+
+#### Breaking
+
+- `MetricsCollector::collect()` is now async (was sync)
+- `DockerClient` methods are now async (were sync subprocess calls)
+- `evaluate_alert_once()` is now async
+- `execute_analyze()`, `execute_analyze_with_thresholds()` are now async
+
+#### Non-breaking
 
 - `ComposeTarget` enum extended with: `Projects`, `Images`, `Stats`, `Ps`, `Events`, `Port`, `Config`, `Logs`
 - `ComposeQuery` struct now includes `service`, `port_number`, `tail`, and `config_target` fields
 - Semantic analyzer validates fields for all new compose targets
 - `execute_compose_projects` now applies pipeline nodes (where, select, sort, etc.)
+- Alert webhook action uses dedicated tokio runtime (thread + block_on) for reliability
+- Alert restart action migrated from `docker restart` subprocess to bollard `restart_container()` API
+- Dashboard metrics collection now fully async (removed `Handle::current().block_on()`)
+- `render_table_ratatui()` — box-drawing table with proper border rendering
+- `render_table_colored()` — color-coded plain-text fallback for narrow terminals
+
+#### Dependencies
+
+- Added: `bollard = "0.21.0"`, `futures-util = "0.3.32"`, `tokio-stream = "0.1.18"`
+- Removed implicit `docker` CLI dependency (no longer requires docker binary for data collection)
 
 ## [0.4.0] - 2026-06-02
 
@@ -133,4 +258,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.5.0]: https://github.com/genc-murat/DockQL/compare/v0.4.0...v0.5.0
 
-[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/genc-murat/DockQL/compare/v0.5.0...v0.6.0

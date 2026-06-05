@@ -1,16 +1,30 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    ffi::OsStr,
-    process::Command,
-};
+//! Metrics collection from Docker containers.
+//!
+//! Defines the [`MetricsCollector`] trait with implementations:
+//! - [`BollardMetricsCollector`] — live stats from bollard
+//! - [`MockMetricsCollector`] — test fixtures
+//! - [`NoopMetricsCollector`] — no-op for non-metric queries
+//! - [`MetricRingBuffer`] — bounded circular buffer for windowed analysis
+//!
+//! # Example
+//!
+//! ```ignore
+//! let collector = BollardMetricsCollector::with_config(Arc::new(docker), &config);
+//! let samples = collector.collect().await?;
+//! ```
 
-use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::Duration;
+
 use thiserror::Error;
+use tokio::time::timeout;
 
-use crate::docker::{DockerError, MetricSample};
+use crate::config::DolConfig;
+use crate::docker::{DockerClient, DockerError, MetricSample};
 
 pub trait MetricsCollector {
-    fn collect(&self) -> Result<Vec<MetricSample>, MetricsError>;
+    fn collect(&self) -> impl std::future::Future<Output = Result<Vec<MetricSample>, MetricsError>> + Send;
 }
 
 #[derive(Debug, Error)]
@@ -19,59 +33,76 @@ pub enum MetricsError {
     Docker(#[from] DockerError),
     #[error("invalid docker stats field `{field}`: {value}")]
     InvalidStatsField { field: &'static str, value: String },
+    #[error("tokio runtime error: {0}")]
+    Runtime(String),
 }
 
+/// A metrics collector that uses a `DockerClient` (bollard) to fetch container stats.
+///
+/// Collectors wrap an `Arc<C>` so they can be passed by `Clone` into
+/// `tokio::task::spawn_blocking` and other `'static` contexts.
 #[derive(Debug, Clone)]
-pub struct DockerCliMetricsCollector {
-    docker_bin: String,
+pub struct BollardMetricsCollector<C> {
+    docker: Arc<C>,
+    stats_timeout: Duration,
 }
 
-impl Default for DockerCliMetricsCollector {
-    fn default() -> Self {
-        Self::new("docker")
-    }
-}
-
-impl DockerCliMetricsCollector {
-    pub fn new(docker_bin: impl Into<String>) -> Self {
+impl<C> BollardMetricsCollector<C>
+where
+    C: DockerClient + Send + Sync + 'static,
+{
+    /// Create a new collector with the default stats timeout (10s).
+    pub const fn new(docker: Arc<C>) -> Self {
         Self {
-            docker_bin: docker_bin.into(),
+            docker,
+            stats_timeout: Duration::from_secs(10),
         }
     }
 
-    fn run_json_lines<I, S>(&self, args: I) -> Result<Vec<Value>, DockerError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let args = args.into_iter().collect::<Vec<_>>();
-        let command_display = format_command(&self.docker_bin, &args);
-        let output = Command::new(&self.docker_bin)
-            .args(&args)
-            .output()
-            .map_err(|source| DockerError::CommandIo {
-                command: command_display.clone(),
-                source,
-            })?;
-
-        if !output.status.success() {
-            return Err(DockerError::CommandFailed {
-                command: command_display,
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
+    /// Create a new collector with a specific stats timeout from config.
+    #[must_use]
+    pub fn with_config(docker: Arc<C>, config: &DolConfig) -> Self {
+        Self {
+            docker,
+            stats_timeout: Duration::from_secs(config.stats_timeout.unwrap_or(10)),
         }
+    }
 
-        parse_json_lines(&String::from_utf8_lossy(&output.stdout))
+    /// Override the per-container stats call timeout.
+    pub fn set_stats_timeout(&mut self, timeout: Duration) {
+        self.stats_timeout = timeout;
     }
 }
 
-impl MetricsCollector for DockerCliMetricsCollector {
-    fn collect(&self) -> Result<Vec<MetricSample>, MetricsError> {
-        self.run_json_lines(["stats", "--no-stream", "--format", "{{json .}}"])?
-            .iter()
-            .map(metric_sample_from_stats_json)
-            .collect()
+impl<C> MetricsCollector for BollardMetricsCollector<C>
+where
+    C: DockerClient + Send + Sync + 'static,
+{
+    async fn collect(&self) -> Result<Vec<MetricSample>, MetricsError> {
+        let containers = self.docker
+            .list_containers()
+            .await
+            .map_err(MetricsError::Docker)?;
+
+        let mut samples = Vec::new();
+        for container in &containers {
+            let id_short = &container.id[..12.min(container.id.len())];
+            let id = id_short.to_owned();
+            match timeout(self.stats_timeout, self.docker.container_stats(&id)).await {
+                Ok(Ok(sample)) => samples.push(sample),
+                Ok(Err(e)) => {
+                    eprintln!("[metrics] failed to get stats for {}: {e}", container.name);
+                }
+                Err(_) => {
+                    eprintln!(
+                        "[metrics] stats call timed out after {}s for {}",
+                        self.stats_timeout.as_secs(),
+                        container.name
+                    );
+                }
+            }
+        }
+        Ok(samples)
     }
 }
 
@@ -81,7 +112,7 @@ pub struct MockMetricsCollector {
 }
 
 impl MetricsCollector for MockMetricsCollector {
-    fn collect(&self) -> Result<Vec<MetricSample>, MetricsError> {
+    async fn collect(&self) -> Result<Vec<MetricSample>, MetricsError> {
         Ok(self.samples.clone())
     }
 }
@@ -90,7 +121,7 @@ impl MetricsCollector for MockMetricsCollector {
 pub struct NoopMetricsCollector;
 
 impl MetricsCollector for NoopMetricsCollector {
-    fn collect(&self) -> Result<Vec<MetricSample>, MetricsError> {
+    async fn collect(&self) -> Result<Vec<MetricSample>, MetricsError> {
         Ok(Vec::new())
     }
 }
@@ -102,6 +133,7 @@ pub struct MetricRingBuffer {
 }
 
 impl MetricRingBuffer {
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             samples: VecDeque::with_capacity(capacity),
@@ -120,6 +152,7 @@ impl MetricRingBuffer {
         self.samples.push_back(sample);
     }
 
+    #[must_use]
     pub fn latest_by_container(&self) -> HashMap<String, MetricSample> {
         let mut latest = HashMap::new();
         for sample in &self.samples {
@@ -130,73 +163,13 @@ impl MetricRingBuffer {
     }
 }
 
-pub fn metric_sample_from_stats_json(value: &Value) -> Result<MetricSample, MetricsError> {
-    let mem_usage = optional_string(value, &["MemUsage"]);
-    let (memory_usage_bytes, memory_limit_bytes) = mem_usage
-        .as_deref()
-        .map(parse_usage_pair)
-        .transpose()
-        .map_err(|_| MetricsError::InvalidStatsField {
-            field: "MemUsage",
-            value: mem_usage.unwrap_or_default(),
-        })?
-        .unwrap_or((None, None));
-
-    let net_io = optional_string(value, &["NetIO"]);
-    let (network_rx_bytes, network_tx_bytes) = net_io
-        .as_deref()
-        .map(parse_usage_pair)
-        .transpose()
-        .map_err(|_| MetricsError::InvalidStatsField {
-            field: "NetIO",
-            value: net_io.unwrap_or_default(),
-        })?
-        .unwrap_or((None, None));
-
-    let block_io = optional_string(value, &["BlockIO"]);
-    let (disk_read_bytes, disk_write_bytes) = block_io
-        .as_deref()
-        .map(parse_usage_pair)
-        .transpose()
-        .map_err(|_| MetricsError::InvalidStatsField {
-            field: "BlockIO",
-            value: block_io.unwrap_or_default(),
-        })?
-        .unwrap_or((None, None));
-
-    Ok(MetricSample {
-        container_id: string(value, &["ID", "Container"]),
-        container_name: string(value, &["Name"]),
-        timestamp: {
-            let ts = string(value, &["Timestamp"]);
-            if ts.is_empty() {
-                chrono::Utc::now().to_rfc3339()
-            } else {
-                ts
-            }
-        },
-        cpu_percent: optional_string(value, &["CPUPerc"])
-            .as_deref()
-            .map(parse_percent)
-            .transpose()
-            .map_err(|_| MetricsError::InvalidStatsField {
-                field: "CPUPerc",
-                value: optional_string(value, &["CPUPerc"]).unwrap_or_default(),
-            })?,
-        memory_usage_bytes,
-        memory_limit_bytes,
-        network_rx_bytes,
-        network_tx_bytes,
-        disk_read_bytes,
-        disk_write_bytes,
-    })
-}
-
+/// Parse a percentage string like "85.42%" into a float.
 #[allow(clippy::result_unit_err)]
 pub fn parse_percent(value: &str) -> Result<f64, ()> {
     value.trim().trim_end_matches('%').parse().map_err(|_| ())
 }
 
+/// Parse a usage pair string like "128MiB / 1GiB" into (used, limit) bytes.
 #[allow(clippy::result_unit_err)]
 pub fn parse_usage_pair(value: &str) -> Result<(Option<u64>, Option<u64>), ()> {
     let mut parts = value.split('/').map(str::trim);
@@ -237,45 +210,6 @@ pub fn parse_byte_quantity(value: &str) -> Result<Option<u64>, ()> {
     Ok(Some((number * multiplier).round() as u64))
 }
 
-fn parse_json_lines(output: &str) -> Result<Vec<Value>, DockerError> {
-    output
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| {
-            serde_json::from_str(line).map_err(|source| DockerError::JsonLine {
-                line_number: index + 1,
-                source,
-            })
-        })
-        .collect()
-}
-
-fn string(value: &Value, keys: &[&str]) -> String {
-    optional_string(value, keys).unwrap_or_default()
-}
-
-fn optional_string(value: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| value.get(*key))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn format_command<S>(bin: &str, args: &[S]) -> String
-where
-    S: AsRef<OsStr>,
-{
-    let mut parts = vec![bin.to_owned()];
-    parts.extend(
-        args.iter()
-            .map(|arg| arg.as_ref().to_string_lossy().into_owned()),
-    );
-    parts.join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,40 +234,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn normalizes_docker_stats_json() {
-        let value: Value = serde_json::from_str(
-            r#"{"Container":"abc123","Name":"api","CPUPerc":"87.50%","MemUsage":"128MiB / 1GiB","NetIO":"1.5kB / 2kB","BlockIO":"4MiB / 8MiB"}"#,
-        )
-        .expect("json should parse");
-
-        let sample = metric_sample_from_stats_json(&value).expect("sample should normalize");
-
-        assert_eq!(sample.container_id, "abc123");
-        assert_eq!(sample.container_name, "api");
-        assert_eq!(sample.cpu_percent, Some(87.5));
-        assert_eq!(sample.memory_usage_bytes, Some(134_217_728));
-        assert_eq!(sample.memory_limit_bytes, Some(1_073_741_824));
-        assert_eq!(sample.network_rx_bytes, Some(1_500));
-        assert_eq!(sample.network_tx_bytes, Some(2_000));
-        assert_eq!(sample.disk_read_bytes, Some(4_194_304));
-        assert_eq!(sample.disk_write_bytes, Some(8_388_608));
-        assert!(
-            !sample.timestamp.is_empty(),
-            "timestamp should have a fallback value when Docker stats omits it"
-        );
+    #[tokio::test]
+    async fn mock_collector_works() {
+        let collector = MockMetricsCollector {
+            samples: vec![MetricSample {
+                container_id: "abc".to_owned(),
+                container_name: "api".to_owned(),
+                timestamp: "2026-01-01T12:00:00Z".to_owned(),
+                cpu_percent: Some(50.0),
+                memory_usage_bytes: Some(128),
+                memory_limit_bytes: Some(1024),
+                network_rx_bytes: None,
+                network_tx_bytes: None,
+                disk_read_bytes: None,
+                disk_write_bytes: None,
+            }],
+        };
+        let samples = collector.collect().await.unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].container_name, "api");
     }
 
-    #[test]
-    fn uses_provided_timestamp_when_available() {
-        let value: Value = serde_json::from_str(
-            r#"{"Container":"abc123","Name":"api","Timestamp":"2026-05-31T02:00:00Z","CPUPerc":"50.00%"}"#,
-        )
-        .expect("json should parse");
-
-        let sample = metric_sample_from_stats_json(&value).expect("sample should normalize");
-
-        assert_eq!(sample.timestamp, "2026-05-31T02:00:00Z");
+    #[tokio::test]
+    async fn noop_collector_returns_empty() {
+        let samples = NoopMetricsCollector.collect().await.unwrap();
+        assert!(samples.is_empty());
     }
 
     #[test]

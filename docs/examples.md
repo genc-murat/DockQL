@@ -1,4 +1,65 @@
-## 24. String Pattern Operators (`starts_with`, `ends_with`)
+## 23. Compose Project Events & Config
+
+**Stream Compose project events:**
+```dol
+compose myapp events
+compose myapp events | where action = "die" | select time, container
+```
+
+**Inspect Compose Configuration (services, networks, volumes):**
+```dol
+compose myapp config
+compose myapp config services | where image = "api:latest" | select name, image, ports
+compose myapp config networks | select name, driver
+compose myapp config volumes
+```
+
+## 24. Colored Error Messages with Suggestions
+
+When you make a mistake in a DOL query, the parser returns an ANSI-colored
+error message with a source pointer and a suggestion:
+
+```text
+[1m[31merror[0m: parse error at column 35: unknown query family�J
+  [36m-->[0m [32m|[0m ohserv containers
+  [36m-->[0m [32m|[0m ^
+  [33mhelp:[0m try one of: `observe`, `events`, `inspect`, `logs`, `analyze`, `fields`, `compose`, `ping`, `alert`
+```
+
+**Unknown query family:**
+```dol
+# Typo: "ohserv" instead of "observe"
+dol "ohserv containers"
+# Suggestion: try one of: `observe`, `events`, `inspect`, `logs`, `analyze`, `fields`, `compose`, `ping`, `alert`
+```
+
+**Wrong target name:**
+```dol
+# Typo: "contaienrs" instead of "containers"
+dol "observe contaienrs"
+# Suggestion: did you mean `containers`?
+```
+
+**Empty query:**
+```dol
+dol ""
+# Suggestion: try `observe containers`
+```
+
+**Unknown pipeline node:**
+```dol
+# Typo: "whre" instead of "where"
+dol "observe containers | whre cpu > 80%"
+# Suggestion: try one of: `where`, `select`, `sort by`, `group by`...
+```
+
+**Unterminated string:**
+```dol
+dol "observe containers where name = \"my-app"
+# Suggestion: add a closing `"` to terminate the string
+```
+
+## 25. String Pattern Operators (`starts_with`, `ends_with`)
 
 **Filter by name prefix:**
 ```dol
@@ -15,7 +76,7 @@ observe containers where image ends_with ":latest"
 observe containers where name starts_with "db-" and state = running
 ```
 
-## 25. `fill` Pipeline Node
+## 26. `fill` Pipeline Node
 
 **Fill null memory values with 0:**
 ```dol
@@ -27,7 +88,7 @@ observe containers | fill memory with 0 | where memory > 500
 observe containers | fill name with coalesce(label.name, name, "unnamed") | select name
 ```
 
-## 26. Date/Time Functions
+## 27. Date/Time Functions
 
 **Current timestamp:**
 ```dol
@@ -51,7 +112,7 @@ observe containers | set hour = extract(created_at, "hour") | select name, hour
 observe containers | set month = extract(created_at, "month") | group by month
 ```
 
-## 27. `let` Pipeline Node (Constants & Parameters)
+## 28. `let` Pipeline Node (Constants & Parameters)
 
 **Declare a threshold and filter by it:**
 ```dol
@@ -68,7 +129,7 @@ observe containers | let $app = "myapp" | where compose_project = $app | select 
 observe containers | let $min_cpu = 50 | let $max_cpu = 90 | where cpu between $min_cpu and $max_cpu
 ```
 
-## 28. `$var` Field References
+## 29. `$var` Field References
 
 **Explicit field access with $ prefix:**
 ```dol
@@ -76,7 +137,7 @@ observe containers where $state = running
 observe containers | set label = concat($name, ":", $image) | select label
 ```
 
-## 29. Cross-Target JOIN Queries
+## 30. Cross-Target JOIN Queries
 
 Join rows from two targets on a matching key. Output fields are prefixed with
 an auto-generated alias (`c.` for containers, `i.` for images, `n.` for networks,
@@ -97,7 +158,7 @@ observe containers join images on id = id | where c.image = "nginx:latest" | sel
 observe containers join networks on name = name | select c.name, n.name
 ```
 
-## 30. Compose Project Queries
+## 31. Compose Project Queries
 
 **List all Compose projects:**
 ```dol
@@ -148,4 +209,50 @@ compose myapp config services
 compose myapp config services | where image = "api:latest"
 compose myapp config networks
 compose myapp config volumes
+```
+
+## 32. Configurable Timeouts for Docker API Calls
+
+All Docker API timeout durations are configurable via `dol config set` or the
+config file. Run `dol config set <key> <value>` to change any:
+
+```bash
+# Docker API call timeout (default: 30s)
+dol config set api-timeout 60
+
+# Lightweight call timeout (ping, fast operations, default: 10s)
+dol config set api-quick-timeout 15
+
+# Per-container stats timeout (default: 10s)
+dol config set stats-timeout 20
+
+# Events stream per-item timeout (default: 30s)
+dol config set events-timeout 60
+
+# Alert webhook HTTP POST timeout (default: 10s)
+dol config set webhook-timeout 30
+
+# Alert container restart timeout (default: 30s)
+dol config set restart-timeout 60
+```
+
+**View current configuration:**
+```bash
+dol config view
+```
+
+**Config file example (YAML):**
+```yaml
+store: ~/.dol/store
+output: table
+host: unix:///var/run/docker.sock
+metrics_interval: 10
+snapshot_interval: 60
+theme: dark
+api_timeout: 30
+api_quick_timeout: 10
+stats_timeout: 10
+events_timeout: 30
+webhook_timeout: 10
+restart_timeout: 30
 ```

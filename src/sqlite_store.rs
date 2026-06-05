@@ -1,3 +1,18 @@
+//! SQLite-backed telemetry store.
+//!
+//! Implements [`TelemetryStore`] using an embedded SQLite database.
+//! Persists metrics, events, snapshots, and alert history with
+//! configurable retention policies. Supports time-range queries and
+//! automatic purging of old data.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let store = SqliteTelemetryStore::open("./dol.db")?;
+//! store.write_metric(sample)?;
+//! let latest = store.latest_metrics()?;
+//! ```
+
 use std::path::Path;
 
 use rusqlite::{Connection, params};
@@ -29,9 +44,9 @@ impl Default for RetentionPolicy {
     }
 }
 
-/// A `TelemetryStore` backed by an embedded SQLite database.
+/// A `TelemetryStore` backed by an embedded `SQLite` database.
 ///
-/// All data (metrics, events, snapshots) is persisted to a single SQLite file
+/// All data (metrics, events, snapshots) is persisted to a single `SQLite` file
 /// and can be queried by timestamp range. A configurable `RetentionPolicy`
 /// controls automatic purging of old data.
 pub struct SqliteTelemetryStore {
@@ -40,7 +55,7 @@ pub struct SqliteTelemetryStore {
 }
 
 impl SqliteTelemetryStore {
-    /// Open (or create) a SQLite telemetry store at the given path.
+    /// Open (or create) a `SQLite` telemetry store at the given path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, TelemetryError> {
         Self::open_with_retention(path, RetentionPolicy::default())
     }
@@ -56,7 +71,7 @@ impl SqliteTelemetryStore {
         Ok(store)
     }
 
-    /// Create an in-memory SQLite store (useful for testing).
+    /// Create an in-memory `SQLite` store (useful for testing).
     pub fn in_memory() -> Result<Self, TelemetryError> {
         let conn =
             Connection::open_in_memory().map_err(|e| TelemetryError::Storage(e.to_string()))?;
@@ -69,7 +84,7 @@ impl SqliteTelemetryStore {
     }
 
     /// Set the retention policy.
-    pub fn set_retention(&mut self, retention: RetentionPolicy) {
+    pub const fn set_retention(&mut self, retention: RetentionPolicy) {
         self.retention = retention;
     }
 
@@ -422,7 +437,7 @@ impl TelemetryStore for SqliteTelemetryStore {
                     event.rule_condition,
                     event.action_type,
                     event.action_detail,
-                    event.success as i32,
+                    i32::from(event.success),
                 ],
             )
             .map_err(|e| TelemetryError::Storage(e.to_string()))?;
@@ -633,7 +648,8 @@ mod tests {
             pipeline: vec![],
         };
 
-        let result = crate::storage::historical_events(&query, &store).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(crate::storage::historical_events(&query, &store)).unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].fields["action"],

@@ -1,5 +1,20 @@
+//! Alert evaluation engine.
+//!
+//! Evaluates DOL alert rules against live metric samples. Supports duration
+//! guards (e.g. "for 2m") and actions: `print`, `webhook` (HTTP POST), and
+//! `restart` (container restart via bollard).
+//!
+//! # Example
+//!
+//! ```ignore
+//! let rule = parser::parse(r#"alert when cpu > 80% for 2m then print "High""#)?;
+//! let mut evaluator = AlertEvaluator::new();
+//! let events = evaluator.evaluate_samples(&rule, &samples, Instant::now())?;
+//! ```
+
 use std::{
     collections::{BTreeMap, HashMap},
+    sync::OnceLock,
     time::{Duration as StdDuration, Instant},
 };
 
@@ -13,6 +28,38 @@ use crate::{
     eval::{self, EvalError},
     metrics::{MetricsCollector, MetricsError},
 };
+
+// ── Global alert timeout configuration ─────────────────────────────────────
+
+/// Global cache for alert timeout values (set once at startup from config).
+static ALERT_TIMEOUTS: OnceLock<AlertTimeouts> = OnceLock::new();
+
+struct AlertTimeouts {
+    webhook: StdDuration,
+    restart: StdDuration,
+}
+
+/// Initialise the global alert timeout cache. Should be called once at startup.
+pub fn init_alert_timeouts(webhook_secs: u64, restart_secs: u64) {
+    let _ = ALERT_TIMEOUTS.set(AlertTimeouts {
+        webhook: StdDuration::from_secs(webhook_secs.max(1)),
+        restart: StdDuration::from_secs(restart_secs.max(1)),
+    });
+}
+
+fn webhook_timeout() -> StdDuration {
+    ALERT_TIMEOUTS.get().map_or_else(
+        || StdDuration::from_secs(10),
+        |t| t.webhook,
+    )
+}
+
+fn restart_timeout() -> StdDuration {
+    ALERT_TIMEOUTS.get().map_or_else(
+        || StdDuration::from_secs(30),
+        |t| t.restart,
+    )
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct AlertEvent {
@@ -47,6 +94,7 @@ pub struct AlertEvaluator {
 }
 
 impl AlertEvaluator {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -74,7 +122,7 @@ impl AlertEvaluator {
             let required = rule.duration.map(duration_to_std).unwrap_or_default();
 
             if elapsed >= required {
-                events.push(alert_event(rule, sample)?);
+                events.push(alert_event(rule, sample));
             }
         }
 
@@ -82,7 +130,7 @@ impl AlertEvaluator {
     }
 }
 
-pub fn evaluate_alert_once<C>(
+pub async fn evaluate_alert_once<C>(
     rule: &AlertRule,
     collector: &C,
 ) -> Result<Vec<AlertEvent>, AlertError>
@@ -90,10 +138,11 @@ where
     C: MetricsCollector + ?Sized,
 {
     let mut evaluator = AlertEvaluator::new();
-    let samples = collector.collect()?;
+    let samples = collector.collect().await?;
     evaluator.evaluate_samples(rule, &samples, Instant::now())
 }
 
+#[must_use]
 pub fn render_alert_event(event: &AlertEvent) -> String {
     match &event.action {
         AlertActionPlan::Print { message } => {
@@ -131,7 +180,8 @@ pub fn render_alert_event(event: &AlertEvent) -> String {
     }
 }
 
-pub fn duration_to_std(duration: Duration) -> StdDuration {
+#[must_use]
+pub const fn duration_to_std(duration: Duration) -> StdDuration {
     let seconds = match duration.unit {
         DurationUnit::Seconds => duration.value,
         DurationUnit::Minutes => duration.value * 60,
@@ -141,7 +191,7 @@ pub fn duration_to_std(duration: Duration) -> StdDuration {
     StdDuration::from_secs(seconds)
 }
 
-fn alert_event(rule: &AlertRule, sample: &MetricSample) -> Result<AlertEvent, AlertError> {
+fn alert_event(rule: &AlertRule, sample: &MetricSample) -> AlertEvent {
     let action = match &rule.action {
         AlertAction::Print(message) => AlertActionPlan::Print {
             message: message.clone(),
@@ -164,56 +214,87 @@ fn alert_event(rule: &AlertRule, sample: &MetricSample) -> Result<AlertEvent, Al
     };
     let message = render_action_message(&action);
 
-    Ok(AlertEvent {
+    AlertEvent {
         container_id: sample.container_id.clone(),
         container_name: sample.container_name.clone(),
         message,
         action,
-    })
+    }
 }
 
 fn execute_webhook(url: &str) -> bool {
-    let rt = tokio::runtime::Runtime::new();
-    match rt {
-        Ok(runtime) => {
-            match runtime.block_on(async {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(10))
-                    .build()?;
-                let resp = client.post(url).send().await?;
-                Ok::<_, reqwest::Error>(resp.status().is_success())
-            }) {
-                Ok(success) => success,
-                Err(e) => {
-                    eprintln!("Webhook POST failed: {e}");
-                    false
-                }
+    async fn do_webhook(url: &str, timeout: StdDuration) -> Result<bool, String> {
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| format!("reqwest client: {e}"))?;
+        let resp = client
+            .post(url)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        Ok(resp.status().is_success())
+    }
+
+    let timeout = webhook_timeout();
+    let url = url.to_owned();
+    match std::thread::spawn(move || {
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(do_webhook(&url, timeout)),
+            Err(e) => {
+                eprintln!("Failed to create runtime for webhook: {e}");
+                Ok(false)
             }
         }
-        Err(e) => {
-            eprintln!("Failed to create runtime for webhook: {e}");
+    })
+    .join()
+    {
+        Ok(Ok(success)) => success,
+        Ok(Err(e)) => {
+            eprintln!("Webhook POST failed: {e}");
+            false
+        }
+        Err(_) => {
+            eprintln!("Webhook thread panicked");
             false
         }
     }
 }
 
 fn execute_restart(target: &str) -> bool {
-    let target = target.trim();
-    let output = std::process::Command::new("docker")
-        .args(["restart", target])
-        .output();
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                true
-            } else {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                eprintln!("docker restart failed: {stderr}");
-                false
+    async fn do_restart(target: &str, timeout: StdDuration) -> Result<bool, String> {
+        let docker = bollard::Docker::connect_with_local_defaults()
+            .map_err(|e| format!("bollard connect: {e}"))?;
+        tokio::time::timeout(
+            timeout,
+            docker.restart_container(target, None::<bollard::query_parameters::RestartContainerOptions>),
+        )
+        .await
+        .map_err(|_| format!("restart timed out after {}s", timeout.as_secs()))?
+        .map_err(|e| format!("restart failed: {e}"))?;
+        Ok(true)
+    }
+
+    let timeout = restart_timeout();
+    let target = target.to_owned();
+    match std::thread::spawn(move || {
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(do_restart(&target, timeout)),
+            Err(e) => {
+                eprintln!("Failed to create runtime for restart: {e}");
+                Ok(false)
             }
         }
-        Err(e) => {
-            eprintln!("Failed to execute docker restart: {e}");
+    })
+    .join()
+    {
+        Ok(Ok(success)) => success,
+        Ok(Err(e)) => {
+            eprintln!("Container restart failed: {e}");
+            false
+        }
+        Err(_) => {
+            eprintln!("Restart thread panicked");
             false
         }
     }
@@ -296,15 +377,13 @@ fn sample_fields(sample: &MetricSample) -> BTreeMap<String, JsonValue> {
 fn json_option_f64(value: Option<f64>) -> JsonValue {
     value
         .and_then(Number::from_f64)
-        .map(JsonValue::Number)
-        .unwrap_or(JsonValue::Null)
+        .map_or(JsonValue::Null, JsonValue::Number)
 }
 
 fn json_option_u64(value: Option<u64>) -> JsonValue {
     value
         .map(Number::from)
-        .map(JsonValue::Number)
-        .unwrap_or(JsonValue::Null)
+        .map_or(JsonValue::Null, JsonValue::Number)
 }
 
 #[cfg(test)]
@@ -312,6 +391,11 @@ mod tests {
     use std::time::Duration as StdDuration;
 
     use crate::{ast::DurationUnit, metrics::MockMetricsCollector, parser};
+
+    /// 121 seconds — just past the 2-minute duration guard used in tests.
+    const JUST_PAST_TWO_MINUTES: StdDuration = StdDuration::from_secs(121);
+    /// 60 seconds — used when checking that a recovered condition resets the guard.
+    const ONE_MINUTE: StdDuration = StdDuration::from_secs(60);
 
     use super::*;
 
@@ -322,7 +406,10 @@ mod tests {
             samples: vec![sample("api", 87.5)],
         };
 
-        let events = evaluate_alert_once(&rule, &collector).expect("alert should evaluate");
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let events = rt
+            .block_on(evaluate_alert_once(&rule, &collector))
+            .expect("alert should evaluate");
 
         assert_eq!(events.len(), 1);
         assert_eq!(
@@ -348,7 +435,7 @@ mod tests {
             .evaluate_samples(&rule, &samples, start)
             .expect("first evaluation should pass");
         let second = evaluator
-            .evaluate_samples(&rule, &samples, start + StdDuration::from_secs(121))
+            .evaluate_samples(&rule, &samples, start + JUST_PAST_TWO_MINUTES)
             .expect("second evaluation should pass");
 
         assert!(first.is_empty());
@@ -368,14 +455,14 @@ mod tests {
             .evaluate_samples(
                 &rule,
                 &[sample("api", 20.0)],
-                start + StdDuration::from_secs(60),
+                start + ONE_MINUTE,
             )
             .expect("evaluation should pass");
         let events = evaluator
             .evaluate_samples(
                 &rule,
                 &[sample("api", 90.0)],
-                start + StdDuration::from_secs(121),
+                start + JUST_PAST_TWO_MINUTES,
             )
             .expect("evaluation should pass");
 
@@ -390,8 +477,13 @@ mod tests {
             samples: vec![sample("api", 90.0)],
         };
 
-        let webhook_events = evaluate_alert_once(&webhook, &collector).expect("webhook");
-        let restart_events = evaluate_alert_once(&restart, &collector).expect("restart");
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let webhook_events = rt
+            .block_on(evaluate_alert_once(&webhook, &collector))
+            .expect("webhook");
+        let restart_events = rt
+            .block_on(evaluate_alert_once(&restart, &collector))
+            .expect("restart");
 
         assert!(matches!(
             webhook_events[0].action,

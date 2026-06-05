@@ -1,10 +1,28 @@
+//! TUI dashboard and top-like container monitor.
+//!
+//! Uses [`ratatui`] and [`crossterm`] for terminal UI. Provides two modes:
+//!
+//! - **`dol top`** — live-updating container list with CPU/memory gauges
+//! - **`dol dashboard`** — multi-panel view with container list, stats, and
+//!   event stream
+//!
+//! Both modes listen to Docker events for real-time updates and fall back
+//! to periodic polling when the events stream is unavailable.
+//!
+//! # Example
+//!
+//! ```ignore
+//! dashboard::run_top(&config).await?;
+//! dashboard::run_dashboard(&config).await?;
+//! ```
+
 use std::collections::HashMap;
-use std::io::BufRead;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use futures_util::StreamExt;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -13,10 +31,18 @@ use ratatui::{Frame, Terminal};
 
 use crate::{
     config::DolConfig,
-    docker::{Container, DockerCliClient, DockerClient, DockerEvent, MetricSample},
-    events::parse_docker_event_json,
-    metrics::{DockerCliMetricsCollector, MetricsCollector},
+    docker::{BollardDockerClient, Container, DockerClient, DockerEvent, MetricSample},
+    metrics::{BollardMetricsCollector, MetricsCollector},
 };
+
+/// Fallback interval for full container refresh when events listener fails.
+const CONTAINER_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Interval for lightweight metrics-only refresh.
+const METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Poll duration for non-blocking keyboard event reading.
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 const HELP_TEXT: &str = "\
  DOL Keyboard Help
@@ -63,9 +89,10 @@ fn event_action_color(action: &str) -> Color {
     }
 }
 
-fn collect_metrics_map(collector: &DockerCliMetricsCollector) -> HashMap<String, MetricSample> {
+async fn collect_metrics_map(collector: &impl MetricsCollector) -> HashMap<String, MetricSample> {
     collector
         .collect()
+        .await
         .ok()
         .unwrap_or_default()
         .into_iter()
@@ -94,6 +121,7 @@ fn is_container_state_change(action: &str) -> bool {
 
 /// Format a Docker event's time (Unix seconds or nanoseconds as string)
 /// into HH:MM:SS display format.
+#[allow(clippy::option_if_let_else)]
 fn format_event_time(event: &DockerEvent) -> String {
     let time_raw = &event.time;
     if let Ok(secs) = time_raw.parse::<u64>() {
@@ -106,63 +134,41 @@ fn format_event_time(event: &DockerEvent) -> String {
         let h = (secs / 3600) % 24;
         let m = (secs / 60) % 60;
         let s = secs % 60;
-        format!("{h:02}:{m:02}:{s:02}")
-    } else if time_raw.len() >= 19 {
-        // ISO timestamp: "2026-05-31T02:00:00.000000000Z"
-        if let Some(t) = time_raw.get(11..19) {
-            t.to_owned()
+        format!("{h:02}:{m:02}:{s:02}")        } else if time_raw.len() >= 19 {
+            // ISO timestamp: "2026-05-31T02:00:00.000000000Z"
+            time_raw.get(11..19).map_or_else(|| "??:??:??".to_owned(), std::borrow::ToOwned::to_owned)
         } else {
             "??:??:??".to_owned()
         }
-    } else {
-        "??:??:??".to_owned()
-    }
 }
 
-/// Spawn a background thread that listens to `docker events` and sends
-/// parsed `ParsedEvent` values through a channel. The channel allows the
-/// main TUI loop to react to events without polling the Docker API.
-fn spawn_event_listener() -> mpsc::Receiver<ParsedEvent> {
+/// Spawn a background tokio task that listens to Docker events via the
+/// bollard API and sends parsed `ParsedEvent` values through a channel.
+fn spawn_event_listener(docker: std::sync::Arc<BollardDockerClient>, events_timeout: Duration) -> mpsc::Receiver<ParsedEvent> {
     let (tx, rx) = mpsc::channel();
 
-    std::thread::spawn(move || {
-        let mut child = match std::process::Command::new("docker")
-            .args(["events", "--format", "{{json .}}"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(_) => return,
-        };
+    tokio::spawn(async move {
+    let Ok(stream) = docker.events_stream(None, None).await else { return; };
 
-        if let Some(stdout) = child.stdout.take() {
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines() {
-                let line = match line {
-                    Ok(l) => l,
-                    Err(_) => break,
-                };
-                if let Ok(docker_event) = parse_docker_event_json(&line) {
-                    let actor_id = if docker_event.actor_id.len() > 12 {
-                        docker_event.actor_id[..12].to_owned()
-                    } else {
-                        docker_event.actor_id.clone()
-                    };
-                    let parsed = ParsedEvent {
-                        time: format_event_time(&docker_event),
-                        action: docker_event.action,
-                        actor_id,
-                        container_name: docker_event.container.unwrap_or_default(),
-                    };
-                    if tx.send(parsed).is_err() {
-                        break; // receiver dropped → main loop ended
-                    }
-                }
+        let mut stream = stream;
+        loop {
+            let next = tokio::time::timeout(events_timeout, stream.next()).await;
+            let Ok(Some(Ok(event))) = next else { break };
+            let actor_id = if event.actor_id.len() > 12 {
+                event.actor_id[..12].to_owned()
+            } else {
+                event.actor_id.clone()
+            };
+            let parsed = ParsedEvent {
+                time: format_event_time(&event),
+                action: event.action,
+                actor_id,
+                container_name: event.container.unwrap_or_default(),
+            };
+            if tx.send(parsed).is_err() {
+                break; // receiver dropped → main loop ended
             }
         }
-        let _ = child.kill();
-        let _ = child.wait();
     });
 
     rx
@@ -170,27 +176,27 @@ fn spawn_event_listener() -> mpsc::Receiver<ParsedEvent> {
 
 // ── Shared helpers ─────────────────────────────────────────
 
-fn refresh_all(
-    docker: &DockerCliClient,
-    metrics: &DockerCliMetricsCollector,
+async fn refresh_all(
+    docker: &BollardDockerClient,
+    metrics: &BollardMetricsCollector<BollardDockerClient>,
     containers: &mut Vec<Container>,
     metrics_map: &mut HashMap<String, MetricSample>,
     last_refresh: &mut String,
 ) -> Result<(), anyhow::Error> {
-    if let Ok(c) = docker.list_containers() {
+    if let Ok(c) = docker.list_containers().await {
         *containers = c;
     }
-    *metrics_map = collect_metrics_map(metrics);
+    *metrics_map = collect_metrics_map(metrics).await;
     update_timestamp(last_refresh);
     Ok(())
 }
 
-fn refresh_metrics_only(
-    metrics: &DockerCliMetricsCollector,
+async fn refresh_metrics_only(
+    metrics: &impl MetricsCollector,
     metrics_map: &mut HashMap<String, MetricSample>,
     last_refresh: &mut String,
 ) {
-    *metrics_map = collect_metrics_map(metrics);
+    *metrics_map = collect_metrics_map(metrics).await;
     update_timestamp(last_refresh);
 }
 
@@ -237,7 +243,7 @@ fn gauge_bar(ratio: f64, width: u16) -> String {
     if width == 0 {
         return String::new();
     }
-    let filled = (ratio * width as f64).round() as usize;
+    let filled = (ratio * f64::from(width)).round() as usize;
     let filled = filled.min(width as usize);
     let empty = width.saturating_sub(filled as u16) as usize;
     "█".repeat(filled) + "░".repeat(empty).as_str()
@@ -245,9 +251,10 @@ fn gauge_bar(ratio: f64, width: u16) -> String {
 
 // ── dol top ────────────────────────────────────────────────────
 
-pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
-    let docker = DockerCliClient::default();
-    let metrics_collector = DockerCliMetricsCollector::default();
+pub async fn run_top(config: &DolConfig) -> anyhow::Result<()> {
+    let docker_arc = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
+    let docker = docker_arc.as_ref();
+    let metrics_collector = BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker_arc), config);
 
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -266,17 +273,19 @@ pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
     let mut in_filter_mode = false;
     let mut last_refresh = String::new();
 
-    // Spawn a background Docker events listener
-    let event_rx = spawn_event_listener();
+    let events_timeout = Duration::from_secs(config.events_timeout.unwrap_or(30));
+
+    // Spawn a background Docker events listener via bollard API
+    let event_rx = spawn_event_listener(std::sync::Arc::clone(&docker_arc), events_timeout);
 
     // Initial load
     let _ = refresh_all(
-        &docker,
+        docker,
         &metrics_collector,
         &mut containers,
         &mut metrics_map,
         &mut last_refresh,
-    );
+    ).await;
     let mut last_metrics_refresh = std::time::Instant::now();
     let mut last_container_refresh = std::time::Instant::now();
 
@@ -311,33 +320,33 @@ pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
         if container_changed {
             // Full refresh: containers + metrics (triggered by Docker event)
             let _ = refresh_all(
-                &docker,
+                docker,
                 &metrics_collector,
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            );
+            ).await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
-        } else if last_container_refresh.elapsed() >= Duration::from_secs(30) {
+        } else if last_container_refresh.elapsed() >= CONTAINER_REFRESH_INTERVAL {
             // Fallback full refresh (in case the events listener failed)
             let _ = refresh_all(
-                &docker,
+                docker,
                 &metrics_collector,
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            );
+            ).await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
-        } else if last_metrics_refresh.elapsed() >= Duration::from_secs(2) {
+        } else if last_metrics_refresh.elapsed() >= METRICS_REFRESH_INTERVAL {
             // Periodic metrics-only refresh (lighter weight — no docker ps)
-            refresh_metrics_only(&metrics_collector, &mut metrics_map, &mut last_refresh);
+            refresh_metrics_only(&metrics_collector, &mut metrics_map, &mut last_refresh).await;
             last_metrics_refresh = std::time::Instant::now();
         }
 
         // ── Key events ──
-        if event::poll(Duration::from_millis(200))?
+        if event::poll(EVENT_POLL_INTERVAL)?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
@@ -346,12 +355,12 @@ pub async fn run_top(_config: &DolConfig) -> anyhow::Result<()> {
                 KeyCode::Char('h') if !in_filter_mode => show_help = !show_help,
                 KeyCode::Char('r') if !in_filter_mode => {
                     let _ = refresh_all(
-                        &docker,
+                        docker,
                         &metrics_collector,
                         &mut containers,
                         &mut metrics_map,
                         &mut last_refresh,
-                    );
+                    ).await;
                     last_metrics_refresh = std::time::Instant::now();
                     last_container_refresh = std::time::Instant::now();
                 }
@@ -486,15 +495,15 @@ fn draw_summary_bar(
         ),
         Span::raw("total  │ "),
         Span::styled("●", Style::default().fg(Color::Green)),
-        Span::raw(format!(" {}  ", running)),
+        Span::raw(format!(" {running}  ")),
         Span::styled("●", Style::default().fg(Color::Red)),
-        Span::raw(format!(" {}  ", exited)),
+        Span::raw(format!(" {exited}  ")),
         Span::styled("●", Style::default().fg(Color::Yellow)),
-        Span::raw(format!(" {}  ", paused)),
+        Span::raw(format!(" {paused}  ")),
     ];
     if other > 0 {
         spans.push(Span::styled("●", Style::default().fg(Color::Blue)));
-        spans.push(Span::raw(format!(" {}  │  ", other)));
+        spans.push(Span::raw(format!(" {other}  │  ")));
     } else {
         spans.push(Span::raw(" │  "));
     }
@@ -550,7 +559,7 @@ fn draw_container_table_top(
                     Style::default().fg(gauge_color(mem_pct / 100.0)),
                 )),
                 Cell::from(Span::styled(
-                    mem_str.to_string() + " " + &format!("{:5.1}%", mem_pct),
+                    mem_str + " " + &format!("{mem_pct:5.1}%"),
                     Style::default().fg(gauge_color(mem_pct / 100.0)),
                 )),
                 Cell::from(Span::styled(c.state.clone(), s_style)),
@@ -659,9 +668,10 @@ fn draw_status_bar(
 
 // ── dol dashboard ──────────────────────────────────────────────
 
-pub async fn run_dashboard(_config: &DolConfig) -> anyhow::Result<()> {
-    let docker = DockerCliClient::default();
-    let metrics_collector = DockerCliMetricsCollector::default();
+pub async fn run_dashboard(config: &DolConfig) -> anyhow::Result<()> {
+    let docker_arc = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
+    let docker = docker_arc.as_ref();
+    let metrics_collector = BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker_arc), config);
 
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -676,18 +686,20 @@ pub async fn run_dashboard(_config: &DolConfig) -> anyhow::Result<()> {
     let mut show_help = false;
     let mut last_refresh = String::new();
 
-    // Spawn a background Docker events listener
-    let event_rx = spawn_event_listener();
+    let events_timeout = Duration::from_secs(config.events_timeout.unwrap_or(30));
+
+    // Spawn a background Docker events listener via bollard API
+    let event_rx = spawn_event_listener(std::sync::Arc::clone(&docker_arc), events_timeout);
 
     // Initial load: containers + recent events
     let _ = refresh_all(
-        &docker,
+        docker,
         &metrics_collector,
         &mut containers,
         &mut metrics_map,
         &mut last_refresh,
-    );
-    let _ = refresh_events(&mut events);
+    ).await;
+    refresh_events(docker, &mut events, events_timeout).await;
     let mut last_metrics_refresh = std::time::Instant::now();
     let mut last_container_refresh = std::time::Instant::now();
 
@@ -724,33 +736,33 @@ pub async fn run_dashboard(_config: &DolConfig) -> anyhow::Result<()> {
         if container_changed {
             // Full refresh: containers + metrics (triggered by Docker event)
             let _ = refresh_all(
-                &docker,
+                docker,
                 &metrics_collector,
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            );
+            ).await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
-        } else if last_container_refresh.elapsed() >= Duration::from_secs(30) {
+        } else if last_container_refresh.elapsed() >= CONTAINER_REFRESH_INTERVAL {
             // Fallback full refresh (in case the events listener failed)
             let _ = refresh_all(
-                &docker,
+                docker,
                 &metrics_collector,
                 &mut containers,
                 &mut metrics_map,
                 &mut last_refresh,
-            );
+            ).await;
             last_metrics_refresh = std::time::Instant::now();
             last_container_refresh = std::time::Instant::now();
-        } else if last_metrics_refresh.elapsed() >= Duration::from_secs(2) {
+        } else if last_metrics_refresh.elapsed() >= METRICS_REFRESH_INTERVAL {
             // Periodic metrics-only refresh (lighter weight)
-            refresh_metrics_only(&metrics_collector, &mut metrics_map, &mut last_refresh);
+            refresh_metrics_only(&metrics_collector, &mut metrics_map, &mut last_refresh).await;
             last_metrics_refresh = std::time::Instant::now();
         }
 
         // ── Key events ──
-        if event::poll(Duration::from_millis(200))?
+        if event::poll(EVENT_POLL_INTERVAL)?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
@@ -759,13 +771,13 @@ pub async fn run_dashboard(_config: &DolConfig) -> anyhow::Result<()> {
                 KeyCode::Char('h') => show_help = !show_help,
                 KeyCode::Char('r') => {
                     let _ = refresh_all(
-                        &docker,
+                        docker,
                         &metrics_collector,
                         &mut containers,
                         &mut metrics_map,
                         &mut last_refresh,
-                    );
-                    let _ = refresh_events(&mut events);
+                    ).await;
+                    refresh_events(docker, &mut events, events_timeout).await;
                     last_metrics_refresh = std::time::Instant::now();
                     last_container_refresh = std::time::Instant::now();
                 }
@@ -788,73 +800,41 @@ struct ParsedEvent {
     container_name: String,
 }
 
-fn refresh_events(events: &mut Vec<ParsedEvent>) -> Result<(), anyhow::Error> {
-    if let Ok(output) = std::process::Command::new("docker")
-        .args(["events", "--until", "5s", "--format", "{{json .}}"])
-        .output()
-        && output.status.success()
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines().rev() {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                let time_raw = val
-                    .get("timeNano")
-                    .or_else(|| val.get("time"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0");
-                let action = val
-                    .get("Action")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
-                    .to_owned();
-                let actor_id = val
-                    .get("Actor")
-                    .and_then(|a| a.get("ID"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned();
-                let container_name = val
-                    .get("Actor")
-                    .and_then(|a| a.get("Attributes"))
-                    .and_then(|a| a.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&actor_id[..12.min(actor_id.len())])
-                    .to_owned();
+/// Fetch recent Docker events (last ~5 seconds) via the bollard events API
+/// and append new unique events to the events buffer.
+async fn refresh_events(docker: &BollardDockerClient, events: &mut Vec<ParsedEvent>, events_timeout: Duration) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let since = now.saturating_sub(5);
 
-                let time_fmt = if time_raw.len() >= 19 {
-                    if let Ok(nanos) = time_raw.parse::<u64>() {
-                        let secs = nanos / 1_000_000_000;
-                        let h = (secs / 3600) % 24;
-                        let m = (secs / 60) % 60;
-                        let s = secs % 60;
-                        format!("{h:02}:{m:02}:{s:02}")
-                    } else if time_raw.len() >= 16 {
-                        time_raw[11..19].to_owned()
-                    } else {
-                        "??:??:??".to_owned()
-                    }
-                } else {
-                    "??:??:??".to_owned()
-                };
+    let Ok(stream) = docker.events_stream(Some(&since.to_string()), Some(&now.to_string())).await else { return };
 
-                let pe = ParsedEvent {
-                    time: time_fmt,
-                    action,
-                    actor_id: actor_id[..12.min(actor_id.len())].to_owned(),
-                    container_name,
-                };
-                if !events.iter().any(|e| {
-                    e.actor_id == pe.actor_id && e.action == pe.action && e.time == pe.time
-                }) {
-                    events.push(pe);
-                }
-            }
-        }
-        if events.len() > 200 {
-            events.drain(0..events.len() - 200);
+    let mut stream = stream;
+    loop {
+        let next = tokio::time::timeout(events_timeout, stream.next()).await;
+        let Ok(Some(Ok(event))) = next else { break };
+        let actor_id = if event.actor_id.len() > 12 {
+            event.actor_id[..12].to_owned()
+        } else {
+            event.actor_id.clone()
+        };
+        let pe = ParsedEvent {
+            time: format_event_time(&event),
+            action: event.action,
+            actor_id,
+            container_name: event.container.unwrap_or_default(),
+        };
+        if !events.iter().any(|e| {
+            e.actor_id == pe.actor_id && e.action == pe.action && e.time == pe.time
+        }) {
+            events.push(pe);
         }
     }
-    Ok(())
+    if events.len() > 200 {
+        events.drain(0..events.len() - 200);
+    }
 }
 
 fn draw_dashboard(
@@ -922,15 +902,15 @@ fn draw_dash_summary(f: &mut Frame, area: Rect, containers: &[Container], last_r
         Span::raw(format!("{} total", containers.len())),
         Span::raw("  │  "),
         Span::styled("●", Style::default().fg(Color::Green)),
-        Span::raw(format!(" {}  ", running)),
+        Span::raw(format!(" {running}  ")),
         Span::styled("●", Style::default().fg(Color::Red)),
-        Span::raw(format!(" {}  ", exited)),
+        Span::raw(format!(" {exited}  ")),
         Span::styled("●", Style::default().fg(Color::Yellow)),
-        Span::raw(format!(" {}  ", paused)),
+        Span::raw(format!(" {paused}  ")),
     ];
     if other > 0 {
         spans.push(Span::styled("●", Style::default().fg(Color::Blue)));
-        spans.push(Span::raw(format!(" {}", other)));
+        spans.push(Span::raw(format!(" {other}")));
     }
     spans.push(Span::raw("  │  "));
     spans.push(Span::raw(format!("refresh: {last_refresh}")));
@@ -968,11 +948,11 @@ fn draw_dash_container_panel(
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Cell::from(Span::styled(
-                    format!("{:5.1}%", cpu_pct),
+                    format!("{cpu_pct:5.1}%"),
                     Style::default().fg(gauge_color(cpu_pct / 100.0)),
                 )),
                 Cell::from(Span::styled(
-                    mem_str + " " + &format!("({:.0}%)", mem_pct),
+                    mem_str + " " + &format!("({mem_pct:.0}%)"),
                     Style::default().fg(gauge_color(mem_pct / 100.0)),
                 )),
                 Cell::from(Span::styled(c.state.clone(), s_style)),
@@ -1059,8 +1039,7 @@ fn draw_dash_stats_panel(f: &mut Frame, area: Rect, containers: &[Container], fo
         let bar_w = if total > 0 {
             (count * max_w)
                 .checked_div(total)
-                .map(|v| v.max(1).min(max_w))
-                .unwrap_or(0)
+                .map_or(0, |v| v.max(1).min(max_w))
         } else {
             0
         };

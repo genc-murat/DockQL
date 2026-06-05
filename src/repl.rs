@@ -1,3 +1,15 @@
+//! Interactive REPL (Read-Eval-Print Loop).
+//!
+//! Provides a [`rustyline`]-based shell with tab completion, command
+//! history, and syntax-coloured error messages. Supports all DOL query
+//! types plus meta-commands (`.help`, `.exit`, `.host`, `.watch`, etc.).
+//!
+//! # Example
+//!
+//! ```ignore
+//! repl::run_repl(&config).await?;
+//! ```
+
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -9,11 +21,14 @@ use rustyline::{CompletionType, Config, EditMode, Editor, Helper};
 use crate::{
     ast::Query,
     config::DolConfig,
-    docker::DockerCliClient,
+    docker::BollardDockerClient,
+    eval::EvalError,
     executor::{self, render_table},
-    metrics::{DockerCliMetricsCollector, MetricsCollector},
+    metrics::{BollardMetricsCollector, MetricsCollector},
     parser,
     sqlite_store::SqliteTelemetryStore,
+    ALERT_EVAL_INTERVAL,
+    ANSI_BOLD, ANSI_FG_RED, ANSI_RESET,
 };
 
 #[derive(Default)]
@@ -119,6 +134,12 @@ impl Hinter for DolHelper {
 impl Highlighter for DolHelper {}
 
 pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
+    // Initialise global alert timeout config from loaded config.
+    crate::alerts::init_alert_timeouts(
+        config.webhook_timeout.unwrap_or(10),
+        config.restart_timeout.unwrap_or(30),
+    );
+
     // Apply config host on startup so all Docker clients use it.
     let mut current_host = config.host.clone().unwrap_or_default();
     if !current_host.is_empty() {
@@ -234,7 +255,8 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
         }
 
         if let Err(e) = execute_dol_query(&trimmed, config).await {
-            eprintln!("\x1b[31mError: {e}\x1b[0m");
+            let msg = format_error_color(&e);
+            eprintln!("{msg}");
         }
     }
 
@@ -262,6 +284,24 @@ fn print_repl_help() {
     println!("  ... and any other DOL query");
 }
 
+/// Format an anyhow error with ANSI colours, checking for known error types.
+fn format_error_color(err: &anyhow::Error) -> String {
+    if let Some(parse_err) = err.downcast_ref::<parser::ParseError>() {
+        return parse_err.format_color();
+    }
+    if let Some(eval_err) = err.downcast_ref::<EvalError>() {
+        return eval_err.format_color();
+    }
+    // Fallback: bold red prefix + Display
+    format!(
+        "{bold}{red}error{reset}: {msg}",
+        bold = ANSI_BOLD,
+        red = ANSI_FG_RED,
+        reset = ANSI_RESET,
+        msg = err,
+    )
+}
+
 async fn execute_dol_query(query: &str, config: &DolConfig) -> anyhow::Result<()> {
     let parsed = parser::parse(query)?;
 
@@ -276,22 +316,23 @@ async fn execute_dol_query(query: &str, config: &DolConfig) -> anyhow::Result<()
             anyhow::anyhow!("this query requires historical data; set store in config")
         })?;
         let store = SqliteTelemetryStore::open(store_path)?;
-        let result = executor::execute_with_store(&parsed.query, &store)?;
+        let result = executor::execute_with_store(&parsed.query, &store).await?;
         println!("{}", render_table(&result));
         return Ok(());
     }
 
     if let Query::Alert(rule) = &parsed.query {
-        let metrics = DockerCliMetricsCollector::default();
+        let docker = BollardDockerClient::connect_with_config(config)?;
+        let metrics = BollardMetricsCollector::with_config(std::sync::Arc::new(docker), config);
         let mut evaluator = crate::alerts::AlertEvaluator::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
 
         println!("Evaluating alert... (Ctrl+C to stop)");
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => break,
                 _ = interval.tick() => {
-                    let samples = metrics.collect()?;
+                    let samples = metrics.collect().await?;
                     let events = evaluator.evaluate_samples(rule, &samples, std::time::Instant::now())?;
                     for event in events {
                         println!("{}", crate::alerts::render_alert_event(&event));
@@ -303,19 +344,21 @@ async fn execute_dol_query(query: &str, config: &DolConfig) -> anyhow::Result<()
     }
 
     if let Query::Events(events_query) = &parsed.query {
-        let source = crate::events::DockerCliEventSource::default();
-        return crate::events::stream_events(events_query, &source, |row| {
+        let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
+        let source = crate::events::BollardEventSource::new(std::sync::Arc::clone(&docker));
+        return crate::events::stream_events(events_query, &source, move |row| {
             let result = executor::ExecutionResult { rows: vec![row] };
             println!("{}", render_table(&result));
             Ok(())
         })
+        .await
         .map_err(Into::into);
     }
 
     // Batch query.
-    let docker = DockerCliClient::default();
-    let metrics = DockerCliMetricsCollector::default();
-    let result = executor::execute_with_metrics(&parsed.query, &docker, &metrics)?;
+    let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
+    let metrics = BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker), config);
+    let result = executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics).await?;
     println!("{}", render_table(&result));
 
     Ok(())

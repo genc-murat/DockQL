@@ -1,38 +1,44 @@
-use std::{
-    collections::BTreeMap,
-    ffi::OsStr,
-    io::{BufRead, BufReader, Lines},
-    process::{Child, ChildStdout, Command, Stdio},
-};
+//! Docker event streaming and collection.
+//!
+//! Provides [`EventSource`] trait, [`BollardEventSource`] (live Docker
+//! events), and [`MockEventSource`] (testing). The [`stream_events`]
+//! function processes events through a DOL pipeline in real-time, while
+//! [`collect_events`] returns a batch result.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let source = BollardEventSource::new(Arc::new(docker));
+//! events::stream_events(query, &source, |row| { println!("{row:?}"); Ok(()) }).await?;
+//! ```
 
+use std::{collections::BTreeMap, pin::Pin};
+
+use futures_util::{Stream, StreamExt};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::{
     ast::{CollectionTarget, EventsQuery, PipelineNode},
-    docker::{DockerError, DockerEvent},
+    docker::{DockerClient, DockerError, DockerEvent},
     eval::{self, EvalError},
     executor::{ExecutionResult, Row},
+    json_string,
 };
 
+/// Shared type alias for the complex event stream return type.
+pub type EventStream = Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>;
+
 pub trait EventSource {
-    fn events(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<DockerEvent, EventsError>>>, EventsError>;
+    fn events_stream(&self) -> impl std::future::Future<Output = Result<EventStream, EventsError>> + Send
+    where
+        Self: Sync;
 }
 
 #[derive(Debug, Error)]
 pub enum EventsError {
     #[error("{0}")]
     Docker(#[from] DockerError),
-    #[error("failed to run docker command `{command}`: {source}")]
-    CommandIo {
-        command: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("failed to read docker event stream: {0}")]
-    Read(std::io::Error),
     #[error("failed to parse docker event JSON: {0}")]
     Json(serde_json::Error),
     #[error("unsupported event target: {0:?}")]
@@ -43,87 +49,34 @@ pub enum EventsError {
     Eval(#[from] EvalError),
 }
 
-#[derive(Debug, Clone)]
-pub struct DockerCliEventSource {
-    docker_bin: String,
+// ── BollardEventSource ──────────────────────────────────────────────────────
+
+/// An event source that uses a `DockerClient` (bollard) to stream Docker events.
+pub struct BollardEventSource<C> {
+    docker: std::sync::Arc<C>,
 }
 
-impl Default for DockerCliEventSource {
-    fn default() -> Self {
-        Self::new("docker")
+impl<C> BollardEventSource<C>
+where
+    C: DockerClient + Send + Sync + 'static,
+{
+    pub const fn new(docker: std::sync::Arc<C>) -> Self {
+        Self { docker }
     }
 }
 
-impl DockerCliEventSource {
-    pub fn new(docker_bin: impl Into<String>) -> Self {
-        Self {
-            docker_bin: docker_bin.into(),
-        }
-    }
-
-    fn spawn_events<I, S>(&self, args: I) -> Result<DockerEventLineIterator, EventsError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let args = args.into_iter().collect::<Vec<_>>();
-        let command_display = format_command(&self.docker_bin, &args);
-        let mut child = Command::new(&self.docker_bin)
-            .args(&args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|source| EventsError::CommandIo {
-                command: command_display,
-                source,
-            })?;
-        let stdout = child.stdout.take().ok_or_else(|| EventsError::CommandIo {
-            command: format_command(&self.docker_bin, &args),
-            source: std::io::Error::other("missing docker stdout pipe"),
-        })?;
-
-        Ok(DockerEventLineIterator {
-            _child: child,
-            lines: BufReader::new(stdout).lines(),
-        })
+impl<C> EventSource for BollardEventSource<C>
+where
+    C: DockerClient + Send + Sync + 'static,
+{
+    async fn events_stream(&self) -> Result<Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>, EventsError> {
+        let stream = self.docker.events_stream(None, None).await?;
+        let mapped = stream.map(|result| result.map_err(EventsError::Docker));
+        Ok(Box::pin(mapped))
     }
 }
 
-impl EventSource for DockerCliEventSource {
-    fn events(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<DockerEvent, EventsError>>>, EventsError> {
-        Ok(Box::new(self.spawn_events([
-            "events",
-            "--format",
-            "{{json .}}",
-        ])?))
-    }
-}
-
-pub struct DockerEventLineIterator {
-    _child: Child,
-    lines: Lines<BufReader<ChildStdout>>,
-}
-
-impl Drop for DockerEventLineIterator {
-    fn drop(&mut self) {
-        let _ = self._child.kill();
-        let _ = self._child.wait();
-    }
-}
-
-impl Iterator for DockerEventLineIterator {
-    type Item = Result<DockerEvent, EventsError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let line = match self.lines.next()? {
-            Ok(line) => line,
-            Err(error) => return Some(Err(EventsError::Read(error))),
-        };
-        Some(parse_docker_event_json(&line))
-    }
-}
+// ── MockEventSource ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default)]
 pub struct MockEventSource {
@@ -131,21 +84,16 @@ pub struct MockEventSource {
 }
 
 impl EventSource for MockEventSource {
-    fn events(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<DockerEvent, EventsError>>>, EventsError> {
-        Ok(Box::new(
-            self.events
-                .clone()
-                .into_iter()
-                .map(Ok::<DockerEvent, EventsError>),
-        ))
+    async fn events_stream(&self) -> Result<Pin<Box<dyn Stream<Item = Result<DockerEvent, EventsError>> + Send>>, EventsError> {
+        let items: Vec<Result<DockerEvent, EventsError>> =
+            self.events.clone().into_iter().map(Ok).collect();
+        Ok(Box::pin(futures_util::stream::iter(items)))
     }
 }
 
-pub fn collect_events<S>(query: &EventsQuery, source: &S) -> Result<ExecutionResult, EventsError>
+pub async fn collect_events<S>(query: &EventsQuery, source: &S) -> Result<ExecutionResult, EventsError>
 where
-    S: EventSource + ?Sized,
+    S: EventSource + ?Sized + Sync,
 {
     ensure_supported_target(query.target)?;
 
@@ -155,7 +103,8 @@ where
         _ => None,
     });
 
-    for event in source.events()? {
+    let mut stream = source.events_stream().await?;
+    while let Some(event) = stream.next().await {
         let mut row = Some(event_row(event?));
 
         if let Some(filter) = &query.filter
@@ -190,13 +139,13 @@ where
     Ok(ExecutionResult { rows })
 }
 
-pub fn stream_events<S, F>(
+pub async fn stream_events<S, F>(
     query: &EventsQuery,
     source: &S,
     mut on_row: F,
 ) -> Result<(), EventsError>
 where
-    S: EventSource + ?Sized,
+    S: EventSource + ?Sized + Sync,
     F: FnMut(Row) -> Result<(), EventsError>,
 {
     ensure_supported_target(query.target)?;
@@ -225,7 +174,8 @@ where
         std::collections::BTreeMap::new();
     let mut rows_since_flush = 0_u64;
 
-    for event in source.events()? {
+    let mut stream = source.events_stream().await?;
+    while let Some(event) = stream.next().await {
         let mut row = Some(event_row(event?));
 
         if let Some(filter) = &query.filter
@@ -369,6 +319,7 @@ where
     Ok(())
 }
 
+#[must_use]
 pub fn event_row(event: DockerEvent) -> Row {
     Row {
         fields: BTreeMap::from([
@@ -435,26 +386,19 @@ enum PipelineOutcome {
 
 fn apply_pipeline_node(row: Row, node: &PipelineNode) -> Result<PipelineOutcome, EventsError> {
     match node {
-        PipelineNode::Where(expression) => {
+        PipelineNode::Where(expression) | PipelineNode::Having(expression) => {
             if eval::evaluate_expression(&row.fields, expression)? {
                 Ok(PipelineOutcome::Row(row))
             } else {
                 Ok(PipelineOutcome::Drop)
             }
         }
-        PipelineNode::Select(fields) => select_fields(row, fields).map(PipelineOutcome::Row),
+        PipelineNode::Select(fields) => select_fields(&row, fields).map(PipelineOutcome::Row),
         PipelineNode::Limit(0) => Ok(PipelineOutcome::LimitReached),
         PipelineNode::Limit(_) => Ok(PipelineOutcome::Row(row)),
         PipelineNode::GroupBy { .. } => {
             // In streaming, GroupBy is handled at the stream level.
             Ok(PipelineOutcome::Row(row))
-        }
-        PipelineNode::Having(expression) => {
-            if eval::evaluate_expression(&row.fields, expression)? {
-                Ok(PipelineOutcome::Row(row))
-            } else {
-                Ok(PipelineOutcome::Drop)
-            }
         }
         PipelineNode::SortBy { .. } => Err(EventsError::UnsupportedPipeline("sort by")),
         PipelineNode::Distinct => Err(EventsError::UnsupportedPipeline("distinct")),
@@ -514,7 +458,7 @@ fn apply_pipeline_node(row: Row, node: &PipelineNode) -> Result<PipelineOutcome,
     }
 }
 
-fn select_fields(row: Row, fields: &[String]) -> Result<Row, EventsError> {
+fn select_fields(row: &Row, fields: &[String]) -> Result<Row, EventsError> {
     let mut selected = BTreeMap::new();
     for field in fields {
         let value = row
@@ -542,7 +486,8 @@ fn apply_inline_pipeline(
     Ok(PipelineOutcome::Row(row))
 }
 
-fn ensure_supported_target(target: CollectionTarget) -> Result<(), EventsError> {
+#[allow(clippy::unnecessary_wraps)]
+const fn ensure_supported_target(target: CollectionTarget) -> Result<(), EventsError> {
     let _ = target;
     Ok(())
 }
@@ -569,24 +514,9 @@ fn json_value_to_string(value: &JsonValue) -> String {
     }
 }
 
-fn json_string(value: String) -> JsonValue {
-    JsonValue::String(value)
-}
 
 fn json_option_string(value: Option<String>) -> JsonValue {
-    value.map(JsonValue::String).unwrap_or(JsonValue::Null)
-}
-
-fn format_command<S>(bin: &str, args: &[S]) -> String
-where
-    S: AsRef<OsStr>,
-{
-    let mut parts = vec![bin.to_owned()];
-    parts.extend(
-        args.iter()
-            .map(|arg| arg.as_ref().to_string_lossy().into_owned()),
-    );
-    parts.join(" ")
+    value.map_or(JsonValue::Null, JsonValue::String)
 }
 
 #[cfg(test)]
@@ -610,6 +540,7 @@ mod tests {
 
     #[test]
     fn filters_mock_event_stream() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let Query::Events(query) = parser::parse(
             "events containers where action = \"die\" | select time, container, action",
         )
@@ -626,7 +557,7 @@ mod tests {
             ],
         };
 
-        let result = collect_events(&query, &source).expect("events should collect");
+        let result = rt.block_on(collect_events(&query, &source)).expect("events should collect");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -645,6 +576,7 @@ mod tests {
 
     #[test]
     fn honors_stream_limit() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let Query::Events(query) = parser::parse("events containers | limit 1")
             .expect("query should parse")
             .query
@@ -655,13 +587,14 @@ mod tests {
             events: vec![event("start", "api"), event("die", "api")],
         };
 
-        let result = collect_events(&query, &source).expect("events should collect");
+        let result = rt.block_on(collect_events(&query, &source)).expect("events should collect");
 
         assert_eq!(result.rows.len(), 1);
     }
 
     #[test]
     fn supports_non_container_event_targets() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let Query::Events(query) = parser::parse("events images where action = \"pull\"")
             .expect("query should parse")
             .query
@@ -691,7 +624,7 @@ mod tests {
             ],
         };
 
-        let result = collect_events(&query, &source).expect("events should collect");
+        let result = rt.block_on(collect_events(&query, &source)).expect("events should collect");
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(

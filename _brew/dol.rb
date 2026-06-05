@@ -17,8 +17,10 @@ class Dol < Formula
   head "https://github.com/genc-murat/DockQL.git", branch: "main"
 
   stable do
-    url "https://github.com/genc-murat/DockQL/archive/refs/tags/v0.4.0.tar.gz"
-    sha256 "d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed"
+    url "https://github.com/genc-murat/DockQL/archive/refs/tags/v0.6.0.tar.gz"
+    # SHA256 will be updated after tag is pushed — run:
+    #   curl -fsSL https://github.com/genc-murat/DockQL/archive/refs/tags/v0.6.0.tar.gz | shasum -a 256
+    sha256 "UPDATE_AFTER_TAG_PUSH"
   end
 
   depends_on "rust" => :build

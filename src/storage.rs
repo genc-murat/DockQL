@@ -1,3 +1,18 @@
+//! Telemetry storage abstractions.
+//!
+//! Defines the [`TelemetryStore`] trait and the [`InMemoryTelemetryStore`]
+//! for testing. Also provides helper functions for historical queries
+//! ([`inspect_at`], [`historical_events`]). Domain types include
+//! [`TelemetrySnapshot`] and [`AlertHistoryEvent`].
+//!
+//! # Example
+//!
+//! ```ignore
+//! use dol::storage::TelemetryStore;
+//! let mut store = InMemoryTelemetryStore::default();
+//! store.write_snapshot(snapshot)?;
+//! ```
+
 use std::collections::BTreeMap;
 
 use chrono::Utc;
@@ -11,6 +26,7 @@ use crate::{
     docker::{Container, DockerEvent, Image, MetricSample, Network, Volume},
     events::{self, MockEventSource},
     executor::{ExecutionResult, Row},
+    json_string,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -188,7 +204,7 @@ where
     Ok(ExecutionResult { rows: vec![row] })
 }
 
-pub fn historical_events<S>(
+pub async fn historical_events<S>(
     query: &EventsQuery,
     store: &S,
 ) -> Result<ExecutionResult, TelemetryError>
@@ -208,7 +224,7 @@ where
         None => return Err(TelemetryError::MissingStore),
     };
     let source = MockEventSource { events };
-    events::collect_events(query, &source).map_err(Into::into)
+    events::collect_events(query, &source).await.map_err(Into::into)
 }
 
 fn container_snapshot_row(timestamp: &str, container: Container) -> Row {
@@ -225,8 +241,7 @@ fn container_snapshot_row(timestamp: &str, container: Container) -> Row {
                 "restart_count".to_owned(),
                 container
                     .restart_count
-                    .map(json_u64)
-                    .unwrap_or(JsonValue::Null),
+                    .map_or(JsonValue::Null, json_u64),
             ),
         ]),
     }
@@ -269,16 +284,12 @@ fn volume_snapshot_row(timestamp: &str, volume: Volume) -> Row {
                 "mountpoint".to_owned(),
                 volume
                     .mountpoint
-                    .map(JsonValue::String)
-                    .unwrap_or(JsonValue::Null),
+                    .map_or(JsonValue::Null, JsonValue::String),
             ),
         ]),
     }
 }
 
-fn json_string(value: impl Into<String>) -> JsonValue {
-    JsonValue::String(value.into())
-}
 
 fn json_u64(value: u64) -> JsonValue {
     JsonValue::Number(Number::from(value))
@@ -342,6 +353,7 @@ mod tests {
 
     #[test]
     fn replays_historical_events_through_event_pipeline() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut store = InMemoryTelemetryStore::default();
         store
             .write_event(event("2026-01-01T12:00:00Z", "start"))
@@ -358,7 +370,7 @@ mod tests {
             panic!("expected events query");
         };
 
-        let result = historical_events(&query, &store).unwrap();
+        let result = rt.block_on(historical_events(&query, &store)).unwrap();
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(

@@ -1,5 +1,19 @@
+//! Semantic analysis and type checking.
+//!
+//! Validates DOL queries before execution: checks field existence,
+//! type compatibility in comparisons/arithmetic, function name validity,
+//! and pipeline node semantics. Uses a [`SemanticAnalyzer`] that tracks
+//! the active schema as pipeline nodes transform the data.
+//!
+//! # Example
+//!
+//! ```ignore
+//! semantic::validate_semantics(&query)?;
+//! ```
+
 use crate::ast::{CollectionTarget, Expression, PipelineNode, Query, SetValue, Value};
 use crate::eval::EvalError;
+use crate::target_alias;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,15 +29,17 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn is_numeric(&self) -> bool {
+    #[must_use]
+    pub const fn is_numeric(&self) -> bool {
         matches!(
             self,
-            Type::Integer | Type::Float | Type::Percentage | Type::Duration
+            Self::Integer | Self::Float | Self::Percentage | Self::Duration
         )
     }
 
-    pub fn is_compatible(&self, other: &Type) -> bool {
-        if *self == Type::Unknown || *other == Type::Unknown {
+    #[must_use]
+    pub fn is_compatible(&self, other: &Self) -> bool {
+        if *self == Self::Unknown || *other == Self::Unknown {
             return true;
         }
         if self.is_numeric() && other.is_numeric() {
@@ -39,6 +55,7 @@ pub struct SemanticAnalyzer {
 }
 
 impl SemanticAnalyzer {
+    #[must_use]
     pub fn new(target: CollectionTarget) -> Self {
         let mut active_schema = BTreeMap::new();
         for (field, ty) in Self::schema_for_target(target) {
@@ -177,8 +194,7 @@ impl SemanticAnalyzer {
                     self.apply_pipeline_node(node)?;
                 }
             }
-            Query::Ping => {}
-            Query::Inspect(_) | Query::Fields(_) => {}
+            Query::Ping | Query::Inspect(_) | Query::Fields(_) => {}
         }
         Ok(())
     }
@@ -209,8 +225,7 @@ impl SemanticAnalyzer {
                 }
             }
             Expression::Literal(v) => match v {
-                Value::String(_) => Ok(Type::String),
-                Value::Identifier(_) => Ok(Type::String),
+                Value::String(_) | Value::Identifier(_) => Ok(Type::String),
                 Value::Integer(_) => Ok(Type::Integer),
                 Value::Float(_) => Ok(Type::Float),
                 Value::Percentage(_) => Ok(Type::Percentage),
@@ -221,8 +236,7 @@ impl SemanticAnalyzer {
                 let rt = self.infer_expr_type(right)?;
                 if !lt.is_numeric() || !rt.is_numeric() {
                     return Err(EvalError::Arithmetic(format!(
-                        "invalid arithmetic operator '{:?}' on types {:?} and {:?}",
-                        op, lt, rt
+                        "invalid arithmetic operator '{op:?}' on types {lt:?} and {rt:?}"
                     )));
                 }
                 if lt == Type::Float || rt == Type::Float {
@@ -245,22 +259,12 @@ impl SemanticAnalyzer {
                     };
                     return Err(EvalError::InvalidComparison {
                         field: field_name,
-                        operator: format!("{:?}", operator),
+                        operator: format!("{operator:?}"),
                     });
                 }
                 Ok(Type::Boolean)
             }
-            Expression::In { expr, .. } => {
-                self.infer_expr_type(expr)?;
-                Ok(Type::Boolean)
-            }
-            Expression::Between { expr, low, high } => {
-                self.infer_expr_type(expr)?;
-                self.infer_expr_type(low)?;
-                self.infer_expr_type(high)?;
-                Ok(Type::Boolean)
-            }
-            Expression::IsNull(expr) | Expression::IsNotNull(expr) => {
+            Expression::In { expr, .. } | Expression::IsNull(expr) | Expression::IsNotNull(expr) | Expression::Between { expr, .. } => {
                 self.infer_expr_type(expr)?;
                 Ok(Type::Boolean)
             }
@@ -303,8 +307,7 @@ impl SemanticAnalyzer {
                         match name.as_str() {
                             "length" | "position" | "date_diff" | "extract" => Ok(Type::Integer),
                             "starts_with" | "ends_with" => Ok(Type::Boolean),
-                            "now" => Ok(Type::String),
-                            _ => Ok(Type::String),
+                        _ => Ok(Type::String),
                         }
                     }
                     _ => Err(EvalError::UnknownFunction { name: name.clone() }),
@@ -320,7 +323,7 @@ impl SemanticAnalyzer {
 
     fn apply_pipeline_node(&mut self, node: &PipelineNode) -> Result<(), EvalError> {
         match node {
-            PipelineNode::Where(expr) => {
+            PipelineNode::Where(expr) | PipelineNode::Having(expr) => {
                 self.validate_expression(expr)?;
             }
             PipelineNode::Select(fields) => {
@@ -341,7 +344,7 @@ impl SemanticAnalyzer {
                     self.check_field_validity(f)?;
                 }
             }
-            PipelineNode::Limit(_) | PipelineNode::Offset(_) | PipelineNode::Distinct => {}
+            PipelineNode::Limit(_) | PipelineNode::Offset(_) | PipelineNode::Distinct | PipelineNode::Alert(_) => {}
             PipelineNode::GroupBy { fields, aggregates } => {
                 let mut new_schema = BTreeMap::new();
                 for f in fields {
@@ -360,10 +363,6 @@ impl SemanticAnalyzer {
                 }
                 self.active_schema = new_schema;
             }
-            PipelineNode::Having(expr) => {
-                self.validate_expression(expr)?;
-            }
-            PipelineNode::Alert(_) => {}
             PipelineNode::If {
                 condition,
                 then_branch,
@@ -390,8 +389,7 @@ impl SemanticAnalyzer {
             PipelineNode::Set { field, value } => {
                 let ty = match value {
                     SetValue::Literal(v) => match v {
-                        Value::String(_) => Type::String,
-                        Value::Identifier(_) => Type::String,
+                        Value::String(_) | Value::Identifier(_) => Type::String,
                         Value::Integer(_) => Type::Integer,
                         Value::Float(_) => Type::Float,
                         Value::Percentage(_) => Type::Percentage,
@@ -439,14 +437,6 @@ impl SemanticAnalyzer {
     }
 }
 
-fn target_alias(target: CollectionTarget) -> &'static str {
-    match target {
-        CollectionTarget::Containers => "c",
-        CollectionTarget::Images => "i",
-        CollectionTarget::Networks => "n",
-        CollectionTarget::Volumes => "v",
-    }
-}
 
 impl SemanticAnalyzer {
     fn schema_for_target(target: CollectionTarget) -> Vec<(&'static str, Type)> {
@@ -531,24 +521,12 @@ pub fn validate_semantics(query: &Query) -> Result<(), EvalError> {
                 crate::ast::SingularTargetKind::Volume => CollectionTarget::Volumes,
             },
         },
-        Query::Alert(_) => CollectionTarget::Containers,
-        Query::Logs(_) => CollectionTarget::Containers,
+        Query::Alert(_) | Query::Logs(_) | Query::Ping => CollectionTarget::Containers,
         Query::Compose(q) => match q.target {
-            crate::ast::ComposeTarget::Containers
-            | crate::ast::ComposeTarget::Services
-            | crate::ast::ComposeTarget::Health
-            | crate::ast::ComposeTarget::Ps
-            | crate::ast::ComposeTarget::Stats
-            | crate::ast::ComposeTarget::Events => CollectionTarget::Containers,
             crate::ast::ComposeTarget::Networks => CollectionTarget::Networks,
             crate::ast::ComposeTarget::Volumes => CollectionTarget::Volumes,
-            crate::ast::ComposeTarget::Projects
-            | crate::ast::ComposeTarget::Images
-            | crate::ast::ComposeTarget::Port
-            | crate::ast::ComposeTarget::Config
-            | crate::ast::ComposeTarget::Logs => CollectionTarget::Containers,
+            _ => CollectionTarget::Containers,
         },
-        Query::Ping => CollectionTarget::Containers,
         Query::Inspect(_) | Query::Fields(_) => return Ok(()),
     };
 

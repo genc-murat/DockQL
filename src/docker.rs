@@ -1,35 +1,39 @@
-use std::{collections::HashMap, ffi::OsStr, process::Command};
+//! Docker client abstraction and domain types.
+//!
+//! Defines the [`DockerClient`] async trait and the [`BollardDockerClient`]
+//! implementation. Also provides domain types ([`Container`], [`Image`],
+//! [`Network`], [`Volume`], [`MetricSample`], [`DockerEvent`]) and the
+//! [`MockDockerClient`] for unit testing.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let docker = BollardDockerClient::connect_with_config(&config)?;
+//! let containers = docker.list_containers().await?;
+//! ```
 
+use std::collections::HashMap;
+use std::time::Duration;
+
+use crate::ONE_GB;
+use crate::config::DolConfig;
+use bollard::container::LogOutput;
+use bollard::models::{
+    ContainerInspectResponse, ContainerSummary, EventMessage, ImageSummary,
+    PortSummary, Volume as BollardVolume,
+};
+use bollard::models::Network as BollardNetwork;
+use bollard::query_parameters as qp;
+use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use std::pin::Pin;
 use thiserror::Error;
+use tokio::time::timeout;
 
-pub trait DockerClient {
-    fn list_containers(&self) -> Result<Vec<Container>, DockerError>;
-    fn list_images(&self) -> Result<Vec<Image>, DockerError>;
-    fn list_networks(&self) -> Result<Vec<Network>, DockerError>;
-    fn list_volumes(&self) -> Result<Vec<Volume>, DockerError>;
+/// Shared type alias for the complex Docker event stream return type.
+pub type DockerEventStream = Pin<Box<dyn Stream<Item = Result<DockerEvent, DockerError>> + Send>>;
 
-    /// Inspect a single container by ID (or ID prefix) and return its full details.
-    fn inspect_container(&self, id: &str) -> Result<Container, DockerError>;
-
-    /// Retrieve the last `tail` log lines from a container.
-    fn container_logs(&self, id: &str, tail: usize) -> Result<Vec<String>, DockerError>;
-
-    /// Check whether the Docker daemon is reachable and responsive.
-    fn ping(&self) -> Result<bool, DockerError>;
-}
-
-pub fn list_running_containers<C>(client: &C) -> Result<Vec<Container>, DockerError>
-where
-    C: DockerClient + ?Sized,
-{
-    Ok(client
-        .list_containers()?
-        .into_iter()
-        .filter(|container| container.state == "running")
-        .collect())
-}
+// ── Domain types ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Container {
@@ -102,216 +106,354 @@ pub struct DockerEvent {
     pub attributes: Vec<(String, String)>,
 }
 
+// ── Error type ─────────────────────────────────────────────────────────────
+
 #[derive(Debug, Error)]
 pub enum DockerError {
-    #[error("failed to run docker command `{command}`: {source}")]
-    CommandIo {
-        command: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("docker command `{command}` failed with exit code {code:?}: {stderr}")]
-    CommandFailed {
-        command: String,
-        code: Option<i32>,
-        stderr: String,
-    },
-    #[error("failed to parse docker JSON line {line_number}: {source}")]
-    JsonLine {
-        line_number: usize,
-        #[source]
-        source: serde_json::Error,
-    },
+    #[error("bollard error: {0}")]
+    Bollard(#[from] bollard::errors::Error),
+    #[error("container not found: {0}")]
+    NotFound(String),
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
+    #[error("Docker API call timed out after {0}s")]
+    Timeout(u64),
 }
 
-/// The result of running a command.
+// ── Async trait ────────────────────────────────────────────────────────────
+
+pub trait DockerClient {
+    fn list_containers(&self) -> impl std::future::Future<Output = Result<Vec<Container>, DockerError>> + Send;
+    fn list_images(&self) -> impl std::future::Future<Output = Result<Vec<Image>, DockerError>> + Send;
+    fn list_networks(&self) -> impl std::future::Future<Output = Result<Vec<Network>, DockerError>> + Send;
+    fn list_volumes(&self) -> impl std::future::Future<Output = Result<Vec<Volume>, DockerError>> + Send;
+    fn inspect_container(&self, id: &str) -> impl std::future::Future<Output = Result<Container, DockerError>> + Send;
+    fn container_logs(&self, id: &str, tail: usize) -> impl std::future::Future<Output = Result<Vec<String>, DockerError>> + Send;
+    fn container_stats(&self, id: &str) -> impl std::future::Future<Output = Result<MetricSample, DockerError>> + Send;
+    fn events_stream(&self, since: Option<&str>, until: Option<&str>) -> impl std::future::Future<Output = Result<DockerEventStream, DockerError>> + Send;
+    fn ping(&self) -> impl std::future::Future<Output = Result<bool, DockerError>> + Send;
+}
+
+// ── Docker API timeout configuration ───────────────────────────────────────
+
+/// Holds all configurable timeout values for Docker API calls.
 #[derive(Debug, Clone)]
-pub struct RunOutput {
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub success: bool,
-    pub exit_code: Option<i32>,
+pub struct DockerApiConfig {
+    pub call_timeout: Duration,
+    pub quick_timeout: Duration,
+    pub max_retries: u32,
+    pub retry_base_ms: u64,
 }
 
-/// Abstraction over command execution, allowing tests to mock docker output.
-pub trait CommandRunner: std::fmt::Debug + Send {
-    fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError>;
+impl Default for DockerApiConfig {
+    fn default() -> Self {
+        Self {
+            call_timeout: Duration::from_secs(30),
+            quick_timeout: Duration::from_secs(10),
+            max_retries: 2,
+            retry_base_ms: 200,
+        }
+    }
 }
 
-/// The real command runner that delegates to `std::process::Command`.
-#[derive(Debug)]
-pub struct RealCommandRunner;
+impl From<&DolConfig> for DockerApiConfig {
+    fn from(cfg: &DolConfig) -> Self {
+        Self {
+            call_timeout: Duration::from_secs(cfg.api_timeout.unwrap_or(30)),
+            quick_timeout: Duration::from_secs(cfg.api_quick_timeout.unwrap_or(10)),
+            max_retries: 2,
+            retry_base_ms: 200,
+        }
+    }
+}
 
-impl CommandRunner for RealCommandRunner {
-    fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError> {
-        let command_display = format_command_str(bin, args);
-        let output =
-            Command::new(bin)
-                .args(args)
-                .output()
-                .map_err(|source| DockerError::CommandIo {
-                    command: command_display,
-                    source,
-                })?;
-        Ok(RunOutput {
-            success: output.status.success(),
-            exit_code: output.status.code(),
-            stdout: output.stdout,
-            stderr: output.stderr,
+// ── Timeout & retry helpers ────────────────────────────────────────────────
+
+/// Run a bollard API future with a standard timeout.
+/// Returns `DockerError::Timeout` if the operation does not complete in time.
+async fn docker_call_timeout<T>(
+    fut: impl std::future::Future<Output = Result<T, bollard::errors::Error>>,
+    duration: Duration,
+) -> Result<T, DockerError> {
+    timeout(duration, fut)
+        .await
+        .map_err(|_| DockerError::Timeout(duration.as_secs()))?
+        .map_err(DockerError::Bollard)
+}
+
+/// Run a bollard API future with the default timeout from config.
+async fn docker_call<T>(
+    cfg: &DockerApiConfig,
+    fut: impl std::future::Future<Output = Result<T, bollard::errors::Error>>,
+) -> Result<T, DockerError> {
+    docker_call_timeout(fut, cfg.call_timeout).await
+}
+
+/// Run a bollard API future with the quick (short) timeout from config.
+async fn docker_call_quick<T>(
+    cfg: &DockerApiConfig,
+    fut: impl std::future::Future<Output = Result<T, bollard::errors::Error>>,
+) -> Result<T, DockerError> {
+    docker_call_timeout(fut, cfg.quick_timeout).await
+}
+
+/// Run a bollard API future factory with retries (exponential backoff) for
+/// transient errors. Uses a closure so a fresh future is created on each retry
+/// attempt. Only operations that are safe to retry (read-only queries like
+/// `inspect_container`, `container_stats`) should use this.
+async fn docker_call_with_retry<T, F, Fut>(
+    cfg: &DockerApiConfig,
+    f: F,
+) -> Result<T, DockerError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, bollard::errors::Error>>,
+{
+    let mut last_err = None;
+    for attempt in 0..=cfg.max_retries {
+        match timeout(cfg.call_timeout, f()).await {
+            Ok(Ok(val)) => return Ok(val),
+            Ok(Err(e)) => {
+                last_err = Some(DockerError::Bollard(e));
+                if attempt < cfg.max_retries {
+                    let delay = cfg.retry_base_ms * (1u64 << attempt);
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
+            }
+            Err(_) => {
+                last_err = Some(DockerError::Timeout(cfg.call_timeout.as_secs()));
+                if attempt < cfg.max_retries {
+                    let delay = cfg.retry_base_ms * (1u64 << attempt);
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or(DockerError::Timeout(cfg.call_timeout.as_secs())))
+}
+
+pub async fn list_running_containers<C: DockerClient>(client: &C) -> Result<Vec<Container>, DockerError> {
+    Ok(client
+        .list_containers()
+        .await?
+        .into_iter()
+        .filter(|c| c.state == "running")
+        .collect())
+}
+
+// ── BollardDockerClient ───────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct BollardDockerClient {
+    docker: bollard::Docker,
+    api_cfg: DockerApiConfig,
+}
+
+impl BollardDockerClient {
+    /// Connect with default timeout values.
+    pub fn connect() -> Result<Self, DockerError> {
+        Self::connect_with_config(&DolConfig::default())
+    }
+
+    /// Connect with timeout values from the given config.
+    pub fn connect_with_config(config: &DolConfig) -> Result<Self, DockerError> {
+        let docker = bollard::Docker::connect_with_local_defaults()
+            .map_err(DockerError::Bollard)?;
+        Ok(Self {
+            docker,
+            api_cfg: DockerApiConfig::from(config),
         })
     }
-}
 
-#[derive(Debug)]
-pub struct DockerCliClient {
-    docker_bin: String,
-    cmd_runner: Box<dyn CommandRunner>,
-}
-
-impl Default for DockerCliClient {
-    fn default() -> Self {
-        Self::new("docker")
+    /// Connect to a specific Docker host with timeout values from config.
+    pub fn connect_with_host(host: &str, config: &DolConfig) -> Result<Self, DockerError> {
+        let docker = if host.starts_with("tcp://") || host.starts_with("http://") {
+            let h = host
+                .strip_prefix("tcp://")
+                .or_else(|| host.strip_prefix("http://"))
+                .unwrap_or(host);
+            bollard::Docker::connect_with_http(h, 120, bollard::API_DEFAULT_VERSION)
+                .map_err(DockerError::Bollard)?
+        } else if host.starts_with("unix://") {
+            let path = host.strip_prefix("unix://").unwrap_or(host);
+            bollard::Docker::connect_with_socket(path, 120, bollard::API_DEFAULT_VERSION)
+                .map_err(DockerError::Bollard)?
+        } else {
+            bollard::Docker::connect_with_local_defaults()
+                .map_err(DockerError::Bollard)?
+        };
+        Ok(Self {
+            docker,
+            api_cfg: DockerApiConfig::from(config),
+        })
     }
-}
 
-impl DockerCliClient {
-    pub fn new(docker_bin: impl Into<String>) -> Self {
+    /// Get a reference to the API config (used by the metrics collector).
+    #[must_use]
+    pub const fn api_config(&self) -> &DockerApiConfig {
+        &self.api_cfg
+    }
+
+    #[must_use]
+    pub fn from_docker(docker: bollard::Docker) -> Self {
         Self {
-            docker_bin: docker_bin.into(),
-            cmd_runner: Box::new(RealCommandRunner),
+            docker,
+            api_cfg: DockerApiConfig::default(),
         }
-    }
-
-    /// Create a client with a custom command runner (useful for testing).
-    pub fn with_runner(docker_bin: impl Into<String>, cmd_runner: Box<dyn CommandRunner>) -> Self {
-        Self {
-            docker_bin: docker_bin.into(),
-            cmd_runner,
-        }
-    }
-
-    fn run_json_lines<I, S>(&self, args: I) -> Result<Vec<Value>, DockerError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let args: Vec<String> = args
-            .into_iter()
-            .map(|s| s.as_ref().to_string_lossy().into_owned())
-            .collect();
-        self.run_json_lines_str(&args)
-    }
-
-    fn run_json_lines_str(&self, args: &[String]) -> Result<Vec<Value>, DockerError> {
-        let output = self.cmd_runner.run(&self.docker_bin, args)?;
-
-        if !output.success {
-            return Err(DockerError::CommandFailed {
-                command: format_command_str(&self.docker_bin, args),
-                code: output.exit_code,
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-
-        parse_json_lines(&String::from_utf8_lossy(&output.stdout))
     }
 }
 
-impl DockerClient for DockerCliClient {
-    fn list_containers(&self) -> Result<Vec<Container>, DockerError> {
-        let values = self.run_json_lines(["ps", "-a", "--format", "{{json .}}"])?;
-        let mut containers: Vec<Container> = values
-            .iter()
-            .map(container_from_ps_json)
-            .collect::<Result<_, _>>()?;
+impl DockerClient for BollardDockerClient {
+    async fn list_containers(&self) -> Result<Vec<Container>, DockerError> {
+        let options = Some(qp::ListContainersOptions {
+            all: true,
+            ..Default::default()
+        });
+        let summaries = docker_call(&self.api_cfg, self.docker.list_containers(options)).await?;
+        let mut containers: Vec<Container> = summaries.iter().map(container_from_summary).collect();
 
         if !containers.is_empty() {
             let ids: Vec<String> = containers.iter().map(|c| c.id.clone()).collect();
-            let mut args: Vec<String> = vec![
-                "inspect".to_owned(),
-                "--format".to_owned(),
-                "{{json .}}".to_owned(),
-            ];
-            args.extend(ids);
-            if let Ok(inspect_values) = self.run_json_lines_str(&args) {
-                enrich_containers_from_inspect(&mut containers, &inspect_values);
+            for (i, id) in ids.iter().enumerate() {
+                if let Ok(inspect) = docker_call_with_retry(
+                    &self.api_cfg,
+                    || self.docker.inspect_container(id, None),
+                )
+                .await
+                {
+                    let s = inspect.state.as_ref();
+                    containers[i].started_at = s
+                        .and_then(|st| st.started_at.clone())
+                        .filter(|ts| !ts.is_empty() && !ts.starts_with("0001"));
+                    containers[i].finished_at = s
+                        .and_then(|st| st.finished_at.clone())
+                        .filter(|ts| !ts.is_empty() && !ts.starts_with("0001"));
+                    containers[i].restart_count = inspect
+                        .restart_count
+                        .map(|c| c.max(0) as u64);
+                    containers[i].health = s
+                        .and_then(|st| st.health.as_ref()).map(|h| h.status.map(|e| format!("{e:?}")).unwrap_or_default())
+                        .filter(|s| !s.is_empty());
+                }
             }
         }
 
         Ok(containers)
     }
 
-    fn list_images(&self) -> Result<Vec<Image>, DockerError> {
-        self.run_json_lines(["image", "ls", "--format", "{{json .}}"])?
-            .iter()
-            .map(image_from_ls_json)
-            .collect()
+    async fn list_images(&self) -> Result<Vec<Image>, DockerError> {
+        let summaries = docker_call(
+            &self.api_cfg,
+            self.docker.list_images(None::<qp::ListImagesOptions>),
+        )
+        .await?;
+        Ok(summaries.iter().map(image_from_summary).collect())
     }
 
-    fn list_networks(&self) -> Result<Vec<Network>, DockerError> {
-        self.run_json_lines(["network", "ls", "--format", "{{json .}}"])?
-            .iter()
-            .map(network_from_ls_json)
-            .collect()
+    async fn list_networks(&self) -> Result<Vec<Network>, DockerError> {
+        let networks = docker_call(
+            &self.api_cfg,
+            self.docker.list_networks(None::<qp::ListNetworksOptions>),
+        )
+        .await?;
+        Ok(networks.into_iter().map(network_from_bollard).collect())
     }
 
-    fn list_volumes(&self) -> Result<Vec<Volume>, DockerError> {
-        self.run_json_lines(["volume", "ls", "--format", "{{json .}}"])?
-            .iter()
-            .map(volume_from_ls_json)
-            .collect()
+    async fn list_volumes(&self) -> Result<Vec<Volume>, DockerError> {
+        let response = docker_call(
+            &self.api_cfg,
+            self.docker.list_volumes(None::<qp::ListVolumesOptions>),
+        )
+        .await?;
+        Ok(response
+            .volumes
+            .unwrap_or_default()
+            .into_iter()
+            .map(volume_from_bollard)
+            .collect())
     }
 
-    fn inspect_container(&self, id: &str) -> Result<Container, DockerError> {
-        let values = self.run_json_lines(["inspect", "--format", "{{json .}}", id])?;
-        match values.first() {
-            Some(value) => container_from_inspect_json(value),
-            None => Err(DockerError::CommandFailed {
-                command: format!("docker inspect {id}"),
-                code: None,
-                stderr: "container not found".to_owned(),
-            }),
+    async fn inspect_container(&self, id: &str) -> Result<Container, DockerError> {
+        let inspect = docker_call_with_retry(
+            &self.api_cfg,
+            || self.docker.inspect_container(id, None),
+        )
+        .await?;
+        Ok(container_from_inspect(&inspect))
+    }
+
+    async fn container_logs(&self, id: &str, tail: usize) -> Result<Vec<String>, DockerError> {
+        let options = Some(qp::LogsOptions {
+            tail: tail.to_string(),
+            stdout: true,
+            stderr: true,
+            ..Default::default()
+        });
+        let stream_fut = self.docker.logs(id, options);
+        let mut stream = stream_fut;
+        let mut lines = Vec::new();
+        loop {
+            let next = tokio::time::timeout(self.api_cfg.call_timeout, stream.next()).await;
+            match next {
+                Ok(Some(Ok(LogOutput::StdOut { message } | LogOutput::StdErr { message }))) => {
+                    let s = String::from_utf8_lossy(&message).to_string();
+                    for line in s.lines() {
+                        lines.push(line.to_owned());
+                    }
+                }
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(e))) => return Err(DockerError::Bollard(e)),
+                Ok(None) => break,
+                Err(_) => return Err(DockerError::Timeout(self.api_cfg.call_timeout.as_secs())),
+            }
+        }
+        Ok(lines)
+    }
+
+    async fn container_stats(&self, id: &str) -> Result<MetricSample, DockerError> {
+        use bollard::query_parameters::StatsOptions;
+        let stream_fut = self.docker.stats(id, Some(StatsOptions { stream: false, ..Default::default() }));
+        let mut stream = stream_fut;
+        let next = tokio::time::timeout(self.api_cfg.call_timeout, stream.next()).await;
+        match next {
+            Ok(Some(Ok(stats))) => {
+                let container_name = docker_call_with_retry(
+                    &self.api_cfg,
+                    || self.docker.inspect_container(id, None),
+                )
+                .await
+                .ok()
+                .and_then(|i| i.name)
+                .map_or_else(|| id.to_owned(), |n| n.trim_start_matches('/').to_owned());
+                Ok(metric_sample_from_bollard_stats(id, &container_name, &stats))
+            }
+            Ok(Some(Err(e))) => Err(DockerError::Bollard(e)),
+            Ok(None) => Err(DockerError::NotFound(id.to_owned())),
+            Err(_) => Err(DockerError::Timeout(self.api_cfg.call_timeout.as_secs())),
         }
     }
 
-    fn container_logs(&self, id: &str, tail: usize) -> Result<Vec<String>, DockerError> {
-        let tail_str = tail.to_string();
-        let args: Vec<String> = vec![
-            "logs".to_owned(),
-            "--tail".to_owned(),
-            tail_str,
-            id.to_owned(),
-        ];
-        let output = self.cmd_runner.run(&self.docker_bin, &args)?;
-
-        if !output.success {
-            return Err(DockerError::CommandFailed {
-                command: format_command_str(&self.docker_bin, &args),
-                code: output.exit_code,
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-
-        // Combine stdout and stderr (docker logs may write to either stream)
-        let all_output = [&output.stdout[..], &output.stderr[..]].concat();
-        let output_str = String::from_utf8_lossy(&all_output);
-        Ok(output_str.lines().map(|l| l.to_owned()).collect())
+    async fn events_stream(&self, since: Option<&str>, until: Option<&str>) -> Result<DockerEventStream, DockerError> {
+        let options = Some(qp::EventsOptions {
+            since: since.map(std::borrow::ToOwned::to_owned),
+            until: until.map(std::borrow::ToOwned::to_owned),
+            ..Default::default()
+        });
+        let stream = self.docker.events(options);
+        let mapped = stream.map(|item| match item {
+            Ok(msg) => Ok(docker_event_from_message(msg)),
+            Err(e) => Err(DockerError::Bollard(e)),
+        });
+        Ok(Box::pin(mapped))
     }
 
-    fn ping(&self) -> Result<bool, DockerError> {
-        let args: Vec<String> = vec![
-            "ps".to_owned(),
-            "--format".to_owned(),
-            "{{.ID}}".to_owned(),
-            "--limit".to_owned(),
-            "1".to_owned(),
-        ];
-        match self.cmd_runner.run(&self.docker_bin, &args) {
-            Ok(output) => Ok(output.success),
-            Err(_) => Ok(false),
-        }
+    async fn ping(&self) -> Result<bool, DockerError> {
+        docker_call_quick(&self.api_cfg, self.docker.ping()).await?;
+        Ok(true)
     }
 }
+
+// ── MockDockerClient (kept for unit tests) ─────────────────────────────────
 
 #[derive(Debug, Clone, Default)]
 pub struct MockDockerClient {
@@ -319,641 +461,345 @@ pub struct MockDockerClient {
     pub images: Vec<Image>,
     pub networks: Vec<Network>,
     pub volumes: Vec<Volume>,
-    /// Simulated container logs, keyed by container ID or name.
     pub logs: HashMap<String, Vec<String>>,
+    pub events: Vec<DockerEvent>,
 }
 
 impl DockerClient for MockDockerClient {
-    fn list_containers(&self) -> Result<Vec<Container>, DockerError> {
+    async fn list_containers(&self) -> Result<Vec<Container>, DockerError> {
         Ok(self.containers.clone())
     }
 
-    fn list_images(&self) -> Result<Vec<Image>, DockerError> {
+    async fn list_images(&self) -> Result<Vec<Image>, DockerError> {
         Ok(self.images.clone())
     }
 
-    fn list_networks(&self) -> Result<Vec<Network>, DockerError> {
+    async fn list_networks(&self) -> Result<Vec<Network>, DockerError> {
         Ok(self.networks.clone())
     }
 
-    fn list_volumes(&self) -> Result<Vec<Volume>, DockerError> {
+    async fn list_volumes(&self) -> Result<Vec<Volume>, DockerError> {
         Ok(self.volumes.clone())
     }
 
-    fn inspect_container(&self, id: &str) -> Result<Container, DockerError> {
-        // Search by ID prefix first, then by name
+    async fn inspect_container(&self, id: &str) -> Result<Container, DockerError> {
         self.containers
             .iter()
             .find(|c| c.id.starts_with(id) || c.name == id)
             .cloned()
-            .ok_or_else(|| DockerError::CommandFailed {
-                command: format!("docker inspect {id}"),
-                code: None,
-                stderr: format!("No such container: {id}"),
-            })
+            .ok_or_else(|| DockerError::NotFound(id.to_owned()))
     }
 
-    fn container_logs(&self, id: &str, _tail: usize) -> Result<Vec<String>, DockerError> {
-        // Search by ID prefix first, then by name
+    async fn container_logs(&self, id: &str, _tail: usize) -> Result<Vec<String>, DockerError> {
         let key = self
             .containers
             .iter()
-            .find(|c| c.id.starts_with(id) || c.name == id)
-            .map(|c| c.id.clone())
-            .unwrap_or_else(|| id.to_owned());
-
+            .find(|c| c.id.starts_with(id) || c.name == id).map_or_else(|| id.to_owned(), |c| c.id.clone());
         Ok(self.logs.get(&key).cloned().unwrap_or_default())
     }
 
-    fn ping(&self) -> Result<bool, DockerError> {
+    async fn container_stats(&self, id: &str) -> Result<MetricSample, DockerError> {
+        let container = self.inspect_container(id).await?;
+        Ok(MetricSample {
+            container_id: container.id.clone(),
+            container_name: container.name,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            cpu_percent: None,
+            memory_usage_bytes: None,
+            memory_limit_bytes: None,
+            network_rx_bytes: None,
+            network_tx_bytes: None,
+            disk_read_bytes: None,
+            disk_write_bytes: None,
+        })
+    }
+
+    async fn events_stream(&self, _since: Option<&str>, _until: Option<&str>) -> Result<DockerEventStream, DockerError> {
+        let events: Vec<Result<DockerEvent, DockerError>> =
+            self.events.clone().into_iter().map(Ok).collect();
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+
+    async fn ping(&self) -> Result<bool, DockerError> {
         Ok(true)
     }
 }
 
-fn parse_json_lines(output: &str) -> Result<Vec<Value>, DockerError> {
-    output
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| {
-            serde_json::from_str(line).map_err(|source| DockerError::JsonLine {
-                line_number: index + 1,
-                source,
-            })
-        })
-        .collect()
-}
+// ── Conversion helpers ─────────────────────────────────────────────────────
 
-fn container_from_ps_json(value: &Value) -> Result<Container, DockerError> {
-    Ok(Container {
-        id: get_string(value, &["ID", "Id"]),
-        name: get_string(value, &["Names", "Name"]),
-        image: get_string(value, &["Image"]),
-        status: get_string(value, &["Status"]),
-        state: get_string(value, &["State"]),
-        ports: split_csv(&get_string(value, &["Ports"])),
-        labels: split_csv(&get_string(value, &["Labels"])),
-        created_at: get_optional_string(value, &["CreatedAt", "Created"]),
+fn container_from_summary(s: &ContainerSummary) -> Container {
+    Container {
+        id: s.id.as_deref().unwrap_or_default().to_owned(),
+        name: s.names.as_ref().and_then(|n| n.first())
+            .map(|n| n.trim_start_matches('/').to_owned()).unwrap_or_default(),
+        image: s.image.as_deref().unwrap_or_default().to_owned(),
+        status: s.status.as_deref().unwrap_or_default().to_owned(),
+        state: s.state.as_ref().map(|e| format!("{e:?}").to_lowercase()).unwrap_or_default(),
+        ports: ports_from_summary(s.ports.as_ref()),
+        labels: labels_map_to_vec(s.labels.as_ref()),
+        created_at: s.created.map(unix_to_iso),
         started_at: None,
         finished_at: None,
         restart_count: None,
         health: None,
-    })
-}
-
-fn container_from_inspect_json(value: &Value) -> Result<Container, DockerError> {
-    // Labels come as an object in inspect, convert to "key=val" strings
-    let labels = value
-        .pointer("/Config/Labels")
-        .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or("")))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    // Ports come as an object like {"8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}
-    let ports = value
-        .pointer("/NetworkSettings/Ports")
-        .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .flat_map(|(container_port, bindings)| {
-                    let arr = bindings.as_array();
-                    if arr.is_none_or(|a| a.is_empty()) {
-                        vec![container_port.clone()]
-                    } else {
-                        arr.unwrap()
-                            .iter()
-                            .map(|b| {
-                                let host_ip = b.get("HostIp").and_then(Value::as_str).unwrap_or("");
-                                let host_port =
-                                    b.get("HostPort").and_then(Value::as_str).unwrap_or("");
-                                if host_port.is_empty() {
-                                    container_port.clone()
-                                } else if host_ip.is_empty() || host_ip == "0.0.0.0" {
-                                    format!("{host_port}->{container_port}")
-                                } else {
-                                    format!("{host_ip}:{host_port}->{container_port}")
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let name = get_string(value, &["Name"]);
-    let name = name.strip_prefix('/').unwrap_or(&name).to_owned();
-
-    Ok(Container {
-        id: get_string(value, &["Id"]),
-        name,
-        image: value
-            .pointer("/Config/Image")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_default(),
-        status: value
-            .pointer("/State/Status")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_default(),
-        state: value
-            .pointer("/State/Status")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_default(),
-        ports,
-        labels,
-        created_at: value
-            .pointer("/Created")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        started_at: value
-            .pointer("/State/StartedAt")
-            .and_then(Value::as_str)
-            .filter(|s| !s.starts_with("0001"))
-            .map(str::to_owned),
-        finished_at: value
-            .pointer("/State/FinishedAt")
-            .and_then(Value::as_str)
-            .filter(|s| !s.starts_with("0001"))
-            .map(str::to_owned),
-        restart_count: value.pointer("/RestartCount").and_then(Value::as_u64),
-        health: value
-            .pointer("/State/Health/Status")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    })
-}
-
-fn enrich_containers_from_inspect(containers: &mut [Container], inspect_values: &[Value]) {
-    let inspect_by_id: std::collections::HashMap<String, &Value> = inspect_values
-        .iter()
-        .map(|v| {
-            let id = v.get("Id").and_then(Value::as_str).unwrap_or("").to_owned();
-            let short = &id[..12.min(id.len())];
-            (short.to_owned(), v)
-        })
-        .collect();
-
-    let inspect_by_name: std::collections::HashMap<String, &Value> = inspect_values
-        .iter()
-        .map(|v| {
-            let name = v
-                .get("Name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim_start_matches('/')
-                .to_owned();
-            (name, v)
-        })
-        .collect();
-
-    for container in containers.iter_mut() {
-        let inspect = inspect_by_id
-            .get(&container.id[..12.min(container.id.len())])
-            .or_else(|| inspect_by_name.get(&container.name))
-            .copied();
-
-        if let Some(inspect) = inspect {
-            if container.started_at.is_none() {
-                container.started_at = inspect
-                    .pointer("/State/StartedAt")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.starts_with("0001"))
-                    .map(str::to_owned);
-            }
-            if container.finished_at.is_none() {
-                container.finished_at = inspect
-                    .pointer("/State/FinishedAt")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.starts_with("0001"))
-                    .map(str::to_owned);
-            }
-            if container.restart_count.is_none() {
-                container.restart_count = inspect.pointer("/RestartCount").and_then(Value::as_u64);
-            }
-        }
     }
 }
 
-fn image_from_ls_json(value: &Value) -> Result<Image, DockerError> {
-    Ok(Image {
-        id: get_string(value, &["ID", "Id"]),
-        repository: get_string(value, &["Repository"]),
-        tag: get_string(value, &["Tag"]),
-        digest: get_optional_string(value, &["Digest"]),
-        size: get_string(value, &["Size"]),
-        created_at: get_optional_string(value, &["CreatedAt", "CreatedSince"]),
-        labels: split_csv(&get_string(value, &["Labels"])),
+fn container_from_inspect(inspect: &ContainerInspectResponse) -> Container {
+    let config = inspect.config.as_ref();
+    let state = inspect.state.as_ref();
+    let net_settings = inspect.network_settings.as_ref();
+
+    let state_status = state
+        .and_then(|s| s.status.as_ref())
+        .map(|e| format!("{e:?}").to_lowercase())
+        .unwrap_or_default();
+
+    Container {
+        id: inspect.id.as_deref().unwrap_or_default().to_owned(),
+        name: inspect.name.as_deref()
+            .map(|n| n.trim_start_matches('/').to_owned()).unwrap_or_default(),
+        image: config.and_then(|c| c.image.as_deref()).unwrap_or_default().to_owned(),
+        status: state_status.clone(),
+        state: state_status,
+        ports: net_settings
+            .and_then(|ns| ns.ports.as_ref())
+            .map(|ports_obj| {
+                ports_obj.iter()
+                    .flat_map(|(container_port, bindings)| {
+                        let arr = bindings.as_ref();
+                        if arr.is_none_or(std::vec::Vec::is_empty) {
+                            vec![container_port.clone()]
+                        } else {
+                            arr.expect("bindings should be Some here (checked by is_none_or)").iter().map(|b| {
+                                let host_ip = b.host_ip.as_deref().unwrap_or("");
+                                let host_port = b.host_port.as_deref().unwrap_or("");
+                                if host_port.is_empty() { container_port.clone() }
+                                else if host_ip.is_empty() || host_ip == "0.0.0.0" {
+                                    format!("{host_port}->{container_port}")
+                                } else { format!("{host_ip}:{host_port}->{container_port}") }
+                            }).collect::<Vec<_>>()
+                        }
+                    }).collect()
+            }).unwrap_or_default(),
+        labels: config.and_then(|c| c.labels.as_ref()).map(|l| labels_map_to_vec(Some(l))).unwrap_or_default(),
+        created_at: inspect.created.clone().filter(|s| !s.is_empty()),
+        started_at: state.and_then(|s| s.started_at.clone()).filter(|s| !s.starts_with("0001")),
+        finished_at: state.and_then(|s| s.finished_at.clone()).filter(|s| !s.starts_with("0001")),
+        restart_count: inspect.restart_count.map(|c| c.max(0) as u64),
+        health: state.and_then(|s| s.health.as_ref())
+            .and_then(|h| h.status.as_ref().map(|e| format!("{e:?}")))
+            .filter(|s| !s.is_empty()),
+    }
+}
+
+fn image_from_summary(s: &ImageSummary) -> Image {
+    let id = s.id.clone();
+    let (repository, tag) = s.repo_tags.first().map_or_else(|| (id.clone(), "latest".to_owned()), |full| if let Some((repo, t)) = full.rsplit_once(':') {
+            (repo.to_owned(), t.to_owned())
+        } else { (full.clone(), "latest".to_owned()) });
+    let repository = if repository == "<none>" { id.clone() } else { repository };
+
+    Image {
+        id,
+        repository,
+        tag,
+        digest: s.repo_digests.first().cloned(),
+        size: format_bytes_human(s.size.max(0) as u64),
+        created_at: Some(unix_to_iso(s.created)),
+        labels: Some(&s.labels).map(|l| labels_map_to_vec(Some(l))).unwrap_or_default(),
+    }
+}
+
+fn network_from_bollard(n: BollardNetwork) -> Network {
+    Network {
+        id: n.id.unwrap_or_default(),
+        name: n.name.unwrap_or_default(),
+        driver: n.driver.unwrap_or_default(),
+        scope: n.scope.unwrap_or_default(),
+        containers: Vec::new(), // not available from list_networks in bollard
+        labels: n.labels.as_ref().map(|l| labels_map_to_vec(Some(l))).unwrap_or_default(),
+    }
+}
+
+fn volume_from_bollard(v: BollardVolume) -> Volume {
+    Volume {
+        name: v.name,
+        driver: v.driver,
+        mountpoint: Some(v.mountpoint).filter(|s| !s.is_empty()),
+        scope: v.scope.map(|s| format!("{s:?}").to_lowercase()),
+        labels: Some(&v.labels).map(|l| labels_map_to_vec(Some(l))).unwrap_or_default(),
+    }
+}
+
+// ── Event conversion ───────────────────────────────────────────────────────
+
+pub fn docker_event_from_message(msg: EventMessage) -> DockerEvent {
+    let actor: Option<&bollard::models::EventActor> = msg.actor.as_ref();
+    let attributes: Vec<(String, String)> = actor
+        .and_then(|a| a.attributes.as_ref())
+        .map(|attrs| attrs.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
+
+    let container = attributes.iter().find(|(k, _)| k == "name").map(|(_, v)| v.clone())
+        .or_else(|| msg.actor.as_ref().and_then(|a| a.id.clone()));
+    let image = attributes.iter().find(|(k, _)| k == "image").map(|(_, v)| v.clone());
+
+    DockerEvent {
+        time: msg.time.map(unix_to_iso)
+            .or_else(|| msg.time_nano.map(|n| unix_to_iso(n / 1_000_000_000)))
+            .unwrap_or_default(),
+        event_type: msg.typ.map(|e| format!("{e:?}")).unwrap_or_default(),
+        action: msg.action.unwrap_or_default(),
+        actor_id: actor.and_then(|a| a.id.clone()).unwrap_or_default(),
+        container,
+        image,
+        attributes,
+    }
+}
+
+// ── Stats/metrics helpers ─────────────────────────────────────────────────
+
+#[allow(clippy::similar_names)]
+pub fn metric_sample_from_stats_json(value: &serde_json::Value) -> Result<MetricSample, String> {
+    let mem_usage = optional_string(value, &["MemUsage"]);
+    let (memory_usage_bytes, memory_limit_bytes) = mem_usage.as_deref()
+        .map(parse_usage_pair).transpose()
+        .map_err(|()| "invalid MemUsage".to_string())?
+        .unwrap_or((None, None));
+    let net_io = optional_string(value, &["NetIO"]);
+    let (network_rx_bytes, network_tx_bytes) = net_io.as_deref()
+        .map(parse_usage_pair).transpose()
+        .map_err(|()| "invalid NetIO".to_string())?
+        .unwrap_or((None, None));
+    let block_io = optional_string(value, &["BlockIO"]);
+    let (disk_read_bytes, disk_write_bytes) = block_io.as_deref()
+        .map(parse_usage_pair).transpose()
+        .map_err(|()| "invalid BlockIO".to_string())?
+        .unwrap_or((None, None));
+
+    Ok(MetricSample {
+        container_id: string(value, &["ID", "Container"]),
+        container_name: string(value, &["Name"]),
+        timestamp: { let ts = string(value, &["Timestamp"]); if ts.is_empty() { chrono::Utc::now().to_rfc3339() } else { ts } },
+        cpu_percent: optional_string(value, &["CPUPerc"]).as_deref().and_then(|s| s.trim().trim_end_matches('%').parse().ok()),
+        memory_usage_bytes, memory_limit_bytes, network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes,
     })
 }
 
-fn network_from_ls_json(value: &Value) -> Result<Network, DockerError> {
-    Ok(Network {
-        id: get_string(value, &["ID", "Id"]),
-        name: get_string(value, &["Name"]),
-        driver: get_string(value, &["Driver"]),
-        scope: get_string(value, &["Scope"]),
-        containers: Vec::new(),
-        labels: split_csv(&get_string(value, &["Labels"])),
-    })
+#[must_use]
+pub fn metric_sample_from_bollard_stats(container_id: &str, container_name: &str, stats: &bollard::models::ContainerStatsResponse) -> MetricSample {
+    let cpu_percent = stats.cpu_stats.as_ref().and_then(|cpu| {
+        let total = cpu.cpu_usage.as_ref().and_then(|u| u.total_usage).unwrap_or(0);
+        let system = cpu.system_cpu_usage.unwrap_or(0);
+        let cpus = cpu.online_cpus.unwrap_or(1).max(1);
+        if system > 0 && total > 0 { Some((total as f64 / system as f64) * f64::from(cpus) * 100.0) } else { None }
+    });
+    MetricSample {
+        container_id: container_id.to_owned(), container_name: container_name.to_owned(),
+        timestamp: chrono::Utc::now().to_rfc3339(), cpu_percent,
+        memory_usage_bytes: stats.memory_stats.as_ref().and_then(|m| m.usage),
+        memory_limit_bytes: stats.memory_stats.as_ref().and_then(|m| m.limit),
+        network_rx_bytes: stats.networks.as_ref().and_then(|n| n.values().next()).and_then(|n| n.rx_bytes),
+        network_tx_bytes: stats.networks.as_ref().and_then(|n| n.values().next()).and_then(|n| n.tx_bytes),
+        disk_read_bytes: None, disk_write_bytes: None,
+    }
 }
 
-fn volume_from_ls_json(value: &Value) -> Result<Volume, DockerError> {
-    Ok(Volume {
-        name: get_string(value, &["Name"]),
-        driver: get_string(value, &["Driver"]),
-        mountpoint: get_optional_string(value, &["Mountpoint"]),
-        scope: get_optional_string(value, &["Scope"]),
-        labels: split_csv(&get_string(value, &["Labels"])),
-    })
+// ── Utility functions ──────────────────────────────────────────────────────
+
+fn labels_map_to_vec(labels: Option<&HashMap<String, String>>) -> Vec<String> {
+    labels.map(|m| m.iter().map(|(k, v)| format!("{k}={v}")).collect()).unwrap_or_default()
 }
 
-fn get_string(value: &Value, keys: &[&str]) -> String {
-    get_optional_string(value, keys).unwrap_or_default()
+fn ports_from_summary(ports: Option<&Vec<PortSummary>>) -> Vec<String> {
+    ports.map(|p| p.iter().map(|port| {
+        let typ = port.typ.as_ref().map_or_else(|| "tcp".to_owned(), |e| format!("{e:?}").to_lowercase());
+        port.public_port.map_or_else(
+            || format!("{}/{}", port.private_port, typ),
+            |host_port| format!("{}:{}->{}/{}", port.ip.as_deref().unwrap_or("0.0.0.0"), host_port, port.private_port, typ),
+        )
+    }).collect()).unwrap_or_default()
 }
 
-fn get_optional_string(value: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| value.get(*key))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "<none>")
-        .map(str::to_owned)
+fn unix_to_iso(unix: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Utc.timestamp_opt(unix, 0).single().map_or_else(|| unix.to_string(), |dt| dt.to_rfc3339())
 }
 
-fn split_csv(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(str::to_owned)
-        .collect()
+#[must_use]
+pub fn format_bytes_human(bytes: u64) -> String {
+    if bytes >= ONE_GB { format!("{:.1}GB", bytes as f64 / ONE_GB as f64) }
+    else if bytes >= 1_048_576 { format!("{:.1}MB", bytes as f64 / 1_048_576.0) }
+    else if bytes >= 1024 { format!("{:.1}KB", bytes as f64 / 1024.0) }
+    else { format!("{bytes}B") }
 }
 
-fn format_command_str(bin: &str, args: &[String]) -> String {
-    let mut parts = vec![bin.to_owned()];
-    parts.extend(args.iter().cloned());
-    parts.join(" ")
+fn string(value: &serde_json::Value, keys: &[&str]) -> String { optional_string(value, keys).unwrap_or_default() }
+fn optional_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| value.get(*key)).and_then(serde_json::Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned)
+}
+
+fn parse_usage_pair(value: &str) -> Result<(Option<u64>, Option<u64>), ()> {
+    let mut parts = value.split('/').map(str::trim);
+    let left = parts.next().ok_or(())?;
+    let right = parts.next();
+    Ok((parse_byte_quantity(left)?, right.map(parse_byte_quantity).transpose()?.flatten()))
+}
+
+fn parse_byte_quantity(value: &str) -> Result<Option<u64>, ()> {
+    let v = value.trim();
+    if v.is_empty() || v == "--" { return Ok(None); }
+    let split = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+    let number: f64 = v[..split].trim().parse().map_err(|_| ())?;
+    let unit = v[split..].trim().to_ascii_lowercase();
+    let mult = match unit.as_str() {
+        "" | "b" => 1.0, "kb" => 1_000.0, "mb" => 1_000_000.0, "gb" => 1_000_000_000.0, "tb" => 1_000_000_000_000.0,
+        "kib" => 1024.0, "mib" => 1024.0 * 1024.0, "gib" => 1024.0 * 1024.0 * 1024.0, "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return Err(()),
+    };
+    Ok(Some((number * mult).round() as u64))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn rt() -> tokio::runtime::Runtime { tokio::runtime::Runtime::new().unwrap() }
+
     #[test]
-    fn mock_client_returns_normalized_entities() {
+    fn mock_client_works() {
         let client = MockDockerClient {
-            containers: vec![Container {
-                id: "abc123".to_owned(),
-                name: "api-service".to_owned(),
-                image: "api:latest".to_owned(),
-                status: "Up 2 minutes".to_owned(),
-                state: "running".to_owned(),
-                ports: vec!["8080/tcp".to_owned()],
-                labels: vec!["com.example.role=api".to_owned()],
-                created_at: Some("2026-05-31 02:00:00 +0300 +03".to_owned()),
-                started_at: None,
-                finished_at: None,
-                restart_count: Some(0),
-                health: None,
-            }],
+            containers: vec![Container { id: "abc".into(), name: "api".into(), state: "running".into(), ..Container::default() }],
             ..Default::default()
         };
-
-        let containers = client.list_containers().expect("mock should not fail");
-
-        assert_eq!(containers[0].name, "api-service");
-        assert_eq!(containers[0].state, "running");
+        let containers = rt().block_on(client.list_containers()).unwrap();
+        assert_eq!(containers[0].name, "api");
     }
 
     #[test]
-    fn lists_running_containers_from_any_client() {
-        let client = MockDockerClient {
-            containers: vec![
-                Container {
-                    id: "abc123".to_owned(),
-                    name: "api-service".to_owned(),
-                    image: "api:latest".to_owned(),
-                    status: "Up 2 minutes".to_owned(),
-                    state: "running".to_owned(),
-                    ports: Vec::new(),
-                    labels: Vec::new(),
-                    created_at: None,
-                    started_at: None,
-                    finished_at: None,
-                    restart_count: Some(0),
-                    health: None,
-                },
-                Container {
-                    id: "def456".to_owned(),
-                    name: "worker".to_owned(),
-                    image: "worker:latest".to_owned(),
-                    status: "Exited (0) 1 hour ago".to_owned(),
-                    state: "exited".to_owned(),
-                    ports: Vec::new(),
-                    labels: Vec::new(),
-                    created_at: None,
-                    started_at: None,
-                    finished_at: None,
-                    restart_count: Some(0),
-                    health: None,
-                },
-            ],
-            ..Default::default()
-        };
-
-        let running = list_running_containers(&client).expect("mock should not fail");
-
-        assert_eq!(running.len(), 1);
-        assert_eq!(running[0].name, "api-service");
+    fn mock_inspect_not_found() {
+        let err = rt().block_on(MockDockerClient::default().inspect_container("x")).unwrap_err();
+        assert!(matches!(err, DockerError::NotFound(_)));
     }
 
     #[test]
-    fn parses_docker_ps_json_lines() {
-        let values = parse_json_lines(
-            r#"{"ID":"abc123","Image":"postgres:16","Names":"db","State":"running","Status":"Up 1 minute","Ports":"5432/tcp","Labels":"env=dev,tier=data","CreatedAt":"2026-05-31 02:00:00 +0300 +03"}"#,
-        )
-        .expect("json should parse");
-
-        let container = container_from_ps_json(&values[0]).expect("container should normalize");
-
-        assert_eq!(container.id, "abc123");
-        assert_eq!(container.name, "db");
-        assert_eq!(container.image, "postgres:16");
-        assert_eq!(container.ports, vec!["5432/tcp"]);
-        assert_eq!(container.labels, vec!["env=dev", "tier=data"]);
+    fn mock_ping() {
+        assert!(rt().block_on(MockDockerClient::default().ping()).unwrap());
     }
 
     #[test]
-    fn parses_image_json_line() {
-        let value: Value = serde_json::from_str(
-            r#"{"ID":"sha256:abc","Repository":"postgres","Tag":"16","Size":"432MB","CreatedSince":"2 weeks ago"}"#,
-        )
-        .expect("json should parse");
-
-        let image = image_from_ls_json(&value).expect("image should normalize");
-
-        assert_eq!(image.repository, "postgres");
-        assert_eq!(image.tag, "16");
-        assert_eq!(image.created_at.as_deref(), Some("2 weeks ago"));
+    fn parses_usage_pair() {
+        assert_eq!(parse_usage_pair("12.5MiB / 1GiB"), Ok((Some(13_107_200), Some(1_073_741_824))));
     }
 
     #[test]
-    fn parses_network_json_line() {
-        let value: Value = serde_json::from_str(
-            r#"{"ID":"net123","Name":"bridge","Driver":"bridge","Scope":"local"}"#,
-        )
-        .expect("json should parse");
-
-        let network = network_from_ls_json(&value).expect("network should normalize");
-
-        assert_eq!(network.name, "bridge");
-        assert_eq!(network.driver, "bridge");
-        assert_eq!(network.scope, "local");
-    }
-
-    #[test]
-    fn mock_inspect_container_by_id_prefix() {
-        let client = MockDockerClient {
-            containers: vec![Container {
-                id: "abc123def456".to_owned(),
-                name: "api-service".to_owned(),
-                image: "api:latest".to_owned(),
-                status: "Up 2 minutes".to_owned(),
-                state: "running".to_owned(),
-                ports: vec!["8080/tcp".to_owned()],
-                labels: vec![],
-                created_at: None,
-                started_at: None,
-                finished_at: None,
-                restart_count: Some(0),
-                health: None,
-            }],
-            ..Default::default()
-        };
-
-        let container = client
-            .inspect_container("abc123")
-            .expect("should find by id prefix");
-        assert_eq!(container.name, "api-service");
-    }
-
-    #[test]
-    fn mock_inspect_container_by_name() {
-        let client = MockDockerClient {
-            containers: vec![Container {
-                id: "abc123".to_owned(),
-                name: "web".to_owned(),
-                ..Container::default()
-            }],
-            ..Default::default()
-        };
-
-        let container = client
-            .inspect_container("web")
-            .expect("should find by name");
-        assert_eq!(container.id, "abc123");
-    }
-
-    #[test]
-    fn mock_inspect_container_not_found() {
-        let client = MockDockerClient::default();
-
-        let err = client.inspect_container("nonexistent").unwrap_err();
-        match err {
-            DockerError::CommandFailed { ref stderr, .. } => {
-                assert!(stderr.contains("No such container"));
-            }
-            _ => panic!("expected CommandFailed error"),
-        }
-    }
-
-    #[test]
-    fn mock_container_logs_by_id() {
-        let mut logs = std::collections::HashMap::new();
-        logs.insert(
-            "abc123".to_owned(),
-            vec!["line1".to_owned(), "line2".to_owned()],
-        );
-
-        let client = MockDockerClient {
-            containers: vec![Container {
-                id: "abc123".to_owned(),
-                name: "web".to_owned(),
-                ..Container::default()
-            }],
-            logs,
-            ..Default::default()
-        };
-
-        let log_lines = client
-            .container_logs("abc123", 100)
-            .expect("should return logs");
-        assert_eq!(log_lines, vec!["line1", "line2"]);
-    }
-
-    #[test]
-    fn mock_container_logs_not_found_returns_empty() {
-        let client = MockDockerClient::default();
-
-        let log_lines = client
-            .container_logs("nonexistent", 50)
-            .expect("should return empty vec");
-        assert!(log_lines.is_empty());
-    }
-
-    #[test]
-    fn mock_ping_returns_true() {
-        let client = MockDockerClient::default();
-        assert!(client.ping().expect("ping should not fail"));
-    }
-
-    // -------------------------------------------------------------------------
-    // MockCommandRunner — allows testing DockerCliClient without a real Docker
-    // -------------------------------------------------------------------------
-
-    #[derive(Debug)]
-    struct MockCommandRunner {
-        outputs: std::collections::HashMap<String, RunOutput>,
-    }
-
-    impl CommandRunner for MockCommandRunner {
-        fn run(&self, bin: &str, args: &[String]) -> Result<RunOutput, DockerError> {
-            let key = format_command_str(bin, args);
-            self.outputs
-                .get(&key)
-                .cloned()
-                .ok_or_else(|| DockerError::CommandFailed {
-                    command: key,
-                    code: None,
-                    stderr: "no mock output defined for this command".to_owned(),
-                })
-        }
-    }
-
-    #[test]
-    fn docker_cli_container_logs_success() {
-        let runner = MockCommandRunner {
-            outputs: std::collections::HashMap::from([(
-                "docker logs --tail 50 abc123".to_owned(),
-                RunOutput {
-                    stdout: b"line 1\nline 2\nline 3\n"[..].to_owned(),
-                    stderr: Vec::new(),
-                    success: true,
-                    exit_code: Some(0),
-                },
-            )]),
-        };
-
-        let client = DockerCliClient::with_runner("docker", Box::new(runner));
-        let logs = client.container_logs("abc123", 50).expect("should succeed");
-        assert_eq!(logs, vec!["line 1", "line 2", "line 3"]);
-    }
-
-    #[test]
-    fn docker_cli_container_logs_empty() {
-        let runner = MockCommandRunner {
-            outputs: std::collections::HashMap::from([(
-                "docker logs --tail 10 xyz789".to_owned(),
-                RunOutput {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    success: true,
-                    exit_code: Some(0),
-                },
-            )]),
-        };
-
-        let client = DockerCliClient::with_runner("docker", Box::new(runner));
-        let logs = client.container_logs("xyz789", 10).expect("should succeed");
-        assert!(logs.is_empty());
-    }
-
-    #[test]
-    fn docker_cli_container_logs_failure() {
-        let runner = MockCommandRunner {
-            outputs: std::collections::HashMap::from([(
-                "docker logs --tail 5 dead".to_owned(),
-                RunOutput {
-                    stdout: Vec::new(),
-                    stderr: b"Error: No such container: dead"[..].to_owned(),
-                    success: false,
-                    exit_code: Some(1),
-                },
-            )]),
-        };
-
-        let client = DockerCliClient::with_runner("docker", Box::new(runner));
-        let err = client.container_logs("dead", 5).unwrap_err();
-        match err {
-            DockerError::CommandFailed {
-                ref command,
-                ref stderr,
-                ..
-            } => {
-                assert!(command.contains("logs"), "command should mention logs");
-                assert!(
-                    stderr.contains("No such container"),
-                    "stderr should contain error"
-                );
-            }
-            _ => panic!("expected CommandFailed error"),
-        }
-    }
-
-    #[test]
-    fn docker_cli_ping_success() {
-        let runner = MockCommandRunner {
-            outputs: std::collections::HashMap::from([(
-                "docker ps --format {{.ID}} --limit 1".to_owned(),
-                RunOutput {
-                    stdout: b"abc123\n"[..].to_owned(),
-                    stderr: Vec::new(),
-                    success: true,
-                    exit_code: Some(0),
-                },
-            )]),
-        };
-
-        let client = DockerCliClient::with_runner("docker", Box::new(runner));
-        assert!(client.ping().expect("ping should not fail"));
-    }
-
-    #[test]
-    fn docker_cli_ping_failure() {
-        let runner = MockCommandRunner {
-            outputs: std::collections::HashMap::from([(
-                "docker ps --format {{.ID}} --limit 1".to_owned(),
-                RunOutput {
-                    stdout: Vec::new(),
-                    stderr: b"cannot connect to Docker daemon"[..].to_owned(),
-                    success: false,
-                    exit_code: Some(1),
-                },
-            )]),
-        };
-
-        let client = DockerCliClient::with_runner("docker", Box::new(runner));
-        assert!(!client.ping().expect("ping should not fail"));
-    }
-
-    #[test]
-    fn parses_volume_json_line() {
-        let value: Value = serde_json::from_str(
-            r#"{"Name":"pgdata","Driver":"local","Mountpoint":"/var/lib/docker/volumes/pgdata/_data","Scope":"local"}"#,
-        )
-        .expect("json should parse");
-
-        let volume = volume_from_ls_json(&value).expect("volume should normalize");
-
-        assert_eq!(volume.name, "pgdata");
-        assert_eq!(volume.driver, "local");
-        assert_eq!(volume.scope.as_deref(), Some("local"));
+    fn normalizes_docker_stats_json() {
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{"Container":"abc123","Name":"api","CPUPerc":"87.50%","MemUsage":"128MiB / 1GiB","NetIO":"1.5kB / 2kB","BlockIO":"4MiB / 8MiB"}"#,
+        ).unwrap();
+        let sample = metric_sample_from_stats_json(&value).unwrap();
+        assert_eq!(sample.container_id, "abc123");
+        assert_eq!(sample.cpu_percent, Some(87.5));
     }
 }

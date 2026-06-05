@@ -1,3 +1,17 @@
+//! DOL query parser — tokenizer and recursive-descent parser.
+//!
+//! Converts a DOL query string (e.g. `"observe containers | where cpu > 80%"`)
+//! into an [`crate::ast::Query`] value. Provides rich [`ParseError`] messages with
+//! source pointers, colour-coded output, and keyword suggestions via
+//! Levenshtein distance.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let parsed = parser::parse("observe containers | select name, state")?;
+//! println!("{:?}", parsed.query);
+//! ```
+
 use serde::Serialize;
 
 use crate::ast::{
@@ -5,6 +19,9 @@ use crate::ast::{
     ConfigTarget, Duration, DurationUnit, EventsQuery, Expression, InspectQuery, LogsQuery,
     Operator, PipelineNode, Query, SetValue, SingularTarget, SingularTargetKind, SortDirection,
     TimeSelector, Value,
+};
+use crate::{
+    ANSI_BOLD, ANSI_FG_CYAN, ANSI_FG_GREEN, ANSI_FG_RED, ANSI_FG_YELLOW, ANSI_RESET,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -19,18 +36,121 @@ pub struct ParseError {
     pub message: String,
     /// The original query source (trimmed), used to show surrounding context.
     pub source: Option<String>,
+    /// An optional suggestion to help the user fix the error.
+    pub suggestion: Option<String>,
 }
 
 impl std::error::Error for ParseError {}
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // For Display trait, use plain text (no colors).
+        // Use format_color for ANSI-colored output.
         write!(f, "parse error at column {}: {}", self.column, self.message)?;
 
+        self.fmt_source_pointer(f)?;
+        self.fmt_suggestion_plain(f)?;
+
+        Ok(())
+    }
+}
+
+impl ParseError {
+    pub fn new(column: usize, message: impl Into<String>) -> Self {
+        Self {
+            column,
+            message: message.into(),
+            source: None,
+            suggestion: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_source(mut self, source: String) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    /// Set a suggestion for how to fix the error.
+    #[must_use]
+    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        self.suggestion = Some(suggestion.into());
+        self
+    }
+
+    /// Return a fully ANSI-coloured error string suitable for terminal display.
+    #[must_use]
+    pub fn format_color(&self) -> String {
+        let mut out = String::new();
+
+        // Error header: bold red "error" prefix
+        use std::fmt::Write;
+        write!(
+            out,
+            "{ansi_bold}{ansi_red}error{reset} at column {col}: {msg}",
+            ansi_bold = ANSI_BOLD,
+            ansi_red = ANSI_FG_RED,
+            reset = ANSI_RESET,
+            col = self.column,
+            msg = self.message,
+        )
+        .expect("write! to String is infallible");
+
+        // Source line with pointer
         if let Some(ref source) = self.source {
-            // Show the source line with a pointer at the error column.
-            // The column is 1-indexed; we find the (approximate) line
-            // containing that column for multi-line queries.
+            let mut remaining = self.column;
+            let display_line = source
+                .lines()
+                .find(|line| {
+                    let line_len = line.chars().count();
+                    if remaining <= line_len || line_len == 0 && remaining == 1 {
+                        true
+                    } else {
+                        remaining = remaining.saturating_sub(line_len + 1);
+                        false
+                    }
+                })
+                .unwrap_or(source);
+
+            let col = remaining.min(display_line.chars().count());
+            let pointer = format!("{}^", " ".repeat(col.saturating_sub(1)));
+
+            write!(
+                out,
+                "\n  {bold}{cyan}-->{reset} {line}",
+                bold = ANSI_BOLD,
+                cyan = ANSI_FG_CYAN,
+                reset = ANSI_RESET,
+                line = display_line,
+            )
+            .expect("write! to String is infallible");
+            write!(
+                out,
+                "\n     {green}{ptr}{reset}",
+                green = ANSI_FG_GREEN,
+                ptr = pointer,
+                reset = ANSI_RESET,
+            )
+            .expect("write! to String is infallible");
+        }
+
+        // Suggestion in yellow
+        if let Some(ref suggestion) = self.suggestion {
+            write!(
+                out,
+                "\n  {yellow}help: {suggestion}{reset}",
+                yellow = ANSI_FG_YELLOW,
+                reset = ANSI_RESET,
+            )
+            .expect("write! to String is infallible");
+        }
+
+        out
+    }
+
+    /// Append the source pointer lines to a formatter (plain text).
+    fn fmt_source_pointer(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(ref source) = self.source {
             let mut remaining = self.column;
             let display_line = source
                 .lines()
@@ -49,23 +169,15 @@ impl std::fmt::Display for ParseError {
             write!(f, "\n  --> {display_line}")?;
             write!(f, "\n     {}^", " ".repeat(col.saturating_sub(1)))?;
         }
-
         Ok(())
     }
-}
 
-impl ParseError {
-    pub fn new(column: usize, message: impl Into<String>) -> Self {
-        Self {
-            column,
-            message: message.into(),
-            source: None,
+    /// Append suggestion as plain text.
+    fn fmt_suggestion_plain(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(ref suggestion) = self.suggestion {
+            write!(f, "\n  help: {suggestion}")?;
         }
-    }
-
-    pub fn with_source(mut self, source: String) -> Self {
-        self.source = Some(source);
-        self
+        Ok(())
     }
 }
 
@@ -74,7 +186,8 @@ pub fn parse(source: &str) -> Result<ParsedQuery, ParseError> {
 
     let result = (|| {
         if trimmed.is_empty() {
-            return Err(ParseError::new(1, "empty DOL query"));
+            return Err(ParseError::new(1, "empty DOL query")
+                .with_suggestion("try `observe containers`"));
         }
 
         let tokens = tokenize(trimmed)?;
@@ -130,7 +243,7 @@ struct Parser {
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>, eof_column: usize) -> Self {
+    const fn new(tokens: Vec<Token>, eof_column: usize) -> Self {
         Self {
             tokens,
             cursor: 0,
@@ -154,9 +267,11 @@ impl Parser {
                 Ok(Query::Ping)
             }
             Some("fields") => self.parse_fields(),
-            Some(other) => Err(self.error_here(format!(
-                "expected query family, found `{other}`; try `observe containers`"
-            ))),
+            Some(other) => Err(self
+                .error_here(format!(
+                    "expected query family, found `{other}`"
+                ))
+                .with_suggestion("try one of: `observe`, `events`, `inspect`, `analyze`, `alert`, `compose`, `logs`, `ping`".to_string())),
             None => Err(self.error_here("expected query family")),
         }
     }
@@ -185,7 +300,7 @@ impl Parser {
             let right = self.parse_collection_target()?;
             self.expect_ident("on")?;
             let left_key = self.parse_arith_expression()?;
-            self.expect(TokenKind::Eq, "`=`")?;
+            self.expect(&TokenKind::Eq, "`=`")?;
             let right_key = self.parse_arith_expression()?;
             Some(crate::ast::JoinClause {
                 right,
@@ -391,8 +506,17 @@ impl Parser {
             Some("images") => { self.advance(); Ok(CollectionTarget::Images) }
             Some("networks") => { self.advance(); Ok(CollectionTarget::Networks) }
             Some("volumes") => { self.advance(); Ok(CollectionTarget::Volumes) }
-            Some(other) => Err(self.error_here(format!("expected collection target: containers, images, networks, or volumes, found `{other}`"))),
-            None => Err(self.error_here("expected collection target: containers, images, networks, or volumes")),
+            Some(other) => {
+                let suggestion = suggest_similar_target(other);
+                Err(self
+                    .error_here(format!(
+                        "expected collection target, found `{other}`"
+                    ))
+                    .with_suggestion(suggestion))
+            }
+            None => Err(
+                self.error_here("expected collection target: containers, images, networks, or volumes"),
+            ),
         }
     }
 
@@ -414,9 +538,14 @@ impl Parser {
                 self.advance();
                 SingularTargetKind::Volume
             }
-            Some(other) => return Err(self.error_here(format!(
-                "expected singular target: container, image, network, or volume, found `{other}`"
-            ))),
+            Some(other) => {
+                let suggestion = suggest_similar_target(other);
+                return Err(self
+                    .error_here(format!(
+                        "expected singular target, found `{other}`"
+                    ))
+                    .with_suggestion(suggestion));
+            }
             None => {
                 return Err(self
                     .error_here("expected singular target: container, image, network, or volume"));
@@ -447,10 +576,22 @@ impl Parser {
                 self.advance();
                 Ok(AnalysisVerb::Explain)
             }
-            Some(other) => Err(self.error_here(format!(
-                "expected analysis verb: find, correlate, or explain, found `{other}`"
-            ))),
-            None => Err(self.error_here("expected analysis verb: find, correlate, or explain")),
+            Some(other) => {
+                let extra = suggest_keyword(other, ANALYSIS_VERBS);
+                let base = "try one of: `find`, `correlate`, `explain`";
+                let suggestion = match extra {
+                    Some(s) => format!("{s} {base}"),
+                    None => base.to_owned(),
+                };
+                Err(self
+                    .error_here(format!(
+                        "expected analysis verb, found `{other}`"
+                    ))
+                    .with_suggestion(suggestion))
+            }
+            None => Err(
+                self.error_here("expected analysis verb: find, correlate, or explain"),
+            ),
         }
     }
 
@@ -471,10 +612,22 @@ impl Parser {
                 let target = self.parse_singular_target()?;
                 Ok(AlertAction::Restart(target))
             }
-            Some(other) => Err(self.error_here(format!(
-                "expected alert action: print, webhook, or restart, found `{other}`"
-            ))),
-            None => Err(self.error_here("expected alert action: print, webhook, or restart")),
+            Some(other) => {
+                let extra = suggest_keyword(other, ALERT_ACTIONS);
+                let base = "try one of: `print`, `webhook`, `restart`";
+                let suggestion = match extra {
+                    Some(s) => format!("{s} {base}"),
+                    None => base.to_owned(),
+                };
+                Err(self
+                    .error_here(format!(
+                        "expected alert action, found `{other}`"
+                    ))
+                    .with_suggestion(suggestion))
+            }
+            None => Err(
+                self.error_here("expected alert action: print, webhook, or restart"),
+            ),
         }
     }
 
@@ -506,7 +659,7 @@ impl Parser {
 
     fn parse_pipeline(&mut self) -> Result<Vec<PipelineNode>, ParseError> {
         let mut nodes = Vec::new();
-        while self.consume(TokenKind::Pipe) {
+        while self.consume(&TokenKind::Pipe) {
             nodes.push(self.parse_pipeline_node()?);
         }
         Ok(nodes)
@@ -544,7 +697,7 @@ impl Parser {
                     SortDirection::Asc
                 };
                 fields.push((field, direction));
-                if !self.consume(TokenKind::Comma) {
+                if !self.consume(&TokenKind::Comma) {
                     break;
                 }
             }
@@ -574,16 +727,27 @@ impl Parser {
         if self.consume_ident("let") {
             return self.parse_let_pipeline();
         }
-        Err(self.error_here("expected pipeline node: where, select, group by, sort by, limit, offset, distinct, alert, if, set, fill, or let"))
+        Err({
+            let extra = self.peek().and_then(|t| match &t.kind {
+                TokenKind::Ident(name) => suggest_keyword(name, PIPELINE_KEYWORDS),
+                _ => None,
+            });
+            let base = "use `| where`, `| select`, `| sort`, `| group by`, `| limit`, `| set`, `| if`, `| fill`, or `| let`";
+            let suggestion = match extra {
+                Some(s) => format!("{s} {base}"),
+                None => base.to_owned(),
+            };
+            self.error_here("expected pipeline node").with_suggestion(suggestion)
+        })
     }
 
     fn parse_aggregates(&mut self) -> Result<Vec<crate::ast::AggregateExpr>, ParseError> {
         let mut aggs = Vec::new();
         loop {
             let func = self.expect_identifier_like("aggregate function")?;
-            self.expect(TokenKind::LParen, "`(`")?;
+            self.expect(&TokenKind::LParen, "`(`")?;
             let field = self.expect_identifier_like("aggregate field")?;
-            self.expect(TokenKind::RParen, "`)`")?;
+            self.expect(&TokenKind::RParen, "`)`")?;
             let alias = if self.consume_ident("as") {
                 self.expect_identifier_like("alias")?
             } else {
@@ -594,7 +758,7 @@ impl Parser {
                 field,
                 alias,
             });
-            if !self.consume(TokenKind::Comma) {
+            if !self.consume(&TokenKind::Comma) {
                 break;
             }
         }
@@ -623,7 +787,7 @@ impl Parser {
 
     fn parse_inline_pipeline_nodes(&mut self) -> Result<Vec<PipelineNode>, ParseError> {
         let mut nodes = vec![self.parse_pipeline_node()?];
-        while self.consume(TokenKind::Pipe) {
+        while self.consume(&TokenKind::Pipe) {
             nodes.push(self.parse_pipeline_node()?);
         }
         Ok(nodes)
@@ -631,7 +795,7 @@ impl Parser {
 
     fn parse_set_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
         let field = self.expect_identifier_like("field name")?;
-        self.expect(TokenKind::Eq, "`=`")?;
+        self.expect(&TokenKind::Eq, "`=`")?;
         let value = if self.consume_ident("case") {
             self.parse_set_case()?
         } else if self.consume_ident("if") {
@@ -680,7 +844,7 @@ impl Parser {
 
     fn parse_field_list(&mut self) -> Result<Vec<String>, ParseError> {
         let mut fields = vec![self.expect_identifier_like("field")?];
-        while self.consume(TokenKind::Comma) {
+        while self.consume(&TokenKind::Comma) {
             fields.push(self.expect_identifier_like("field")?);
         }
         Ok(fields)
@@ -722,9 +886,9 @@ impl Parser {
 
         // Check for `in`
         if self.consume_ident("in") {
-            self.expect(TokenKind::LParen, "`(`")?;
+            self.expect(&TokenKind::LParen, "`(`")?;
             let values = self.parse_value_list()?;
-            self.expect(TokenKind::RParen, "`)`")?;
+            self.expect(&TokenKind::RParen, "`)`")?;
             return Ok(Expression::In {
                 expr: Box::new(left),
                 values,
@@ -777,7 +941,7 @@ impl Parser {
         self.parse_arith_expression()
     }
 
-    /// Like try_parse_value but accepts ANY identifier (not just true/false)
+    /// Like `try_parse_value` but accepts ANY identifier (not just true/false)
     /// so that `state = running` treats `running` as a literal.
     fn try_parse_rhs_value(&mut self) -> Result<Value, ParseError> {
         let token = self
@@ -785,9 +949,7 @@ impl Parser {
             .ok_or_else(|| self.error_here("expected value"))?
             .clone();
         match &token.kind {
-            TokenKind::String(_) => {}
-            TokenKind::Ident(_) => {}
-            TokenKind::Integer(_) | TokenKind::Float(_) | TokenKind::Percentage(_) => {}
+            TokenKind::String(_) | TokenKind::Ident(_) | TokenKind::Integer(_) | TokenKind::Float(_) | TokenKind::Percentage(_) => {}
             _ => return Err(ParseError::new(token.column, "not a value")),
         }
         self.advance();
@@ -854,7 +1016,7 @@ impl Parser {
     }
 
     fn parse_unary_arith(&mut self) -> Result<Expression, ParseError> {
-        if self.consume(TokenKind::Minus) {
+        if self.consume(&TokenKind::Minus) {
             let expr = self.parse_unary_arith()?;
             return Ok(Expression::Arithmetic {
                 left: Box::new(Expression::Literal(Value::Integer(0))),
@@ -867,9 +1029,9 @@ impl Parser {
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
         // Parenthesized expression
-        if self.consume(TokenKind::LParen) {
+        if self.consume(&TokenKind::LParen) {
             let expr = self.parse_expression()?;
-            self.expect(TokenKind::RParen, "`)`")?;
+            self.expect(&TokenKind::RParen, "`)`")?;
             return Ok(expr);
         }
 
@@ -885,13 +1047,13 @@ impl Parser {
             self.advance(); // consume ident
             self.advance(); // consume LParen
             let mut args = Vec::new();
-            if !self.check(TokenKind::RParen) {
+            if !self.check(&TokenKind::RParen) {
                 args.push(self.parse_expression()?);
-                while self.consume(TokenKind::Comma) {
+                while self.consume(&TokenKind::Comma) {
                     args.push(self.parse_expression()?);
                 }
             }
-            self.expect(TokenKind::RParen, "`)`")?;
+            self.expect(&TokenKind::RParen, "`)`")?;
             return Ok(Expression::FnCall { name, args });
         }
 
@@ -902,6 +1064,7 @@ impl Parser {
 
         // Field reference (with optional $ prefix for variable-style access)
         let field = self.expect_identifier_like("field")?;
+        #[allow(clippy::option_if_let_else)]
         if let Some(name) = field.strip_prefix('$') {
             Ok(Expression::Field(name.to_owned()))
         } else {
@@ -911,7 +1074,7 @@ impl Parser {
 
     fn parse_value_list(&mut self) -> Result<Vec<Value>, ParseError> {
         let mut values = vec![self.parse_value()?];
-        while self.consume(TokenKind::Comma) {
+        while self.consume(&TokenKind::Comma) {
             values.push(self.parse_value()?);
         }
         Ok(values)
@@ -926,12 +1089,13 @@ impl Parser {
 
     fn parse_let_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
         let name = self.expect_identifier_like("variable name")?;
+        #[allow(clippy::option_if_let_else)]
         let name = if let Some(stripped) = name.strip_prefix('$') {
             stripped.to_owned()
         } else {
             name
         };
-        self.expect(TokenKind::Eq, "`=`")?;
+        self.expect(&TokenKind::Eq, "`=`")?;
         let value = self.parse_expression()?;
         Ok(PipelineNode::Let { name, value })
     }
@@ -960,9 +1124,8 @@ impl Parser {
             .ok_or_else(|| self.error_here("expected value"))?
             .clone();
         match &token.kind {
-            TokenKind::String(_) => {}
             TokenKind::Ident(v) if v == "true" || v == "false" => {}
-            TokenKind::Integer(_) | TokenKind::Float(_) | TokenKind::Percentage(_) => {}
+            TokenKind::String(_) | TokenKind::Integer(_) | TokenKind::Float(_) | TokenKind::Percentage(_) => {}
             _ => return Err(ParseError::new(token.column, "not a value")),
         }
         self.advance();
@@ -1058,8 +1221,7 @@ impl Parser {
             .advance()
             .ok_or_else(|| self.error_here(format!("expected {context}")))?;
         match token.kind {
-            TokenKind::Ident(s) => Ok(s),
-            TokenKind::String(s) => Ok(s),
+            TokenKind::Ident(s) | TokenKind::String(s) => Ok(s),
             _ => Err(ParseError::new(token.column, format!("expected {context}"))),
         }
     }
@@ -1070,34 +1232,39 @@ impl Parser {
             .ok_or_else(|| self.error_here(format!("expected `{expected}`")))?;
         match &token.kind {
             TokenKind::Ident(value) if value == expected => Ok(()),
-            _ => Err(ParseError::new(
-                token.column,
-                format!("expected `{expected}`"),
-            )),
+            _ => {
+                let found = token_display(&token);
+                Err(ParseError::new(
+                    token.column,
+                    format!("expected `{expected}`, found `{found}`"),
+                ))
+            }
         }
     }
 
-    fn expect(&mut self, kind: TokenKind, description: &str) -> Result<(), ParseError> {
+    fn expect(&mut self, kind: &TokenKind, description: &str) -> Result<(), ParseError> {
         let token = self
             .advance()
             .ok_or_else(|| self.error_here(format!("expected {description}")))?;
-        if token.kind == kind {
+        if token.kind == *kind {
             Ok(())
         } else {
+            let found = token_display(&token);
             Err(ParseError::new(
                 token.column,
-                format!("expected {description}"),
+                format!("expected {description}, found `{found}`"),
             ))
         }
     }
 
-    fn expect_eof(&mut self) -> Result<(), ParseError> {
-        if self.peek().is_some() {
-            let token = self.peek().unwrap();
-            return Err(ParseError::new(
-                token.column,
-                format!("unexpected token `{:?}`", token.kind),
-            ));
+    fn expect_eof(&self) -> Result<(), ParseError> {
+        if let Some(token) = self.peek() {
+            return Err(ParseError::new(token.column, "unexpected token after query".to_string())
+                .with_suggestion(format!(
+                    "remove or check the `{}` at column {}",
+                    token_display(token),
+                    token.column
+                )));
         }
         Ok(())
     }
@@ -1112,9 +1279,9 @@ impl Parser {
         }
     }
 
-    fn consume(&mut self, kind: TokenKind) -> bool {
+    fn consume(&mut self, kind: &TokenKind) -> bool {
         match self.peek().map(|t| &t.kind) {
-            Some(k) if *k == kind => {
+            Some(k) if *k == *kind => {
                 self.advance();
                 true
             }
@@ -1122,14 +1289,13 @@ impl Parser {
         }
     }
 
-    fn check(&self, kind: TokenKind) -> bool {
-        self.peek().map(|t| &t.kind) == Some(&kind)
+    fn check(&self, kind: &TokenKind) -> bool {
+        self.peek().map(|t| &t.kind) == Some(kind)
     }
 
     fn is_at_time_or_pipe_or_eof(&self) -> bool {
         match self.peek().map(|t| &t.kind) {
-            None => true,
-            Some(TokenKind::Pipe) => true,
+            None | Some(TokenKind::Pipe) => true,
             Some(TokenKind::Ident(v)) if v == "last" || v == "from" => true,
             _ => false,
         }
@@ -1153,10 +1319,99 @@ impl Parser {
     }
 
     fn error_here(&self, message: impl Into<String>) -> ParseError {
-        let col = self.peek().map(|t| t.column).unwrap_or(self.eof_column);
+        let col = self.peek().map_or(self.eof_column, |t| t.column);
         ParseError::new(col, message)
     }
 }
+
+/// Return a display-friendly representation of a token for error messages.
+fn token_display(token: &Token) -> String {
+    match &token.kind {
+        TokenKind::Ident(s) => s.clone(),
+        TokenKind::String(s) => format!("\"{s}\""),
+        TokenKind::Integer(n) => n.to_string(),
+        TokenKind::Float(f) => f.to_string(),
+        TokenKind::Percentage(p) => format!("{p}%"),
+        TokenKind::Duration(d) => {
+            let unit = match d.unit {
+                DurationUnit::Seconds => "s",
+                DurationUnit::Minutes => "m",
+                DurationUnit::Hours => "h",
+                DurationUnit::Days => "d",
+            };
+            format!("{}{}", d.value, unit)
+        }
+        TokenKind::Pipe => "|".to_owned(),
+        TokenKind::Comma => ",".to_owned(),
+        TokenKind::LParen => "(".to_owned(),
+        TokenKind::RParen => ")".to_owned(),
+        TokenKind::Plus => "+".to_owned(),
+        TokenKind::Minus => "-".to_owned(),
+        TokenKind::Star => "*".to_owned(),
+        TokenKind::Slash => "/".to_owned(),
+        TokenKind::Percent => "%".to_owned(),
+        TokenKind::Eq => "=".to_owned(),
+        TokenKind::NotEq => "!=".to_owned(),
+        TokenKind::Gt => ">".to_owned(),
+        TokenKind::Lt => "<".to_owned(),
+        TokenKind::Gte => ">=".to_owned(),
+        TokenKind::Lte => "<=".to_owned(),
+    }
+}
+
+/// Known pipeline keywords for similarity suggestions.
+const PIPELINE_KEYWORDS: &[&str] = &[
+    "where", "select", "group", "having", "sort",
+    "limit", "offset", "distinct", "alert",
+    "if", "set", "fill", "let",
+];
+
+/// Known analysis verbs for similarity suggestions.
+const ANALYSIS_VERBS: &[&str] = &["find", "correlate", "explain"];
+
+/// Known alert actions for similarity suggestions.
+const ALERT_ACTIONS: &[&str] = &["print", "webhook", "restart"];
+
+/// Suggest a similar keyword from a known list, using `str_similarity`.
+fn suggest_keyword(input: &str, keywords: &[&str]) -> Option<String> {
+    if input.is_empty() {
+        return None;
+    }
+    let first_char = &input[..1];
+    keywords
+        .iter()
+        .filter(|k| k.starts_with(first_char))
+        .min_by_key(|k| str_similarity(input, k))
+        .map(|suggestion| format!("did you mean `{suggestion}`?"))
+}
+
+/// Suggest a similar target name when the user types an unknown one.
+fn suggest_similar_target(input: &str) -> String {
+    let targets = [
+        "containers",
+        "images",
+        "networks",
+        "volumes",
+        "container",
+        "image",
+        "network",
+        "volume",
+    ];
+    let suggestion = suggest_keyword(input, &targets);
+    let base = "try one of: containers, images, networks, volumes";
+    match suggestion {
+        Some(s) => format!("{s} {base}"),
+        None => base.to_owned(),
+    }
+}
+
+/// Levenshtein edit distance between two strings.
+/// Lower score = more similar. Uses the `strsim` crate for efficient computation.
+fn str_similarity(a: &str, b: &str) -> usize {
+    strsim::levenshtein(a, b)
+}
+
+
 
 // ── Tokenizer ──
 
@@ -1274,7 +1529,8 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
                 i += 1;
             }
             if i >= chars.len() {
-                return Err(ParseError::new(start + 1, "unterminated string"));
+                return Err(ParseError::new(start + 1, "unterminated string")
+            .with_suggestion("add a closing `\"` at the end of the string"));
             }
             i += 1; // closing "
             tokens.push(Token {
@@ -1448,10 +1704,8 @@ fn tokenize(source: &str) -> Result<Vec<Token>, ParseError> {
             continue;
         }
 
-        return Err(ParseError::new(
-            col,
-            format!("unexpected character `{}`", chars[i]),
-        ));
+        return Err(ParseError::new(col, format!("unexpected character `{}`", chars[i]))
+            .with_suggestion("expected letters, numbers, `_`, `.`, `:`, `@`, `/`, `-`, or `$`"));
     }
 
     Ok(tokens)
@@ -2134,5 +2388,466 @@ mod tests {
             }
             _ => panic!("expected comparison"),
         }
+    }
+
+    // ── Error message improvement tests ──
+
+    #[test]
+    fn empty_query_has_suggestion() {
+        let err = parse("").unwrap_err();
+        assert_eq!(err.column, 1);
+        assert_eq!(err.message, "empty DOL query");
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("observe containers"),
+            "suggestion should mention `observe containers`: {sug}"
+        );
+    }
+
+    #[test]
+    fn whitespace_query_has_suggestion() {
+        let err = parse("   ").unwrap_err();
+        assert_eq!(err.message, "empty DOL query");
+        assert!(err.suggestion.is_some());
+    }
+
+    #[test]
+    fn suggestion_appears_in_display() {
+        let err = parse("").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("help:"), "Display should include help text: {msg}");
+        assert!(msg.contains("observe containers"), "Display should include suggestion: {msg}");
+    }
+
+    #[test]
+    fn format_color_contains_ansi_escapes() {
+        let err = parse("").unwrap_err();
+        let colored = err.format_color();
+        // ANSI escape code starts with \x1b (ESC character)
+        assert!(colored.contains('\x1b'), "format_color should contain ANSI escapes");
+        assert!(colored.contains("error"), "format_color should contain error label");
+        assert!(colored.contains("help:"), "format_color should contain help text");
+        // Should NOT contain the Display prefix "parse error" (it uses "error" in bold red)
+        assert!(
+            !colored.starts_with("parse error"),
+            "format_color should not use Display's plain prefix"
+        );
+    }
+
+    #[test]
+    fn format_color_source_pointer_has_ansi() {
+        let err = parse("observe containers where").unwrap_err();
+        let colored = err.format_color();
+        assert!(colored.contains('\x1b'), "should contain ANSI");
+        assert!(colored.contains("-->"), "should show source pointer");
+        assert!(colored.contains('^'), "should show caret");
+    }
+
+    #[test]
+    fn parse_error_with_source_has_pointer_and_suggestion() {
+        // Create a ParseError manually and chain builders
+        let err = ParseError::new(5, "test error")
+            .with_source("observe containers".to_owned())
+            .with_suggestion("try something else");
+
+        assert_eq!(err.column, 5);
+        assert_eq!(err.message, "test error");
+        assert_eq!(err.source.as_deref(), Some("observe containers"));
+        assert_eq!(err.suggestion.as_deref(), Some("try something else"));
+
+        let msg = err.to_string();
+        assert!(msg.contains("parse error at column 5"));
+        assert!(msg.contains("-->"));
+        assert!(msg.contains("help: try something else"));
+    }
+
+    #[test]
+    fn unknown_query_family_has_suggestion() {
+        let err = parse("watc containers").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("try one of"),
+            "suggestion should list alternatives: {sug}"
+        );
+        assert!(
+            sug.contains("observe"),
+            "suggestion should mention `observe`: {sug}"
+        );
+    }
+
+    #[test]
+    fn unknown_collection_target_has_suggestion() {
+        let err = parse("observe containerz").unwrap_err();
+        assert!(err.suggestion.is_some(), "should have a suggestion");
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("containers") || sug.contains("try one of"),
+            "suggestion should guide to valid targets: {sug}"
+        );
+    }
+
+    #[test]
+    fn partial_collection_target_gets_similar_suggestion() {
+        // "containers" misspelled as "conts"
+        let err = parse("observe conts").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("containers"),
+            "suggestion should suggest `containers`: {sug}"
+        );
+    }
+
+    #[test]
+    fn partial_singular_target_gets_similar_suggestion() {
+        // "container" misspelled as "cont"
+        let err = parse("inspect cont my-container").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("container"),
+            "suggestion should suggest `container`: {sug}"
+        );
+    }
+
+    #[test]
+    fn unknown_pipeline_node_has_suggestion() {
+        let err = parse("observe containers | fltr name = test").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("where") || sug.contains("select"),
+            "suggestion should list pipeline options: {sug}"
+        );
+    }
+
+    #[test]
+    fn unknown_analysis_verb_has_suggestion() {
+        let err = parse("analyze containers delet").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("find") || sug.contains("correlate") || sug.contains("explain"),
+            "suggestion should list analysis verbs: {sug}"
+        );
+    }
+
+    #[test]
+    fn unknown_alert_action_has_suggestion() {
+        let err = parse(r#"alert when cpu > 80% then emai "alert""#).unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("print") || sug.contains("webhook") || sug.contains("restart"),
+            "suggestion should list alert actions: {sug}"
+        );
+    }
+
+    #[test]
+    fn unterminated_string_has_suggestion() {
+        let err = parse(r#"observe containers where name = "unfinished"#).unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("closing"),
+            "suggestion should mention closing quote: {sug}"
+        );
+    }
+
+    #[test]
+    fn unexpected_character_has_suggestion() {
+        let err = parse("observe containers | where cpu > 80% | select name~image").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("expected letters"),
+            "suggestion should describe valid characters: {sug}"
+        );
+    }
+
+    #[test]
+    fn unexpected_token_after_query_has_suggestion() {
+        let err = parse("ping extra").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("remove") || sug.contains("check"),
+            "suggestion should mention remove/check: {sug}"
+        );
+        assert!(
+            sug.contains("extra"),
+            "suggestion should mention the unexpected token: {sug}"
+        );
+    }
+
+    #[test]
+    fn multiple_suggestions_not_crashing() {
+        // Parsing a completely invalid input should still produce a helpful error
+        // without panicking.
+        let err = parse("!@#$%^&").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "error message should not be empty");
+        // format_color() should also not panic
+        let colored = err.format_color();
+        assert!(!colored.is_empty(), "colored output should not be empty");
+    }
+
+    #[test]
+    fn error_contains_source_column_pointer() {
+        // Verify the Display output includes the source line and column pointer
+        let err = parse("observe containers where").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("observe containers where"), "should show source");
+        assert!(msg.contains("^"), "should show pointer");
+        // Verify arrow and source reference are present
+        assert!(msg.contains("-->"), "should show arrow marker");
+        assert!(msg.contains(" column "), "should mention column");
+    }
+
+    #[test]
+    fn error_pipe_pipeline_node_suggestion() {
+        // Using | without a valid pipeline node keyword
+        let err = parse("observe containers | unknown_node").unwrap_err();
+        assert!(err.suggestion.is_some());
+        let sug = err.suggestion.as_ref().unwrap();
+        assert!(
+            sug.contains("where"),
+            "should suggest pipeline keywords: {sug}"
+        );
+    }
+
+    #[test]
+    fn pipeline_keyword_similar_suggestion() {
+        // "fltr" -> should suggest "fill" (starts with 'f')
+        let err = parse("observe containers | fltr name = test").unwrap_err();
+        let sug = err.suggestion.as_ref().expect("should have suggestion");
+        assert!(
+            sug.contains("fill"),
+            "should suggest `fill` for `fltr`: {sug}"
+        );
+        assert!(
+            sug.contains("did you mean"),
+            "should contain 'did you mean': {sug}"
+        );
+    }
+
+    #[test]
+    fn pipeline_keyword_grp_suggests_group() {
+        // "grp" -> should suggest "group" (starts with 'g')
+        let err = parse("observe containers | grp by image").unwrap_err();
+        let sug = err.suggestion.as_ref().expect("should have suggestion");
+        assert!(
+            sug.contains("group"),
+            "should suggest `group` for `grp`: {sug}"
+        );
+        assert!(
+            sug.contains("did you mean"),
+            "should contain 'did you mean': {sug}"
+        );
+    }
+
+    #[test]
+    fn analysis_verb_similar_suggestion() {
+        // "delet" -> should suggest "find" (no verb starts with 'd', falls back to generic)
+        let err = parse("analyze containers delet").unwrap_err();
+        let sug = err.suggestion.as_ref().expect("should have suggestion");
+        // Generic suggestion should mention valid verbs
+        assert!(
+            sug.contains("find") || sug.contains("correlate") || sug.contains("explain"),
+            "should list analysis verbs: {sug}"
+        );
+    }
+
+    #[test]
+    fn alert_action_similar_suggestion() {
+        // "emai" -> should suggest "print" (starts with 'p' is close; 'emai' starts with 'e' -> no match, generic)
+        // Actually "emai" starts with 'e' and no action starts with 'e', so generic message
+        let err = parse(r#"alert when cpu > 80% then emai "alert""#).unwrap_err();
+        let sug = err.suggestion.as_ref().expect("should have suggestion");
+        assert!(
+            sug.contains("print") || sug.contains("webhook") || sug.contains("restart"),
+            "should list alert actions: {sug}"
+        );
+    }
+
+    #[test]
+    fn alert_action_close_match_suggestion() {
+        // "prnt" -> should suggest "print" (starts with 'p')
+        let err = parse(r#"alert when cpu > 80% then prnt "alert""#).unwrap_err();
+        let sug = err.suggestion.as_ref().expect("should have suggestion");
+        assert!(
+            sug.contains("print"),
+            "should suggest `print` for `prnt`: {sug}"
+        );
+        assert!(
+            sug.contains("did you mean"),
+            "should contain 'did you mean': {sug}"
+        );
+    }
+
+    #[test]
+    fn suggest_keyword_function_direct() {
+        // Direct tests for suggest_keyword helper
+        assert!(suggest_keyword("", PIPELINE_KEYWORDS).is_none(), "empty input should return None");
+        assert!(suggest_keyword("xyz", PIPELINE_KEYWORDS).is_none(), "no match should return None");
+        let result = suggest_keyword("whre", PIPELINE_KEYWORDS).expect("should find suggestion");
+        assert!(result.contains("where"), "should suggest `where` for `whre`: {result}");
+        let result = suggest_keyword("slect", PIPELINE_KEYWORDS).expect("should find suggestion");
+        assert!(result.contains("select"), "should suggest `select` for `slect`: {result}");
+        let result = suggest_keyword("lmit", PIPELINE_KEYWORDS).expect("should find suggestion");
+        assert!(result.contains("limit"), "should suggest `limit` for `lmit`: {result}");
+    }
+
+    #[test]
+    fn suggest_keyword_analysis_verbs() {
+        let result = suggest_keyword("fnd", ANALYSIS_VERBS).expect("should find suggestion");
+        assert!(result.contains("find"), "should suggest `find` for `del`: {result}");
+        let result = suggest_keyword("corr", ANALYSIS_VERBS).expect("should find suggestion");
+        assert!(result.contains("correlate"), "should suggest `correlate` for `corr`: {result}");
+        let result = suggest_keyword("expln", ANALYSIS_VERBS).expect("should find suggestion");
+        assert!(result.contains("explain"), "should suggest `explain` for `expln`: {result}");
+    }
+
+    #[test]
+    fn suggest_keyword_alert_actions() {
+        let result = suggest_keyword("prnt", ALERT_ACTIONS).expect("should find suggestion");
+        assert!(result.contains("print"), "should suggest `print` for `prnt`: {result}");
+        let result = suggest_keyword("webhk", ALERT_ACTIONS).expect("should find suggestion");
+        assert!(result.contains("webhook"), "should suggest `webhook` for `webhk`: {result}");
+        let result = suggest_keyword("restt", ALERT_ACTIONS).expect("should find suggestion");
+        assert!(result.contains("restart"), "should suggest `restart` for `restt`: {result}");
+    }
+
+    #[test]
+    fn error_invalid_float_displays_message() {
+        // Tokenizer produces "invalid float" for malformed numbers
+        let err = parse("observe containers | where cpu > 1.2.3").unwrap_err();
+        // The tokenizer will consume "1.2" as a float, then ".3" as unexpected
+        // This should still produce a meaningful error
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "error should have a message");
+    }
+
+    // ── suggest_similar_target and str_similarity tests ──
+
+    #[test]
+    fn suggest_similar_target_exact_match_falls_through() {
+        // suggest_similar_target is not called for valid inputs
+        // but for invalid ones it should give sensible suggestions
+        let sug = suggest_similar_target("container");
+        // "container" is a valid singular target, but just testing the function
+        assert!(sug.contains("containers") || sug.contains("try one of"));
+    }
+
+    #[test]
+    fn suggest_similar_target_empty_input() {
+        let sug = suggest_similar_target("");
+        assert!(
+            sug.contains("try one of"),
+            "empty input should show generic message: {sug}"
+        );
+    }
+
+    #[test]
+    fn suggest_similar_target_completely_wrong() {
+        let sug = suggest_similar_target("xyz");
+        assert!(
+            sug.contains("try one of"),
+            "completely wrong input should show generic message: {sug}"
+        );
+    }
+
+    #[test]
+    fn suggest_similar_target_close_match() {
+        let sug = suggest_similar_target("imags");
+        assert!(
+            sug.contains("images"),
+            "should suggest `images` for `imags`: {sug}"
+        );
+    }
+
+    #[test]
+    fn str_similarity_identical() {
+        assert_eq!(str_similarity("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn str_similarity_prefix_match() {
+        // "test" vs "testing": Levenshtein = 3 (insert 'i', 'n', 'g')
+        assert_eq!(str_similarity("test", "testing"), 3);
+    }
+
+    #[test]
+    fn str_similarity_no_match() {
+        // "abc" vs "xyz": prefix 0, len diff 0 => (3-0) + 0*2 = 3
+        assert_eq!(str_similarity("abc", "xyz"), 3);
+    }
+
+    // ── Builder chaining tests ──
+
+    #[test]
+    fn parse_error_builder_chaining() {
+        let err = ParseError::new(10, "test")
+            .with_source("source query".to_owned())
+            .with_suggestion("a suggestion");
+        assert_eq!(err.column, 10);
+        assert_eq!(err.message, "test");
+        assert_eq!(err.source.as_deref(), Some("source query"));
+        assert_eq!(err.suggestion.as_deref(), Some("a suggestion"));
+    }
+
+    #[test]
+    fn parse_error_without_suggestion_displays_no_help() {
+        let err = ParseError::new(1, "simple error");
+        assert!(err.suggestion.is_none());
+        let msg = err.to_string();
+        assert!(!msg.contains("help:"), "no suggestion should not show help");
+    }
+
+    #[test]
+    fn format_color_shows_suggestion() {
+        let err = ParseError::new(5, "error")
+            .with_source("test query".to_owned())
+            .with_suggestion("try something");
+        let colored = err.format_color();
+        assert!(colored.contains("try something"), "should include suggestion text");
+        assert!(colored.contains('\x1b'), "should include ANSI codes");
+    }
+
+    #[test]
+    fn format_color_without_suggestion_still_has_error() {
+        let err = ParseError::new(1, "simple error");
+        let colored = err.format_color();
+        assert!(
+            colored.contains("error"),
+            "format_color must include the word 'error': {colored}"
+        );
+        assert!(
+            !colored.contains("help:"),
+            "no suggestion should not show help"
+        );
+    }
+
+    #[test]
+    fn source_context_shows_correct_line() {
+        // Test with a multi-line query to verify line detection works
+        let err = parse(
+            "observe containers\n| where cpu > 80%\n| unknown\n| limit 5",
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        // The error should point to the line with "unknown"
+        assert!(
+            msg.contains("| unknown"),
+            "should show the line with the error: {msg}"
+        );
+        // Should not show the first line in the source pointer
+        assert!(
+            !msg.lines().any(|l| l.contains("observe containers") && l.contains("-->")),
+            "source pointer should point to the line with unknown, not the first line"
+        );
     }
 }
