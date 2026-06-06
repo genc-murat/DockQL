@@ -75,11 +75,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated: `bitflags` 2.11.1 → 2.12.1, `chrono` 0.4.44 → 0.4.45, `log` 0.4.30 → 0.4.32, `yoke` 0.8.2 → 0.8.3 (`cargo update`, 2026-06-05)
 - Added: `DEPENDENCY_POLICY.md` — formal dependency upgrade policy (cadence, pinning, audit requirements, adding new dependencies)
 
-## [Unreleased]
+## [0.7.0] - 2026-06-06
 
 ### Added
 
-- (future)
+#### Compose Streaming
+
+- **Compose events (batch)** — `compose <project> events` collects Docker events filtered by compose project label with full pipeline support (`where`, `select`, `limit`, etc.). Note: this is a batch operation, not a live stream.
+- **Compose logs streaming** — `compose <project> logs <service>` streams real-time container logs for a compose service with pipeline filtering (`where message contains "error"`, `select message, line`, `limit`) and `--timeout` support
+- **Compose networks streaming** — `compose <project> networks` with a pipeline streams real-time Docker network events filtered by compose project label (`compose myapp networks | where action = connect | select time, actor_id`)
+- **Container log streaming** — `logs container <name>` now supports streaming mode (follow) when a pipeline is present; pipeable with `where`, `select`, `limit`; `--timeout` auto-stops after a duration
+
+#### REPL
+
+- **Tab completion enhancements** — 23 new keywords added: compose sub-targets (`services`, `health`, `stats`, `ps`, `port`, `config`, `ls`), pipeline nodes (`having`, `offset`, `distinct`, `fill`, `let`, `debug`, `assert`), string operators (`starts_with`, `ends_with`, `between`), window functions (`row_number`, `rank`, `lag`, `lead`), and `end` for case/when expressions
+
+#### Testing
+
+- **`stream_compose_logs` unit tests** — 4 new tests with `MockDockerClient`: basic multi-container, `select` pipeline filtering, no-matching-containers early return, `limit` pipeline truncation
+- **`stream_compose_networks` unit tests** — 4 new tests: basic filtering by compose project, non-network event filtering, `select` pipeline, `limit` pipeline
+
+#### Documentation
+
+- **README.md** — compose events, logs, and networks streaming examples in top examples, features, quick start, and bottom examples list
+- **docs/spec.md** — sections 2.8 and 9.2 updated with compose networks streaming; execution mode updated for all streaming targets
+- **docs/tutorial.md** — section 15 updated with compose events, compose logs streaming, compose networks streaming, and container log streaming examples
+- **docs/examples.md** — compose streaming examples added to all relevant sections
+- **docs/index.html, spec.html, tutorial.html, examples.html** — all HTML docs updated with compose streaming examples
+- **docs/architecture.md** — executor section updated with compose streaming dispatch description
+
+### Fixed
+
+- **Compose events streaming documentation** — `compose myapp events` is a batch operation (collects events via `compose_events()` in executor), not true streaming. Removed from `--help` and `.help` streaming targets list (`events, logs, networks` → `logs, networks`). The batch query still works correctly.
 
 ## [0.5.0] - 2026-06-04
 
@@ -258,5 +285,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.5.0]: https://github.com/genc-murat/DockQL/compare/v0.4.0...v0.5.0
 
-[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.6.0...HEAD
+[0.7.0]: https://github.com/genc-murat/DockQL/compare/v0.6.0...v0.7.0
+[Unreleased]: https://github.com/genc-murat/DockQL/compare/v0.7.0...HEAD
 [0.6.0]: https://github.com/genc-murat/DockQL/compare/v0.5.0...v0.6.0

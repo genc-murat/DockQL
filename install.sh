@@ -4,7 +4,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash -s -- 0.6.0
+#   curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash -s -- 0.7.0
 #
 # Downloads the pre-built binary from GitHub Releases for the detected
 # OS/architecture and installs it to a local bin directory.
