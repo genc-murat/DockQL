@@ -33,7 +33,7 @@ cargo install dol --git https://github.com/genc-murat/DockQL
 
 ```bash
 $ dol --version
-dol 0.5.0
+dol 0.7.0
 ```
 
 ---
@@ -755,6 +755,27 @@ you press Ctrl+C.
 dol "events containers"
 ```
 
+**Collect Compose project events (batch):**
+
+```bash
+dol "compose myapp events"
+dol "compose myapp events | where action = 'die' | select time, container"
+```
+
+**Stream Compose network events:**
+
+```bash
+dol "compose myapp networks | where action = connect"
+dol "compose myapp networks | where action = 'connect' | select time, actor_id"
+```
+
+**Stream Compose service logs with pipeline:**
+
+```bash
+dol "compose myapp logs api-service tail 50"
+dol "compose myapp logs api-service | where message contains 'error'"
+```
+
 **Filter to specific event types:**
 
 ```bash
@@ -763,6 +784,19 @@ dol "events containers where action = 'die'"
 
 # Restart events with selected columns
 dol "events containers | where action = 'restart' | select time, container, image"
+```
+
+**Stream container logs live:**
+
+```bash
+# Stream all logs from a container (follow mode)
+dol "logs container my-app"
+
+# Stream with pipeline filtering
+dol "logs container my-app | where message contains 'error' | select line, message"
+
+# Use --timeout to auto-stop after a duration
+dol --timeout 30 "logs container my-app | where message contains 'error'"
 ```
 
 **Stop after N events:**

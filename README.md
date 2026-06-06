@@ -17,6 +17,7 @@
 dol "observe containers | where cpu > 80% | select name, image, cpu | sort cpu desc"
 dol "events containers | where action = die | limit 10"
 dol "logs container my-app tail 50"
+dol "logs container my-app | where message contains \"error\""
 dol "ping"
 dol "compose ls"
 dol "compose myapp services"
@@ -24,6 +25,9 @@ dol "compose myapp images"
 dol "compose myapp stats | where cpu > 80%"
 dol "compose myapp ps | where state = running"
 dol "compose myapp logs api-service tail 50"
+dol "compose myapp logs api-service | where message contains \"error\""
+dol "compose myapp events"
+dol "compose myapp networks | where action = connect"
 dol "compose myapp port api-service 8080"
 dol "compose myapp config services"
 dol "observe compose myapp | where cpu > 80%"
@@ -37,6 +41,10 @@ dol "observe containers | group by state"
 - **Live observation** — query containers, images, networks, volumes with filtering, sorting, aggregation, and cross-target JOIN
 - **Docker Compose** — full compose project introspection: containers, services, networks, volumes, health, images, stats, PS, logs, ports, config, and `compose ls`
 - **Real-time events** — stream Docker events with pipeline filters and aggregation
+- **Real-time logs** — stream container logs with pipeline filters, selection, and `--timeout`
+- **Compose events (batch)** — collect Docker Compose project events with pipeline support
+- **Compose logs streaming** — stream Docker Compose service logs with pipeline support
+- **Compose networks streaming** — stream real-time Docker Compose network events with pipeline support
 - **Historical queries** — inspect containers at any past point, observe last N minutes, replay event windows (requires `--store`)
 - **Alerting** — continuous evaluation with duration guards; actions: print, webhook (HTTP POST), container restart
 - **Analysis engine** — deterministic anomaly detection (restart loops, high CPU/memory, deployment errors, resource leaks, config drift, dependencies, density)
@@ -61,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh |
 Or pin a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash -s -- 0.6.0
+curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash -s -- 0.7.0
 ```
 
 ### macOS — Homebrew
@@ -113,6 +121,15 @@ dol "events containers where action = die"
 
 # View the last 50 log lines from a container
 dol "logs container my-app tail 50"
+
+# Stream container logs live with pipeline filtering
+dol "logs container my-app | where message contains \"error\""
+
+# Collect Compose project events (batch)
+dol "compose myapp events"
+
+# Stream Compose network events (real-time) with pipeline
+dol "compose myapp networks | where action = connect"
 
 # Check if Docker daemon is reachable
 dol "ping"
@@ -255,6 +272,8 @@ dol --watch 5 --timeout 10 "observe containers | where state = running"
 The `--timeout` flag sets a time limit on each query execution. If a query takes longer than the specified seconds, it is aborted and an error is logged. This is useful for:
 - `--watch` mode — prevent repeated queries from hanging on a slow Docker host
 - `events` streams — auto-stop after a duration (e.g., `dol --timeout 60 "events containers"`)
+- `logs` streams — auto-stop after a duration (e.g., `dol --timeout 60 "logs container my-app"`)
+- `compose logs` streams — auto-stop after a duration (e.g., `dol --timeout 60 "compose myapp logs service api"`)
 - `alert` loops — each metrics collection call is individually timed out
 - Store (historical) queries — abort if the store is slow to respond
 
@@ -401,7 +420,7 @@ dol --store telemetry.db 'alert when cpu > 85% for 2m then print "High CPU"'
 
 A complete language reference is in [`docs/spec.md`](docs/spec.md). Key highlights:
 
-**Targets:** `observe containers|images|networks|volumes`, `compose <project> [services|networks|volumes|health|images|stats|ps|logs|port|config]`, `compose ls`, `events`, `inspect`, `logs container <name>`, `ping`, `fields`, `analyze`, `alert`
+**Targets:** `observe containers|images|networks|volumes`, `compose <project> [services|networks|volumes|health|images|stats|ps|logs|port|config|events]`, `compose ls`, `events`, `inspect`, `logs container <name>`, `ping`, `fields`, `analyze`, `alert`
 
 **Pipeline nodes:** `where`, `select`, `group by`, `having`, `sort by`, `limit`, `offset`, `distinct`, `set`, `fill`, `let`, `if`/`else`, `alert`
 
@@ -468,7 +487,7 @@ error: expected pipeline node
 
 ## Examples
 
-101 example queries are available in [`examples/`](examples/):
+107 example queries are available in [`examples/`](examples/):
 
 ```
 observe containers
@@ -500,6 +519,10 @@ compose myapp stats | where cpu > 50% | select name, service, cpu, memory
 compose myapp ps | where state = "running" | select name, service, state, health
 compose myapp logs api-service tail 50
 compose myapp logs api-service tail 100 | where message contains "error"
+compose myapp events
+compose myapp events | where action = "die" | select time, container
+compose myapp networks | where action = connect
+compose myapp networks | where action = "connect" | select time, actor_id
 compose myapp port api-service 8080
 compose myapp config services
 compose myapp config networks

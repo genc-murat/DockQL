@@ -1,6 +1,6 @@
 # Docker Observability Language Specification
 
-Status: draft
+Status: stable
 
 DOL is a domain-specific language for querying, observing, and analyzing Docker infrastructure. The language defines a rich, implementable core that can be parsed into a typed AST and executed by a Rust CLI.
 
@@ -112,10 +112,13 @@ inspect container api-service at "2026-01-01 12:00:00"
 
 ### 2.4 `logs`
 
-`logs` retrieves log output from a running container. Returns the last N lines
+`logs` retrieves log output from a running container. Returns lines
 with line numbers, message content, and container name.
 
-Execution mode: batch.
+Execution mode: batch by default; **streaming** when a pipeline is present.
+In streaming mode (`follow: true`), logs are delivered in real-time until
+Ctrl+C or `--timeout` is reached. Pipeline nodes (`where`, `select`, `limit`)
+apply to the live stream.
 
 Examples:
 
@@ -186,7 +189,8 @@ fields volumes
 Compose project. It filters resources by the `com.docker.compose.project`
 label.
 
-Execution mode: batch.
+Execution mode: batch for most targets; **streaming** for `logs` and `networks`
+(real-time log and network event streams).
 
 Syntax:
 
@@ -240,7 +244,9 @@ observe compose <project>
   Supported fields (services): `name`, `image`, `state`, `status`, `ports`, `restart_count`, `health`, `depends_on`.
   Supported fields (networks): `name`, `driver`, `scope`, `containers`.
   Supported fields (volumes): `name`, `driver`, `mountpoint`, `scope`.
-- With `events`, streams real-time events for the compose project (requires streaming mode).
+- With `events`, collects Docker events for the compose project (batch operation with pipeline support).
+- With `networks` (when a pipeline is present), streams real-time network events filtered by
+  the compose project (requires streaming mode).
 - The `observe compose <project>` syntax is an alternative form that reads
   identically to other `observe` sub-queries.
 
@@ -307,7 +313,7 @@ Singular inspection targets:
 - `network <name-or-id>`
 - `volume <name-or-id>`
 
-Target names are case-sensitive when they refer to Docker names or IDs. DOL keywords are lowercase in v0.1.
+Target names are case-sensitive when they refer to Docker names or IDs. DOL keywords are lowercase in v0.2.
 
 ## 4. Fields
 
@@ -414,7 +420,7 @@ observe containers | set severity = case
 
 ## 5. Literals and Types
 
-DOL v0.1 supports these literal types:
+DOL v0.2 supports these literal types:
 
 - String: `"api-service"`
 - Bare identifier: `running`, `api-service`, `postgres`
@@ -497,6 +503,11 @@ Arithmetic expressions can be used in `set` assignments, `where` filters, `havin
 - `position(s, substr)` — returns Integer, 0-based index of first `substr` occurrence (0 if not found)
 - `split_part(s, delim, n)` — returns split by `delim`, the `n`-th part (1-indexed)
 
+**Type conversion functions:**
+- `to_int(value)` — converts to Integer (parses strings, truncates floats, maps `true`/`false` to 1/0)
+- `to_float(value)` — converts to Float (parses strings, casts integers)
+- `to_string(value)` — converts any value to its string representation
+
 **Date/time functions:**
 - `now()` — returns current UTC timestamp as RFC 3339 string
 - `date_format(ts, fmt)` — format a timestamp string according to `fmt` (strftime syntax, e.g., `%Y-%m-%d`)
@@ -553,7 +564,7 @@ observe containers | where upper(name) contains "API" | select name
 
 ## 7. Time Syntax
 
-DOL v0.1 supports relative windows and point-in-time inspection.
+DOL v0.2 supports relative windows, point-in-time inspection, and full historical ranges.
 
 Relative windows:
 
@@ -569,7 +580,7 @@ Point-in-time:
 at "2026-01-01 12:00:00"
 ```
 
-Historical ranges are reserved for v0.2 but may be accepted by the parser in v0.1 as experimental:
+Historical ranges are fully supported via the telemetry store:
 
 ```dol
 from "2026-01-01 12:00:00" to "2026-01-01 13:00:00"
@@ -599,9 +610,15 @@ Supported pipeline nodes:
 - `distinct`
 - `alert <string>`
 - `set <field> = <value-expr>`
-- `fill <field> with <expr>` — Replace null/empty values in `<field>` with the result of `<expr>` (useful for supplying defaults for missing metrics or labels)
+- `fill <field> with <set-value> [where <condition>]` — Replace null/empty values in `<field>` with the result of `<set-value>`. The value supports if/case/when expressions (same as `set`). An optional `where <condition>` restricts which rows get filled.
 - `let $name = <expr>` — Declare a constant or parameter. The expression is evaluated and the result is added to each row as a field named `$name` (the `$` prefix is optional). Useful for declaring thresholds, labels, or reusable values: `let $threshold = 80`
+- `debug` — Print intermediate row count and schema information to stderr.
+- `assert <expression>` — Validate that every row satisfies a condition. If any row fails, the query terminates with an error. Does not modify the data stream. Useful for understanding query execution, especially in complex pipelines: `observe containers | debug | where cpu > 80% | debug | select name, cpu`
 - `if <condition> then <pipeline-node> [else if <condition> then <pipeline-node>] [else <pipeline-node>]`
+- `row_number as <alias>` — Assign a sequential row number (1-based) to each row in the result set.
+- `rank(<field>) as <alias>` — Rank rows by field value. Ties receive the same rank.
+- `lag(<field> [, <offset>]) as <alias>` — Access the value of `<field>` from the previous row (offset defaults to 1). First rows without a preceding row yield `null`.
+- `lead(<field> [, <offset>]) as <alias>` — Access the value of `<field>` from the following row (offset defaults to 1). Last rows without a following row yield `null`.
 
 Pipeline rules:
 
@@ -609,7 +626,7 @@ Pipeline rules:
 - Each pipe receives rows or events from the previous stage.
 - `where` filters records.
 - `select` changes output shape.
-- `group by` aggregates records by field values. When `with` is given, the specified aggregate functions (sum, count, avg, min, max) are computed per group with optional `as` aliases.
+- `group by` aggregates records by field values. When `with` is given, the specified aggregate functions (sum, count, avg, min, max, median, percentile) are computed per group with optional `as` aliases. `percentile(field, p)` accepts an additional numeric argument for the percentile value (0–100).
 - `having` filters groups after aggregation (similar to `where` but operates on aggregate values).
 - `sort by` supports multiple sort fields with independent direction per field.
 - `limit` stops after N records.
@@ -634,6 +651,8 @@ observe containers | distinct | select image
 observe containers | sort by name asc | offset 10 | limit 5
 observe containers | group by image with count(id) as cnt | having cnt > 3
 observe containers | group by image with avg(cpu) as avg_cpu | sort by avg_cpu desc
+observe containers | group by image with median(cpu) as med_cpu
+observe containers | group by image with percentile(cpu, 95) as p95_cpu
 observe containers | fill memory with 0 | where memory > 500
 observe containers | where name starts_with "api-"
 observe containers | where image ends_with ":latest"
@@ -676,6 +695,14 @@ Stream examples:
 ```dol
 events containers
 events containers | where action = "die"
+logs container my-app
+logs container my-app tail 50 | where message contains "error"
+compose myapp events (batch)
+compose myapp events | where action = "die" (batch)
+compose myapp networks
+compose myapp networks | where action = "connect"
+compose myapp logs service api
+compose myapp logs service api | where message contains "error"
 alert when cpu > 85% for 2m then print "High CPU"
 ```
 
@@ -726,13 +753,13 @@ Historical execution rules:
 
 ## 10. Consistency Model
 
-DOL v0.1 uses best-effort consistency:
+DOL v0.2 uses best-effort consistency:
 
 - Docker snapshots are point-in-time approximations.
 - Metrics may lag entity metadata.
 - Events are ordered by Docker event timestamp when available.
 - For live streams, delivery is at-least-once from the DOL process perspective.
-- Exact-once alert delivery is not guaranteed in v0.1.
+- Exact-once alert delivery is not guaranteed in v0.2.
 
 The implementation should preserve timestamps and raw Docker IDs so users can reconcile output with Docker itself.
 
@@ -784,7 +811,7 @@ Reserved keywords:
 
 ```text
 alert analyze and asc at between by case compose contains correlate count dashboard
-config desc distinct else end events explain extract false fields fill find for from
+assert debug config desc distinct else end events explain extract false fields fill find for from
 group having health if in inspect is join last let limit logs matches max min networks
 not null observe of offset or ping repl repeat restart select service services set sort
 split_part starts_with ends_with sum then to top true upper lower length trim concat
@@ -794,7 +821,7 @@ webhook when where
 
 Docker names that conflict with reserved keywords must be quoted as strings when used as values.
 
-## 13. MVP Acceptance Query Set
+## 13. Example Query Set
 
 The parser and executor should prioritize these queries first:
 
@@ -809,8 +836,29 @@ inspect container api-service
 inspect container api-service at "2026-01-01 12:00:00"
 analyze containers find anomalies
 analyze containers find restart_loops last 10m
-alert when cpu > 85% for 2m then print "High CPU"
-observe containers | where cpu > 80% | alert "High CPU detected"
+alert when cpu > 85% for 2m then print "High CPU"  observe containers | where cpu > 80% | alert "High CPU detected"
+```
+
+### 13.1 Aggregate Functions
+
+Supported aggregate functions for `group by ... with ...`:
+
+| Function | Syntax | Description | Return Type |
+|----------|--------|-------------|-------------|
+| `count` | `count(field)` | Count of rows in each group | Integer |
+| `sum` | `sum(field)` | Sum of numeric values | Float |
+| `avg` | `avg(field)` | Arithmetic mean | Float |
+| `min` | `min(field)` | Minimum value | Float |
+| `max` | `max(field)` | Maximum value | Float |
+| `median` | `median(field)` | Median (50th percentile) | Float |
+| `percentile` | `percentile(field, p)` | The p-th percentile (0–100) using linear interpolation | Float |
+
+Examples:
+
+```dol
+observe containers | group by image with median(cpu) as med_cpu
+observe containers | group by image with percentile(memory, 95) as p95_mem
+observe containers | group by image with avg(cpu) as avg_cpu, percentile(cpu, 99) as p99_cpu
 ```
 
 ## 14. Out of Scope

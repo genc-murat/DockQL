@@ -75,6 +75,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated: `bitflags` 2.11.1 → 2.12.1, `chrono` 0.4.44 → 0.4.45, `log` 0.4.30 → 0.4.32, `yoke` 0.8.2 → 0.8.3 (`cargo update`, 2026-06-05)
 - Added: `DEPENDENCY_POLICY.md` — formal dependency upgrade policy (cadence, pinning, audit requirements, adding new dependencies)
 
+## [Unreleased]
+
+### Documentation
+
+- **docs/spec.md — Language specification v0.1 → v0.2** — spec version bumped to reflect all features added since the original spec (window functions, `assert`/`debug`/`fill`/`let` pipeline nodes, `case/when`/`if` expressions, string operators, compose streaming, `from...to` historical ranges, type conversion functions, etc.)
+- **docs/spec.md — Status: draft → stable** — language specification marked as stable; all described features are implemented across 7 tool releases
+- **docs/spec.md — Section 13 renamed** — `MVP Acceptance Query Set` → `Example Query Set` (MVP terminology was outdated)
+- **docs/spec.md — Section 13.1 numbering fixed** — `### 8.1 Aggregate Functions` → `### 13.1 Aggregate Functions` (was left over from when section belonged under Pipeline Syntax)
+- **docs/spec.md — Historical ranges text corrected** — `reserved for v0.2, experimental in v0.1` → `fully supported via the telemetry store`
+
 ## [0.7.0] - 2026-06-06
 
 ### Added
