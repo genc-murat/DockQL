@@ -1,0 +1,3 @@
+# Debug pipeline: prints row count and schema at intermediate stages
+# Run with: dol --file examples/debug_pipeline.dol
+observe containers | debug | where state = running | debug | select name, state, cpu

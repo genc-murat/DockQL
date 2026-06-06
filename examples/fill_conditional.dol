@@ -1,0 +1,2 @@
+# Extended fill: conditionally fill null/missing values with an if/else expression, only for running containers
+observe containers | fill tier with if state = running then "active" else "inactive" where state = running | select name, state, tier

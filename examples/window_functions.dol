@@ -1,0 +1,2 @@
+# Assign a row number to each container, then filter to show only the first one.
+observe containers | row_number as rn | where rn = 1 | select name, state, rn

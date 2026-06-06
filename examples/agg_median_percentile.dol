@@ -1,0 +1,4 @@
+# Median and percentile aggregate functions
+# Median: returns the middle value of a sorted list of values
+# Percentile: returns the value at a given percentile (0-100)
+observe containers | group by image with median(memory) as med_mem, percentile(memory, 95) as p95_mem

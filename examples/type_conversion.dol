@@ -1,0 +1,3 @@
+# Type conversion functions: to_int, to_float, to_string
+# Convert restart_count (integer) to float for division
+observe containers | set ratio = to_float(restart_count) / 5 | select name, restart_count, ratio | limit 5

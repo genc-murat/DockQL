@@ -1,0 +1,4 @@
+# Assert pipeline node example
+# | assert <condition> validates that every row satisfies the condition.
+# If any row fails, the query terminates with an error.
+observe containers | assert restart_count >= 0 | select name, state, restart_count
