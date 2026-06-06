@@ -638,6 +638,43 @@ fn apply_function(name: &str, args: &[JsonValue]) -> Result<JsonValue, EvalError
                 .to_owned();
             Ok(JsonValue::String(part))
         }
+        "to_int" => {
+            let val = args.first().ok_or_else(|| EvalError::InvalidArguments {
+                name: name.to_owned(),
+            })?;
+            let result = match val {
+                JsonValue::Number(n) => n.as_f64().map(|f| f as i64).unwrap_or(0),
+                JsonValue::String(s) => {
+                    if let Ok(n) = s.parse::<i64>() {
+                        n
+                    } else if let Ok(f) = s.parse::<f64>() {
+                        f as i64
+                    } else {
+                        0
+                    }
+                }
+                JsonValue::Bool(b) => i64::from(*b),
+                _ => 0,
+            };
+            Ok(JsonValue::Number(Number::from(result)))
+        }
+        "to_float" => {
+            let val = args.first().ok_or_else(|| EvalError::InvalidArguments {
+                name: name.to_owned(),
+            })?;
+            let result = json_as_f64(val).unwrap_or(0.0);
+            Number::from_f64(result)
+                .map(JsonValue::Number)
+                .ok_or_else(|| EvalError::InvalidArguments {
+                    name: name.to_owned(),
+                })
+        }
+        "to_string" => {
+            let val = args.first().ok_or_else(|| EvalError::InvalidArguments {
+                name: name.to_owned(),
+            })?;
+            Ok(JsonValue::String(render_json_cell(val)))
+        }
         _ => Err(EvalError::UnknownFunction {
             name: name.to_owned(),
         }),
@@ -1439,5 +1476,96 @@ mod tests {
             right: Box::new(Expression::Literal(Value::Float(0.0))),
         };
         assert!(eval_expr(&f, &div).is_err());
+    }
+    #[test]
+    fn evaluates_to_int_from_string() {
+        let f = fields(&[("val", "42")]);
+        let expr = Expression::FnCall {
+            name: "to_int".to_owned(),
+            args: vec![Expression::Field("val".to_owned())],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::Number(Number::from(42))
+        );
+    }
+
+    #[test]
+    fn evaluates_to_int_from_float_string() {
+        let f = fields(&[("val", "42.7")]);
+        let expr = Expression::FnCall {
+            name: "to_int".to_owned(),
+            args: vec![Expression::Field("val".to_owned())],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::Number(Number::from(42))
+        );
+    }
+
+    #[test]
+    fn evaluates_to_int_from_bool_true() {
+        let mut f = std::collections::BTreeMap::new();
+        f.insert("val".into(), JsonValue::Bool(true));
+        let expr = Expression::FnCall {
+            name: "to_int".to_owned(),
+            args: vec![Expression::Field("val".to_owned())],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::Number(Number::from(1))
+        );
+    }
+
+    #[test]
+    fn evaluates_to_float_from_integer() {
+        let mut f = std::collections::BTreeMap::new();
+        f.insert("val".into(), JsonValue::Number(Number::from(42)));
+        let expr = Expression::FnCall {
+            name: "to_float".to_owned(),
+            args: vec![Expression::Field("val".to_owned())],
+        };
+        let result = eval_expr(&f, &expr).unwrap();
+        assert_eq!(result.as_f64(), Some(42.0));
+    }
+
+    #[test]
+    #[allow(clippy::approx_constant)]
+    fn evaluates_to_float_from_string() {
+        let f = fields(&[("val", "3.14")]);
+        let expr = Expression::FnCall {
+            name: "to_float".to_owned(),
+            args: vec![Expression::Field("val".to_owned())],
+        };
+        let result = eval_expr(&f, &expr).unwrap();
+        assert_eq!(result.as_f64(), Some(3.14));
+    }
+
+    #[test]
+    fn evaluates_to_string_from_number() {
+        let mut f = std::collections::BTreeMap::new();
+        f.insert("val".into(), JsonValue::Number(Number::from(42)));
+        let expr = Expression::FnCall {
+            name: "to_string".to_owned(),
+            args: vec![Expression::Field("val".to_owned())],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::String("42".to_owned())
+        );
+    }
+
+    #[test]
+    fn evaluates_to_string_from_bool() {
+        let mut f = std::collections::BTreeMap::new();
+        f.insert("val".into(), JsonValue::Bool(true));
+        let expr = Expression::FnCall {
+            name: "to_string".to_owned(),
+            args: vec![Expression::Field("val".to_owned())],
+        };
+        assert_eq!(
+            eval_expr(&f, &expr).unwrap(),
+            JsonValue::String("true".to_owned())
+        );
     }
 }

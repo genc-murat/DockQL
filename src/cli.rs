@@ -64,8 +64,12 @@ EXAMPLES:
     dol "alert when cpu > 80% for 2m then webhook http://..."  CPU alert with webhook
     dol "inspect container <name>"                             Inspect a single container
     dol "compose ls"                                           List compose projects
+    dol "compose myapp networks | where action = connect"       Stream compose network events
+    dol "compose myapp logs api-service | where message contains error"  Stream compose service logs
     dol "analyze containers find anomalies"                    Detect issues automatically
     dol "analyze containers explain"                           Full diagnostic summary
+
+  Streaming targets (compose): logs, networks — add a pipeline to switch to live streaming mode
 
   Working with files and store:
     dol -f examples/ping.dol                                   Run query from file
@@ -680,6 +684,168 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // ── Logs streaming ─────────────────────────────────────────────────
+    if let Query::Logs(logs_query) = &parsed.query {
+        let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(&config)?);
+        let source = events::BollardLogSource::new(std::sync::Arc::clone(&docker));
+
+        let log_output_format = output_format;
+        let log_callback =
+            move |row: crate::executor::Row| -> Result<(), crate::events::EventsError> {
+                let result = ExecutionResult { rows: vec![row] };
+                match log_output_format {
+                    OutputFormat::Table => {
+                        println!("{}", render_table(&result));
+                    }
+                    OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&result.rows[0])
+                                .map_err(crate::events::EventsError::Json)?
+                        );
+                    }
+                    OutputFormat::Csv => {
+                        let mut columns: Vec<String> =
+                            result.rows[0].fields.keys().cloned().collect();
+                        columns.sort();
+                        let vals: Vec<String> = columns
+                            .iter()
+                            .map(|c| {
+                                result.rows[0]
+                                    .fields
+                                    .get(c)
+                                    .map(crate::eval::render_json_cell)
+                                    .unwrap_or_default()
+                            })
+                            .collect();
+                        println!("{}", vals.join(","));
+                    }
+                }
+                Ok(())
+            };
+
+        if let Some(secs) = cli.timeout {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(secs),
+                events::stream_logs(logs_query, &source, &log_callback),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("log stream timed out after {secs}s"))??;
+        } else {
+            events::stream_logs(logs_query, &source, &log_callback).await?;
+        }
+        return Ok(());
+    }
+
+    // ── Compose logs streaming ────────────────────────────────────────────
+    if let Query::Compose(compose_query) = &parsed.query
+        && compose_query.target == crate::ast::ComposeTarget::Logs
+    {
+        let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(&config)?);
+
+        let compose_log_output_format = output_format;
+        let compose_log_callback =
+            move |row: crate::executor::Row| -> Result<(), crate::events::EventsError> {
+                let result = ExecutionResult { rows: vec![row] };
+                match compose_log_output_format {
+                    OutputFormat::Table => {
+                        println!("{}", render_table(&result));
+                    }
+                    OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&result.rows[0])
+                                .map_err(crate::events::EventsError::Json)?
+                        );
+                    }
+                    OutputFormat::Csv => {
+                        let mut columns: Vec<String> =
+                            result.rows[0].fields.keys().cloned().collect();
+                        columns.sort();
+                        let vals: Vec<String> = columns
+                            .iter()
+                            .map(|c| {
+                                result.rows[0]
+                                    .fields
+                                    .get(c)
+                                    .map(crate::eval::render_json_cell)
+                                    .unwrap_or_default()
+                            })
+                            .collect();
+                        println!("{}", vals.join(","));
+                    }
+                }
+                Ok(())
+            };
+
+        if let Some(secs) = cli.timeout {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(secs),
+                events::stream_compose_logs(compose_query, docker, compose_log_callback),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("compose log stream timed out after {secs}s"))??;
+        } else {
+            events::stream_compose_logs(compose_query, docker, compose_log_callback).await?;
+        }
+        return Ok(());
+    }
+
+    // ── Compose networks streaming ───────────────────────────────────────────
+    if let Query::Compose(compose_query) = &parsed.query
+        && compose_query.target == crate::ast::ComposeTarget::Networks
+        && !compose_query.pipeline.is_empty()
+    {
+        let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(&config)?);
+
+        let compose_net_output_format = output_format;
+        let compose_net_callback =
+            move |row: crate::executor::Row| -> Result<(), crate::events::EventsError> {
+                let result = ExecutionResult { rows: vec![row] };
+                match compose_net_output_format {
+                    OutputFormat::Table => {
+                        println!("{}", render_table(&result));
+                    }
+                    OutputFormat::Json | OutputFormat::JsonCompact | OutputFormat::Jsonl => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&result.rows[0])
+                                .map_err(crate::events::EventsError::Json)?
+                        );
+                    }
+                    OutputFormat::Csv => {
+                        let mut columns: Vec<String> =
+                            result.rows[0].fields.keys().cloned().collect();
+                        columns.sort();
+                        let vals: Vec<String> = columns
+                            .iter()
+                            .map(|c| {
+                                result.rows[0]
+                                    .fields
+                                    .get(c)
+                                    .map(crate::eval::render_json_cell)
+                                    .unwrap_or_default()
+                            })
+                            .collect();
+                        println!("{}", vals.join(","));
+                    }
+                }
+                Ok(())
+            };
+
+        if let Some(secs) = cli.timeout {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(secs),
+                events::stream_compose_networks(compose_query, docker, compose_net_callback),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("compose networks stream timed out after {secs}s"))??;
+        } else {
+            events::stream_compose_networks(compose_query, docker, compose_net_callback).await?;
+        }
+        return Ok(());
+    }
+
     // ── Alert state for --watch (stateful evaluator persists across iterations) ──
     let mut alert_evaluator = match &parsed.query {
         Query::Alert(_) => Some(AlertEvaluator::new()),
@@ -763,12 +929,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                         let result = if let Some(secs) = cli.timeout {
                             let q = parsed.query.clone();                                    tokio::time::timeout(
                                 std::time::Duration::from_secs(secs),
-                                executor::execute_with_metrics(&q, docker.as_ref(), &metrics),
+                                executor::execute_with_metrics(&q, Arc::clone(&docker), &metrics),
                             )
                             .await
                             .map_err(|_| anyhow::anyhow!("query timed out after {secs}s"))?
                         } else {
-                            executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics).await
+                            executor::execute_with_metrics(&parsed.query, Arc::clone(&docker), &metrics).await
                         };
 
                         match result {
@@ -793,12 +959,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let result = if let Some(secs) = cli.timeout {
         tokio::time::timeout(
             std::time::Duration::from_secs(secs),
-            executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics),
+            executor::execute_with_metrics(&parsed.query, Arc::clone(&docker), &metrics),
         )
         .await
         .map_err(|_| anyhow::anyhow!("query timed out after {secs}s"))?
     } else {
-        executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics).await
+        executor::execute_with_metrics(&parsed.query, Arc::clone(&docker), &metrics).await
     }?;
 
     if cli.diff {

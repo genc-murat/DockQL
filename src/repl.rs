@@ -10,6 +10,9 @@
 //! repl::run_repl(&config).await?;
 //! ```
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -24,11 +27,48 @@ use crate::{
     config::DolConfig,
     docker::BollardDockerClient,
     eval::EvalError,
-    executor::{self, render_table},
+    executor::{self, render_csv, render_jsonl, render_table},
     metrics::{BollardMetricsCollector, MetricsCollector},
     parser,
     sqlite_store::SqliteTelemetryStore,
 };
+
+// ── REPL state ─────────────────────────────────────────────────
+
+/// Tracks persistent state across REPL commands.
+#[derive(Default)]
+struct ReplState {
+    /// The last DOL query that was successfully parsed and executed.
+    last_query: Option<String>,
+    /// If set, re-run `last_query` every N seconds after executing a query.
+    watch_interval_secs: Option<u64>,
+    /// If set, write query results to this file path.
+    export_path: Option<String>,
+    /// Output format for displaying / exporting results: "table", "json", "csv", or "jsonl".
+    output_format: String,
+}
+
+impl ReplState {
+    fn render_result(&self, result: &executor::ExecutionResult) -> String {
+        match self.output_format.as_str() {
+            "json" => serde_json::to_string_pretty(result).unwrap_or_default(),
+            "csv" => render_csv(result),
+            "jsonl" => render_jsonl(result),
+            _ => render_table(result),
+        }
+    }
+
+    fn export_result(&self, result: &executor::ExecutionResult) -> anyhow::Result<()> {
+        let path = match &self.export_path {
+            Some(p) => p.clone(),
+            None => return Ok(()),
+        };
+        let text = self.render_result(result);
+        std::fs::write(&path, &text)?;
+        println!("   Exported {} rows to {path}", result.rows.len());
+        Ok(())
+    }
+}
 
 #[derive(Default)]
 struct DolHelper;
@@ -74,6 +114,11 @@ impl Completer for DolHelper {
             "by",
             "limit",
             "group",
+            "having",
+            "offset",
+            "distinct",
+            "fill",
+            "let",
             "set",
             "if",
             "then",
@@ -87,6 +132,15 @@ impl Completer for DolHelper {
             "in",
             "matches",
             "contains",
+            "starts_with",
+            "ends_with",
+            "between",
+            "row_number",
+            "rank",
+            "lag",
+            "lead",
+            "debug",
+            "assert",
             "last",
             "at",
             "from",
@@ -100,6 +154,15 @@ impl Completer for DolHelper {
             ".export",
             ".output",
             ".history",
+            "logs",
+            "ls",
+            "compose",
+            "services",
+            "health",
+            "stats",
+            "ps",
+            "port",
+            "config",
             "find",
             "anomalies",
             "correlate",
@@ -166,6 +229,11 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
         let _ = rl.load_history(path);
     }
 
+    let mut state = ReplState {
+        output_format: "table".to_owned(),
+        ..ReplState::default()
+    };
+
     println!("DOL REPL — type .help for commands, Ctrl+C or .exit to quit");
     if current_host.is_empty() {
         println!("   Connected to: local Docker socket");
@@ -194,7 +262,7 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
         if trimmed.starts_with('.') {
             match trimmed.as_str() {
                 ".exit" | ".quit" => break,
-                ".help" => print_repl_help(),
+                ".help" => print_repl_help(&state),
                 cmd if cmd.starts_with(".host") => {
                     let val = cmd.strip_prefix(".host").unwrap_or("").trim();
                     if val.is_empty() {
@@ -214,27 +282,62 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
                 }
                 ".history" => {
                     for (i, entry) in rl.history().iter().enumerate() {
-                        println!("{:5}  {entry}", i + 1);
+                        println!("{i:5}  {entry}");
                     }
                 }
-                cmd if cmd.starts_with(".watch ") => {
-                    let val = cmd.strip_prefix(".watch ").unwrap_or("").trim();
-                    match val.parse::<u64>() {
-                        Ok(secs) if secs > 0 => {
-                            println!("Watch every {secs}s enabled");
+                cmd if cmd.starts_with(".watch") => {
+                    let val = cmd.strip_prefix(".watch").unwrap_or("").trim();
+                    if val.is_empty() {
+                        // No argument: toggle off or show current state
+                        match state.watch_interval_secs {
+                            Some(secs) => {
+                                println!("Watch disabled (was every {secs}s)");
+                                state.watch_interval_secs = None;
+                            }
+                            None => {
+                                println!("No watch interval set. Use `.watch <secs>` to enable.");
+                            }
+                        }
+                    } else {
+                        match val.parse::<u64>() {
+                            Ok(secs) if secs > 0 => {
+                                state.watch_interval_secs = Some(secs);
+                                println!(
+                                    "Watch every {secs}s enabled (will activate on next query)"
+                                );
+                            }
+                            _ => {
+                                println!(
+                                    "Invalid interval: {val}. Use a positive number (seconds)."
+                                );
+                            }
+                        }
+                    }
+                }
+                cmd if cmd.starts_with(".export") => {
+                    let val = cmd.strip_prefix(".export").unwrap_or("").trim();
+                    if val.is_empty() || val == "off" {
+                        state.export_path = None;
+                        println!("Export disabled");
+                    } else {
+                        state.export_path = Some(val.to_owned());
+                        println!("Export to: {val}");
+                    }
+                }
+                cmd if cmd.starts_with(".output") => {
+                    let val = cmd.strip_prefix(".output").unwrap_or("").trim();
+                    match val {
+                        "table" | "json" | "csv" | "jsonl" => {
+                            state.output_format = val.to_owned();
+                            println!("Output format set to: {val}");
+                        }
+                        "" => {
+                            println!("Current output format: {}", state.output_format);
                         }
                         _ => {
-                            println!("Watch disabled");
+                            println!("Unknown format: {val}. Valid: table, json, csv, jsonl");
                         }
                     }
-                }
-                cmd if cmd.starts_with(".export ") => {
-                    let path = cmd.strip_prefix(".export ").unwrap_or("").trim();
-                    println!("Export to: {path}");
-                }
-                cmd if cmd.starts_with(".output ") => {
-                    let fmt = cmd.strip_prefix(".output ").unwrap_or("").trim();
-                    println!("Output format: {fmt}");
                 }
                 _ => {
                     println!("Unknown command: {trimmed}");
@@ -253,9 +356,23 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
             let _ = rl.save_history(path);
         }
 
-        if let Err(e) = execute_dol_query(&trimmed, config).await {
+        // Save as last query for .watch
+        state.last_query = Some(trimmed.clone());
+
+        // Determine the query to run: if watch is active, use last_query
+        let query_to_run = trimmed.clone();
+
+        // ── Execute query ──
+        if let Err(e) = execute_and_output(&query_to_run, config, &state).await {
             let msg = format_error_color(&e);
             eprintln!("{msg}");
+        }
+
+        // ── Watch loop ──
+        if let Some(interval) = state.watch_interval_secs {
+            println!("Watching every {interval}s (Ctrl+C to stop)...");
+            let watch_query = state.last_query.clone().unwrap_or_default();
+            run_watch_loop(&watch_query, config, &state, interval).await;
         }
     }
 
@@ -266,19 +383,239 @@ pub async fn run_repl(config: &DolConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_repl_help() {
+/// Run the last query repeatedly every `interval` seconds until Ctrl+C.
+async fn run_watch_loop(query: &str, config: &DolConfig, state: &ReplState, interval: u64) {
+    let mut tick = tokio::time::interval(Duration::from_secs(interval));
+    // Tick immediately so the first iteration runs without waiting.
+    tick.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!();
+                break;
+            }
+            _ = tick.tick() => {
+                if let Err(e) = execute_and_output(query, config, state).await {
+                    let msg = format_error_color(&e);
+                    eprintln!("{msg}");
+                }
+            }
+        }
+    }
+}
+
+/// Parse and execute a DOL query, then display the results according to
+/// the current `ReplState` (output format, export path).
+async fn execute_and_output(
+    query: &str,
+    config: &DolConfig,
+    state: &ReplState,
+) -> anyhow::Result<()> {
+    let parsed = parser::parse(query)?;
+
+    match &parsed.query {
+        Query::Inspect(q) if q.at.is_some() => {
+            let store_path = config.store.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("historical query requires a store; set `store` in config")
+            })?;
+            let store = SqliteTelemetryStore::open(store_path)?;
+            let result = executor::execute_with_store(&parsed.query, &store).await?;
+            let output = state.render_result(&result);
+            println!("{output}");
+            state.export_result(&result)?;
+            return Ok(());
+        }
+        Query::Events(q) if q.time.is_some() => {
+            let store_path = config.store.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("historical query requires a store; set `store` in config")
+            })?;
+            let store = SqliteTelemetryStore::open(store_path)?;
+            let result = executor::execute_with_store(&parsed.query, &store).await?;
+            let output = state.render_result(&result);
+            println!("{output}");
+            state.export_result(&result)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    match &parsed.query {
+        Query::Alert(rule) => {
+            let docker = BollardDockerClient::connect_with_config(config)?;
+            let docker = Arc::new(docker);
+            let metrics = BollardMetricsCollector::with_config(Arc::clone(&docker), config);
+            let mut evaluator = crate::alerts::AlertEvaluator::new();
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
+
+            println!("Evaluating alert... (Ctrl+C to stop)");
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => break,
+                    _ = interval.tick() => {
+                        let samples = metrics.collect().await?;
+                        let events = evaluator.evaluate_samples(rule, &samples, std::time::Instant::now())?;
+                        for event in events {
+                            println!("{}", crate::alerts::render_alert_event(&event));
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+        Query::Events(events_query) => {
+            let docker = Arc::new(BollardDockerClient::connect_with_config(config)?);
+            let source = crate::events::BollardEventSource::new(Arc::clone(&docker));
+            return crate::events::stream_events(events_query, &source, move |row| {
+                let result = executor::ExecutionResult { rows: vec![row] };
+                // In streaming mode, use the current state for rendering
+                let text = match state.output_format.as_str() {
+                    "json" => serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    "csv" => render_csv(&result),
+                    "jsonl" => {
+                        let jsonl = render_jsonl(&result);
+                        if jsonl.is_empty() {
+                            String::new()
+                        } else {
+                            jsonl + "\n"
+                        }
+                    }
+                    _ => render_table(&result),
+                };
+                if !text.is_empty() {
+                    print!("{text}");
+                }
+                Ok(())
+            })
+            .await
+            .map_err(Into::into);
+        }
+        Query::Logs(logs_query) => {
+            let docker = Arc::new(BollardDockerClient::connect_with_config(config)?);
+            let source = crate::events::BollardLogSource::new(Arc::clone(&docker));
+            return crate::events::stream_logs(logs_query, &source, move |row| {
+                let result = executor::ExecutionResult { rows: vec![row] };
+                let text = match state.output_format.as_str() {
+                    "json" => serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    "csv" => render_csv(&result),
+                    "jsonl" => {
+                        let jsonl = render_jsonl(&result);
+                        if jsonl.is_empty() {
+                            String::new()
+                        } else {
+                            jsonl + "\n"
+                        }
+                    }
+                    _ => render_table(&result),
+                };
+                if !text.is_empty() {
+                    print!("{text}");
+                }
+                Ok(())
+            })
+            .await
+            .map_err(Into::into);
+        }
+        Query::Compose(compose_query)
+            if compose_query.target == crate::ast::ComposeTarget::Networks
+                && !compose_query.pipeline.is_empty() =>
+        {
+            let docker = Arc::new(BollardDockerClient::connect_with_config(config)?);
+            return crate::events::stream_compose_networks(compose_query, docker, move |row| {
+                let result = executor::ExecutionResult { rows: vec![row] };
+                let text = match state.output_format.as_str() {
+                    "json" => serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    "csv" => render_csv(&result),
+                    "jsonl" => {
+                        let jsonl = render_jsonl(&result);
+                        if jsonl.is_empty() {
+                            String::new()
+                        } else {
+                            jsonl + "\n"
+                        }
+                    }
+                    _ => render_table(&result),
+                };
+                if !text.is_empty() {
+                    print!("{text}");
+                }
+                Ok(())
+            })
+            .await
+            .map_err(Into::into);
+        }
+        Query::Compose(compose_query)
+            if compose_query.target == crate::ast::ComposeTarget::Logs =>
+        {
+            let docker = Arc::new(BollardDockerClient::connect_with_config(config)?);
+            return crate::events::stream_compose_logs(compose_query, docker, move |row| {
+                let result = executor::ExecutionResult { rows: vec![row] };
+                let text = match state.output_format.as_str() {
+                    "json" => serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    "csv" => render_csv(&result),
+                    "jsonl" => {
+                        let jsonl = render_jsonl(&result);
+                        if jsonl.is_empty() {
+                            String::new()
+                        } else {
+                            jsonl + "\n"
+                        }
+                    }
+                    _ => render_table(&result),
+                };
+                if !text.is_empty() {
+                    print!("{text}");
+                }
+                Ok(())
+            })
+            .await
+            .map_err(Into::into);
+        }
+        _ => {}
+    }
+
+    // Batch query.
+    let docker = Arc::new(BollardDockerClient::connect_with_config(config)?);
+    let metrics = BollardMetricsCollector::with_config(Arc::clone(&docker), config);
+    let result = executor::execute_with_metrics(&parsed.query, docker, &metrics).await?;
+    let output = state.render_result(&result);
+    println!("{output}");
+    state.export_result(&result)?;
+
+    Ok(())
+}
+
+fn print_repl_help(state: &ReplState) {
     println!("DOL REPL Commands:");
     println!("  .help              Show this help");
     println!("  .exit / .quit      Exit the REPL");
     println!("  .host [<addr>]     Show or set Docker host (e.g. tcp://192.168.1.100:2375)");
     println!("  .history           Show command history");
-    println!("  .watch <secs>      Re-run last query every N seconds");
-    println!("  .export <path>     Export results to file");
-    println!("  .output <fmt>      Set output format (table, json, csv, jsonl)");
+    println!("  .watch [<secs>]    Re-run last query every N seconds (no arg to disable)");
+    println!("  .export <path>     Export results to file (.export off to disable)");
+    println!("  .output <fmt>      Set output format: table, json, csv, jsonl");
+    println!();
+    println!("Current settings:");
+    println!(
+        "  output: {}  |  export: {}  |  watch: {}",
+        state.output_format,
+        state.export_path.as_deref().unwrap_or("off"),
+        state
+            .watch_interval_secs
+            .map_or("off".to_owned(), |s| format!("{s}s"))
+    );
     println!();
     println!("DOL Queries:");
     println!("  observe containers");
     println!("  events containers where action = die");
+    println!("  logs container <name>");
+    println!("  logs container <name> tail 50");
+    println!("  compose <project> logs service <name>");
+    println!("  compose <project> logs service <name> tail 50");
+    println!("  compose <project> networks");
+    println!("  compose <project> events");
+    println!("  Streaming compose targets: logs, networks — add a pipeline for live streaming");
     println!("  inspect container <name>");
     println!("  ... and any other DOL query");
 }
@@ -301,99 +638,123 @@ fn format_error_color(err: &anyhow::Error) -> String {
     )
 }
 
-async fn execute_dol_query(query: &str, config: &DolConfig) -> anyhow::Result<()> {
-    let parsed = parser::parse(query)?;
-
-    let needs_store = match &parsed.query {
-        Query::Inspect(q) => q.at.is_some(),
-        Query::Events(q) => q.time.is_some(),
-        _ => false,
-    };
-
-    if needs_store {
-        let store_path = config.store.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("this query requires historical data; set store in config")
-        })?;
-        let store = SqliteTelemetryStore::open(store_path)?;
-        let result = executor::execute_with_store(&parsed.query, &store).await?;
-        println!("{}", render_table(&result));
-        return Ok(());
-    }
-
-    if let Query::Alert(rule) = &parsed.query {
-        let docker = BollardDockerClient::connect_with_config(config)?;
-        let metrics = BollardMetricsCollector::with_config(std::sync::Arc::new(docker), config);
-        let mut evaluator = crate::alerts::AlertEvaluator::new();
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(ALERT_EVAL_INTERVAL));
-
-        println!("Evaluating alert... (Ctrl+C to stop)");
-        loop {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => break,
-                _ = interval.tick() => {
-                    let samples = metrics.collect().await?;
-                    let events = evaluator.evaluate_samples(rule, &samples, std::time::Instant::now())?;
-                    for event in events {
-                        println!("{}", crate::alerts::render_alert_event(&event));
-                    }
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    if let Query::Events(events_query) = &parsed.query {
-        let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
-        let source = crate::events::BollardEventSource::new(std::sync::Arc::clone(&docker));
-        return crate::events::stream_events(events_query, &source, move |row| {
-            let result = executor::ExecutionResult { rows: vec![row] };
-            println!("{}", render_table(&result));
-            Ok(())
-        })
-        .await
-        .map_err(Into::into);
-    }
-
-    // Batch query.
-    let docker = std::sync::Arc::new(BollardDockerClient::connect_with_config(config)?);
-    let metrics = BollardMetricsCollector::with_config(std::sync::Arc::clone(&docker), config);
-    let result = executor::execute_with_metrics(&parsed.query, docker.as_ref(), &metrics).await?;
-    println!("{}", render_table(&result));
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_print_repl_help_runs_without_panic() {
-        // Verify that print_repl_help() compiles and runs without panic.
-        print_repl_help();
+    fn test_repl_state_defaults() {
+        let state = ReplState::default();
+        assert!(state.last_query.is_none());
+        assert!(state.watch_interval_secs.is_none());
+        assert!(state.export_path.is_none());
+        assert_eq!(state.output_format, ""); // Default::default() for String is ""
     }
 
     #[test]
-    fn test_execute_dol_query_rejects_invalid_query() {
+    fn test_repl_state_render_table_default() {
+        let state = ReplState {
+            output_format: "table".to_owned(),
+            ..ReplState::default()
+        };
+        let result = executor::ExecutionResult { rows: vec![] };
+        let output = state.render_result(&result);
+        assert_eq!(output, "No rows");
+    }
+
+    #[test]
+    fn test_repl_state_render_json() {
+        let state = ReplState {
+            output_format: "json".to_owned(),
+            ..ReplState::default()
+        };
+        let result = executor::ExecutionResult { rows: vec![] };
+        let output = state.render_result(&result);
+        // to_string_pretty produces "rows": [...] (no space before colon)
+        assert!(
+            output.contains(r#""rows""#),
+            "expected JSON output to contain 'rows' field, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_repl_state_export_none_does_nothing() {
+        let state = ReplState::default();
+        let result = executor::ExecutionResult { rows: vec![] };
+        // Should not panic when export_path is None
+        assert!(state.export_result(&result).is_ok());
+    }
+
+    #[test]
+    fn test_print_repl_help_runs_without_panic() {
+        let state = ReplState {
+            output_format: "table".to_owned(),
+            ..ReplState::default()
+        };
+        print_repl_help(&state);
+    }
+
+    #[test]
+    fn test_execute_and_output_rejects_invalid_query() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let config = DolConfig::default();
-        let result = rt.block_on(execute_dol_query("invalid query here", &config));
+        let state = ReplState {
+            output_format: "table".to_owned(),
+            ..ReplState::default()
+        };
+        let result = rt.block_on(execute_and_output("invalid query here", &config, &state));
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_execute_dol_query_parses_observe() {
+    fn test_docker_host_env_propagates_to_streaming_compose_networks() {
         let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Save original DOCKER_HOST.
+        let original = std::env::var("DOCKER_HOST").ok();
+
+        // Simulate `.host tcp://127.0.0.1:1` — set an unreachable address.
+        unsafe {
+            std::env::set_var("DOCKER_HOST", "tcp://127.0.0.1:1");
+        }
+
         let config = DolConfig::default();
-        // This will fail because there's no Docker but the parser should
-        // succeed. The error should be Docker-related, not parse-related.
-        let result = rt.block_on(execute_dol_query("observe containers", &config));
-        // Either a Docker error or success — as long as it doesn't panic
-        // and isn't a parse error.
-        if let Err(ref e) = result {
-            let msg = e.to_string();
-            assert!(!msg.contains("parse"), "should not be a parse error: {msg}");
+        let state = ReplState {
+            output_format: "table".to_owned(),
+            ..ReplState::default()
+        };
+
+        // Run a compose networks STREAMING query (with pipeline).
+        // The streaming dispatch will call connect_with_config → bollard reads DOCKER_HOST
+        // → tries to connect to tcp://127.0.0.1:1 → fails with connection error.
+        let result = rt.block_on(execute_and_output(
+            "compose myapp networks | where action = connect",
+            &config,
+            &state,
+        ));
+
+        // Must fail (no real Docker at 127.0.0.1:1).
+        assert!(
+            result.is_err(),
+            "expected connection error when DOCKER_HOST points to unreachable address"
+        );
+        let err = result.unwrap_err().to_string();
+        // The error should be a Docker connection error, NOT a parse error.
+        // Parse errors mention "parse error" — connection errors mention "connection",
+        // "refused", "timeout", or just the bollard error.
+        assert!(
+            !err.contains("parse error"),
+            "expected a connection/runtime error, but got a parse error: {err}"
+        );
+
+        // Restore original DOCKER_HOST.
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("DOCKER_HOST", v);
+            },
+            None => unsafe {
+                std::env::remove_var("DOCKER_HOST");
+            },
         }
     }
 }

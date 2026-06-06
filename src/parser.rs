@@ -615,9 +615,29 @@ impl Parser {
                 let target = self.parse_singular_target()?;
                 Ok(AlertAction::Restart(target))
             }
+            Some("slack") => {
+                self.advance();
+                let url = self.expect_string("Slack webhook URL")?;
+                Ok(AlertAction::Slack(url))
+            }
+            Some("discord") => {
+                self.advance();
+                let url = self.expect_string("Discord webhook URL")?;
+                Ok(AlertAction::Discord(url))
+            }
+            Some("email") => {
+                self.advance();
+                let to = self.expect_string("email recipient")?;
+                let subject = if self.consume_ident("subject") {
+                    self.expect_string("email subject")?
+                } else {
+                    "DockQL Alert Notification".to_owned()
+                };
+                Ok(AlertAction::Email { to, subject })
+            }
             Some(other) => {
                 let extra = suggest_keyword(other, ALERT_ACTIONS);
-                let base = "try one of: `print`, `webhook`, `restart`";
+                let base = "try one of: `print`, `webhook`, `restart`, `slack`, `discord`, `email`";
                 let suggestion = match extra {
                     Some(s) => format!("{s} {base}"),
                     None => base.to_owned(),
@@ -626,7 +646,9 @@ impl Parser {
                     .error_here(format!("expected alert action, found `{other}`"))
                     .with_suggestion(suggestion))
             }
-            None => Err(self.error_here("expected alert action: print, webhook, or restart")),
+            None => Err(self.error_here(
+                "expected alert action: print, webhook, restart, slack, discord, or email",
+            )),
         }
     }
 
@@ -720,8 +742,26 @@ impl Parser {
         if self.consume_ident("set") {
             return self.parse_set_pipeline();
         }
+        if self.consume_ident("debug") {
+            return Ok(PipelineNode::Debug);
+        }
+        if self.consume_ident("assert") {
+            return Ok(PipelineNode::Assert(self.parse_expression()?));
+        }
         if self.consume_ident("fill") {
             return self.parse_fill_pipeline();
+        }
+        if self.consume_ident("row_number") {
+            return self.parse_row_number_pipeline();
+        }
+        if self.consume_ident("rank") {
+            return self.parse_window_func_with_field("rank");
+        }
+        if self.consume_ident("lag") {
+            return self.parse_window_func_with_field("lag");
+        }
+        if self.consume_ident("lead") {
+            return self.parse_window_func_with_field("lead");
         }
         if self.consume_ident("let") {
             return self.parse_let_pipeline();
@@ -731,7 +771,7 @@ impl Parser {
                 TokenKind::Ident(name) => suggest_keyword(name, PIPELINE_KEYWORDS),
                 _ => None,
             });
-            let base = "use `| where`, `| select`, `| sort`, `| group by`, `| limit`, `| set`, `| if`, `| fill`, or `| let`";
+            let base = "use `| where`, `| select`, `| sort`, `| group by`, `| limit`, `| set`, `| if`, `| fill`, `| let`, `| row_number`, `| rank`, `| lag`, `| lead`, `| debug`, or `| assert`";
             let suggestion = match extra {
                 Some(s) => format!("{s} {base}"),
                 None => base.to_owned(),
@@ -741,12 +781,38 @@ impl Parser {
         })
     }
 
+    /// Parse an aggregate argument value (identifier, integer, float, or string).
+    fn parse_aggregate_arg(&mut self) -> Result<String, ParseError> {
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error_here("expected aggregate argument"))?;
+        match token.kind {
+            TokenKind::Ident(s) | TokenKind::String(s) => Ok(s),
+            TokenKind::Integer(n) => Ok(n.to_string()),
+            TokenKind::Float(f) => Ok(f.to_string()),
+            _ => Err(ParseError::new(
+                token.column,
+                "expected aggregate argument (identifier, number, or string)",
+            )),
+        }
+    }
+
     fn parse_aggregates(&mut self) -> Result<Vec<crate::ast::AggregateExpr>, ParseError> {
         let mut aggs = Vec::new();
         loop {
             let func = self.expect_identifier_like("aggregate function")?;
             self.expect(&TokenKind::LParen, "`(`")?;
             let field = self.expect_identifier_like("aggregate field")?;
+            // Parse optional extra arguments (e.g., percentile(field, 95))
+            let mut args = Vec::new();
+            if self.consume(&TokenKind::Comma) {
+                let arg = self.parse_aggregate_arg()?;
+                args.push(arg);
+                while self.consume(&TokenKind::Comma) {
+                    let arg = self.parse_aggregate_arg()?;
+                    args.push(arg);
+                }
+            }
             self.expect(&TokenKind::RParen, "`)`")?;
             let alias = if self.consume_ident("as") {
                 self.expect_identifier_like("alias")?
@@ -757,6 +823,7 @@ impl Parser {
                 function: func,
                 field,
                 alias,
+                args,
             });
             if !self.consume(&TokenKind::Comma) {
                 break;
@@ -1087,8 +1154,58 @@ impl Parser {
     fn parse_fill_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
         let field = self.expect_identifier_like("field name")?;
         self.expect_ident("with")?;
-        let default = self.parse_expression()?;
-        Ok(PipelineNode::Fill { field, default })
+        let default = if self.consume_ident("case") {
+            self.parse_set_case()?
+        } else if self.consume_ident("if") {
+            self.parse_set_if_else()?
+        } else {
+            crate::ast::SetValue::Expr(self.parse_expression()?)
+        };
+        let condition = if self.consume_ident("where") {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        Ok(PipelineNode::Fill {
+            field,
+            default,
+            condition,
+        })
+    }
+
+    fn parse_row_number_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
+        self.consume_ident("as");
+        let alias = self.expect_identifier_like("alias for row number")?;
+        Ok(PipelineNode::RowNumber { alias })
+    }
+
+    fn parse_window_func_with_field(
+        &mut self,
+        func_name: &str,
+    ) -> Result<PipelineNode, ParseError> {
+        self.expect(&TokenKind::LParen, "`(`")?;
+        let field = self.expect_identifier_like("field name")?;
+        let mut offset = 1u64;
+        if self.consume(&TokenKind::Comma) {
+            offset = self.expect_u64("offset")?;
+        }
+        self.expect(&TokenKind::RParen, "`)`")?;
+        self.consume_ident("as");
+        let alias = self.expect_identifier_like("alias")?;
+        match func_name {
+            "rank" => Ok(PipelineNode::Rank { field, alias }),
+            "lag" => Ok(PipelineNode::Lag {
+                field,
+                alias,
+                offset,
+            }),
+            "lead" => Ok(PipelineNode::Lead {
+                field,
+                alias,
+                offset,
+            }),
+            _ => unreachable!(),
+        }
     }
 
     fn parse_let_pipeline(&mut self) -> Result<PipelineNode, ParseError> {
@@ -1370,15 +1487,30 @@ fn token_display(token: &Token) -> String {
 
 /// Known pipeline keywords for similarity suggestions.
 const PIPELINE_KEYWORDS: &[&str] = &[
-    "where", "select", "group", "having", "sort", "limit", "offset", "distinct", "alert", "if",
-    "set", "fill", "let",
+    "where",
+    "select",
+    "group",
+    "having",
+    "sort",
+    "limit",
+    "offset",
+    "distinct",
+    "alert",
+    "if",
+    "set",
+    "fill",
+    "let",
+    "row_number",
+    "rank",
+    "lag",
+    "lead",
 ];
 
 /// Known analysis verbs for similarity suggestions.
 const ANALYSIS_VERBS: &[&str] = &["find", "correlate", "explain"];
 
 /// Known alert actions for similarity suggestions.
-const ALERT_ACTIONS: &[&str] = &["print", "webhook", "restart"];
+const ALERT_ACTIONS: &[&str] = &["print", "webhook", "restart", "slack", "discord", "email"];
 
 /// Suggest a similar keyword from a known list, using `str_similarity`.
 fn suggest_keyword(input: &str, keywords: &[&str]) -> Option<String> {
@@ -1787,6 +1919,68 @@ mod tests {
     fn parses_alert_query() {
         let q = parse_one(r#"alert when cpu > 85% for 2m then print "High CPU""#);
         assert!(matches!(q.query, Query::Alert(_)));
+    }
+
+    #[test]
+    fn parses_alert_slack_action() {
+        let q =
+            parse_one(r#"alert when cpu > 80% then slack "https://hooks.slack.com/services/xxx""#);
+        let Query::Alert(ref rule) = q.query else {
+            panic!("expected Alert")
+        };
+        assert!(matches!(rule.action, AlertAction::Slack(_)));
+        if let AlertAction::Slack(ref url) = rule.action {
+            assert_eq!(url, "https://hooks.slack.com/services/xxx");
+        }
+    }
+
+    #[test]
+    fn parses_alert_discord_action() {
+        let q = parse_one(
+            r#"alert when cpu > 80% then discord "https://discord.com/api/webhooks/xxx""#,
+        );
+        let Query::Alert(ref rule) = q.query else {
+            panic!("expected Alert")
+        };
+        assert!(matches!(rule.action, AlertAction::Discord(_)));
+        if let AlertAction::Discord(ref url) = rule.action {
+            assert_eq!(url, "https://discord.com/api/webhooks/xxx");
+        }
+    }
+
+    #[test]
+    fn parses_alert_email_action() {
+        let q = parse_one(r#"alert when cpu > 80% then email "admin@example.com""#);
+        let Query::Alert(ref rule) = q.query else {
+            panic!("expected Alert")
+        };
+        assert!(matches!(rule.action, AlertAction::Email { .. }));
+        if let AlertAction::Email {
+            ref to,
+            ref subject,
+        } = rule.action
+        {
+            assert_eq!(to, "admin@example.com");
+            assert_eq!(subject, "DockQL Alert Notification");
+        }
+    }
+
+    #[test]
+    fn parses_alert_email_with_custom_subject() {
+        let q = parse_one(
+            r#"alert when cpu > 80% then email "admin@example.com" subject "High CPU Alert""#,
+        );
+        let Query::Alert(ref rule) = q.query else {
+            panic!("expected Alert")
+        };
+        if let AlertAction::Email {
+            ref to,
+            ref subject,
+        } = rule.action
+        {
+            assert_eq!(to, "admin@example.com");
+            assert_eq!(subject, "High CPU Alert");
+        }
     }
 
     #[test]
@@ -2933,5 +3127,74 @@ mod tests {
                 .any(|l| l.contains("observe containers") && l.contains("-->")),
             "source pointer should point to the line with unknown, not the first line"
         );
+    }
+
+    // ---- Window function parse tests ----
+
+    #[test]
+    fn parses_row_number() {
+        let q = parse_one("observe containers | row_number as rn");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        match &o.pipeline[0] {
+            PipelineNode::RowNumber { alias } => assert_eq!(alias, "rn"),
+            other => panic!("expected RowNumber, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_rank() {
+        let q = parse_one("observe containers | sort by cpu desc | rank(cpu) as r");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        match &o.pipeline[1] {
+            PipelineNode::Rank { field, alias } => {
+                assert_eq!(field, "cpu");
+                assert_eq!(alias, "r");
+            }
+            other => panic!("expected Rank, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_lag() {
+        let q = parse_one("observe containers | lag(name) as prev_name");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        match &o.pipeline[0] {
+            PipelineNode::Lag {
+                field,
+                alias,
+                offset,
+            } => {
+                assert_eq!(field, "name");
+                assert_eq!(alias, "prev_name");
+                assert_eq!(*offset, 1);
+            }
+            other => panic!("expected Lag, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_lead_with_offset() {
+        let q = parse_one("observe containers | lead(name, 2) as next_name");
+        let Query::Observe(ref o) = q.query else {
+            panic!("expected Observe")
+        };
+        match &o.pipeline[0] {
+            PipelineNode::Lead {
+                field,
+                alias,
+                offset,
+            } => {
+                assert_eq!(field, "name");
+                assert_eq!(alias, "next_name");
+                assert_eq!(*offset, 2);
+            }
+            other => panic!("expected Lead, got {other:?}"),
+        }
     }
 }

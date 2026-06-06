@@ -7,202 +7,338 @@
     <title>DOL — Docker Observability Language</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
+        /* ── Reset & Base ─────────────────────────────────────────── */
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
-            --bg: #0a0e14;
-            --surface: #11161e;
-            --surface-hover: #181f2a;
-            --border: #1f2a37;
-            --text: #e3e9f1;
-            --muted: #8a95a5;
+            --bg: #080c14;
+            --bg-alt: #0b101c;
+            --surface: #0f1626;
+            --surface-hover: #151e32;
+            --surface-glass: rgba(15, 22, 38, 0.72);
+            --border: #1a2540;
+            --border-glow: rgba(87, 166, 255, 0.15);
+            --text: #e8edf5;
+            --text-secondary: #a0aec0;
+            --muted: #6b7a90;
             --accent: #57a6ff;
-            --accent-glow: rgba(87, 166, 255, 0.15);
+            --accent-dim: rgba(87, 166, 255, 0.12);
+            --accent-glow: rgba(87, 166, 255, 0.2);
             --green: #3ecf8e;
-            --orange: #d4973c;
+            --green-dim: rgba(62, 207, 142, 0.12);
+            --orange: #f0a832;
+            --orange-dim: rgba(240, 168, 50, 0.12);
             --red: #f14c4c;
+            --purple: #a78bfa;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --radius-lg: 16px;
+            --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+            --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --bounce: 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: var(--font);
             background: var(--bg);
             color: var(--text);
             line-height: 1.65;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
+            overflow-x: hidden;
         }
-        .container {
-            max-width: 880px;
-            margin: 0 auto;
-            padding: 0 28px;
+        ::selection { background: var(--accent); color: var(--bg); }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+        .container { max-width: 920px; margin: 0 auto; padding: 0 28px; }
+
+        /* ── Animated Background ─────────────────────────────────── */
+        .bg-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+        .bg-canvas .gradient-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.15;
+            animation: orbFloat 20s ease-in-out infinite;
+        }
+        .bg-canvas .gradient-orb:nth-child(1) {
+            width: 600px; height: 600px;
+            background: var(--accent);
+            top: -200px; left: -200px;
+            animation-delay: 0s;
+        }
+        .bg-canvas .gradient-orb:nth-child(2) {
+            width: 400px; height: 400px;
+            background: var(--purple);
+            bottom: -100px; right: -100px;
+            animation-delay: -7s;
+        }
+        .bg-canvas .gradient-orb:nth-child(3) {
+            width: 300px; height: 300px;
+            background: var(--green);
+            top: 50%; left: 50%;
+            animation-delay: -14s;
+        }
+        @keyframes orbFloat {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(80px, -60px) scale(1.1); }
+            66% { transform: translate(-40px, 80px) scale(0.9); }
+        }
+        .bg-canvas .noise {
+            position: absolute;
+            inset: 0;
+            opacity: 0.03;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+            background-repeat: repeat;
+            background-size: 256px 256px;
+        }
+        .grid-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 0;
+            background-image:
+                linear-gradient(rgba(26, 37, 64, 0.15) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(26, 37, 64, 0.15) 1px, transparent 1px);
+            background-size: 60px 60px;
+            mask-image: radial-gradient(ellipse 60% 50% at 50% 0%, black 0%, transparent 100%);
+            -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 0%, black 0%, transparent 100%);
         }
 
-        /* ── Navigation bar ──────────────────────── */
-        .nav {
+        /* ── Particle Canvas ─────────────────────────────────────── */
+        #particles-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* ── Navbar ──────────────────────────────────────────────── */
+        .navbar {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(20px) saturate(1.4);
+            -webkit-backdrop-filter: blur(20px) saturate(1.4);
+            background: rgba(8, 12, 20, 0.6);
+            border-bottom: 1px solid var(--border);
+            transition: var(--transition);
+        }
+        .navbar.scrolled {
+            background: rgba(8, 12, 20, 0.85);
+            border-bottom-color: rgba(26, 37, 64, 0.5);
+        }
+        .navbar .inner {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 20px 0;
-            border-bottom: 1px solid var(--border);
+            padding: 14px 0;
+            max-width: 920px;
+            margin: 0 auto;
+            padding-left: 28px;
+            padding-right: 28px;
         }
         .nav-brand {
             display: flex;
             align-items: center;
             gap: 10px;
-            font-size: 1.15rem;
+            font-size: 1.1rem;
             font-weight: 700;
             letter-spacing: -0.02em;
             color: var(--text);
             text-decoration: none;
+            transition: opacity .2s;
         }
-        .nav-brand svg {
-            width: 28px;
-            height: 28px;
-        }
-        .nav-brand span { color: var(--accent); }
+        .nav-brand:hover { opacity: .85; }
+        .nav-brand svg { width: 26px; height: 26px; flex-shrink: 0; }
+        .nav-brand .dot { color: var(--accent); }
         .nav-links {
             display: flex;
-            gap: 24px;
+            gap: 8px;
             align-items: center;
         }
         .nav-links a {
             color: var(--muted);
             text-decoration: none;
-            font-size: 0.875rem;
+            font-size: 0.85rem;
             font-weight: 500;
-            transition: color .2s;
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            transition: all .2s;
         }
-        .nav-links a:hover { color: var(--text); }
+        .nav-links a:not(.btn):hover {
+            color: var(--text);
+            background: var(--surface);
+        }
         .nav-links .btn {
-            background: var(--accent);
-            color: #0a0e14;
-            padding: 6px 16px;
-            border-radius: 6px;
+            background: linear-gradient(135deg, var(--accent), #6cb3ff);
+            color: #080c14;
+            padding: 7px 18px;
+            border-radius: var(--radius-sm);
             font-weight: 600;
-            font-size: 0.8rem;
-            transition: opacity .2s;
-        }
-        .nav-links .btn:hover { opacity: .85; color: #0a0e14; }
-
-        /* ── Hero ────────────────────────────────── */
-        .hero {
-            padding: 80px 0 56px;
-            text-align: center;
+            font-size: 0.82rem;
+            transition: all .2s;
             position: relative;
+            overflow: hidden;
         }
-        .hero::before {
+        .nav-links .btn::before {
             content: '';
             position: absolute;
-            top: -120px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 600px;
-            height: 400px;
-            background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%);
-            pointer-events: none;
+            inset: 0;
+            background: linear-gradient(135deg, transparent 20%, rgba(255,255,255,0.15) 50%, transparent 80%);
+            transform: translateX(-100%);
+            transition: transform .5s;
+        }
+        .nav-links .btn:hover::before { transform: translateX(100%); }
+        .nav-links .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(87,166,255,0.3); }
+
+        /* ── Hero ────────────────────────────────────────────────── */
+        .hero {
+            position: relative;
+            z-index: 2;
+            padding: 96px 0 64px;
+            text-align: center;
+        }
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 14px;
+            border-radius: 100px;
+            background: var(--accent-dim);
+            border: 1px solid rgba(87, 166, 255, 0.15);
+            font-size: 0.78rem;
+            font-weight: 500;
+            color: var(--accent);
+            margin-bottom: 24px;
+            animation: fadeInUp 0.8s var(--bounce) both;
+        }
+        .hero-badge .pulse {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
         }
         .hero h1 {
-            position: relative;
-            font-size: 3.2rem;
-            font-weight: 700;
-            letter-spacing: -0.03em;
-            line-height: 1.15;
-            background: linear-gradient(135deg, var(--text) 0%, var(--accent) 50%, var(--green) 100%);
+            font-size: clamp(2.5rem, 5vw, 4rem);
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            line-height: 1.1;
+            animation: fadeInUp 0.8s var(--bounce) 0.1s both;
+        }
+        .hero h1 .gradient-text {
+            background: linear-gradient(135deg, var(--text) 0%, var(--accent) 40%, var(--purple) 70%, var(--green) 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+            background-size: 200% 200%;
+            animation: gradientShift 8s ease-in-out infinite;
+        }
+        @keyframes gradientShift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
         }
         .hero .tagline {
-            margin-top: 16px;
-            font-size: 1.1rem;
-            color: var(--muted);
+            margin-top: 18px;
+            font-size: clamp(1rem, 1.5vw, 1.15rem);
+            color: var(--text-secondary);
             max-width: 600px;
             margin-left: auto;
             margin-right: auto;
-            line-height: 1.6;
+            line-height: 1.65;
+            animation: fadeInUp 0.8s var(--bounce) 0.2s both;
         }
-        .hero .badges {
-            margin-top: 28px;
+        .hero .tagline strong { color: var(--text); font-weight: 500; }
+
+        /* ── Stats Strip ─────────────────────────────────────────── */
+        .stats-strip {
             display: flex;
             justify-content: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
+            gap: 40px;
+            margin-top: 36px;
+            animation: fadeInUp 0.8s var(--bounce) 0.3s both;
         }
-        .hero .badges img { height: auto; max-height: 28px; border-radius: 4px; vertical-align: middle; }
-
-        /* ── Code block ──────────────────────────── */
-        .code-block {
-            margin: 48px auto;
-            max-width: 720px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            overflow: hidden;
-            transition: border-color .3s;
-        }
-        .code-block:hover { border-color: rgba(87, 166, 255, 0.3); }
-        .code-block .header {
-            padding: 10px 18px;
-            background: #0d121a;
-            border-bottom: 1px solid var(--border);
-            font-size: 0.78rem;
-            color: var(--muted);
+        .stat-item {
             display: flex;
+            flex-direction: column;
             align-items: center;
-            gap: 8px;
-            user-select: none;
+            gap: 2px;
         }
-        .code-block .header .dot {
-            width: 10px; height: 10px; border-radius: 50%;
-            transition: opacity .2s;
+        .stat-item .stat-value {
+            font-size: 1.4rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: var(--text);
         }
-        .code-block:hover .header .dot { opacity: .9; }
-        .code-block .header .dot.r { background: #ff5f57; }
-        .code-block .header .dot.y { background: #ffbd2e; }
-        .code-block .header .dot.g { background: #28c840; }
-        .code-block pre {
-            padding: 18px 22px;
-            font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
-            font-size: 0.8rem;
-            line-height: 1.6;
-            overflow-x: auto;
-            color: #c9d1d9;
+        .stat-item .stat-label {
+            font-size: 0.75rem;
+            color: var(--muted);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
         }
-        .code-block pre .cmt { color: #636d7d; }
-        .code-block pre .kw { color: #ff7b72; }
-        .code-block pre .fn { color: #d2a8ff; }
-        .code-block pre .str { color: #a5d6ff; }
-        .code-block pre .num { color: #79c0ff; }
-        .code-block pre .op { color: #ffa657; }
+        .stat-item .stat-value.accent { color: var(--accent); }
+        .stat-item .stat-value.green { color: var(--green); }
+        .stat-item .stat-value.orange { color: var(--orange); }
 
-        /* ── CTA buttons ─────────────────────────── */
+        /* ── CTA Buttons ─────────────────────────────────────────── */
         .cta-row {
             display: flex;
             justify-content: center;
             gap: 12px;
-            margin-top: 36px;
+            margin-top: 40px;
             flex-wrap: wrap;
+            animation: fadeInUp 0.8s var(--bounce) 0.4s both;
         }
         .cta {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 10px 24px;
-            border-radius: 8px;
-            font-size: 0.9rem;
+            padding: 12px 28px;
+            border-radius: var(--radius-sm);
+            font-size: 0.92rem;
             font-weight: 600;
             text-decoration: none;
-            transition: all .2s;
+            transition: all var(--transition);
+            position: relative;
+            overflow: hidden;
         }
         .cta-primary {
-            background: var(--accent);
-            color: #0a0e14;
+            background: linear-gradient(135deg, var(--accent), #67a8ff);
+            color: #080c14;
+            box-shadow: 0 2px 24px rgba(87, 166, 255, 0.2);
         }
         .cta-primary:hover {
-            background: #6cb3ff;
-            transform: translateY(-1px);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(87, 166, 255, 0.35);
         }
+        .cta-primary:active { transform: translateY(0); }
+        .cta-primary .shine {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transform: translateX(-100%) skewX(-15deg);
+            transition: transform 0.6s;
+        }
+        .cta-primary:hover .shine { transform: translateX(100%) skewX(-15deg); }
         .cta-secondary {
             background: var(--surface);
             color: var(--text);
@@ -210,90 +346,453 @@
         }
         .cta-secondary:hover {
             border-color: var(--muted);
-            transform: translateY(-1px);
+            background: var(--surface-hover);
+            transform: translateY(-2px);
         }
 
-        /* ── Sections ────────────────────────────── */
-        section { padding: 64px 0; }
-        section + section { border-top: 1px solid var(--border); }
-        section h2 {
-            font-size: 1.3rem;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-            margin-bottom: 20px;
-            color: var(--text);
+        /* ── Terminal Mock ───────────────────────────────────────── */
+        .terminal-wrapper {
+            margin: 56px auto 0;
+            max-width: 760px;
+            transform: perspective(1200px) rotateX(2deg);
+            transition: transform 0.6s var(--bounce);
+            animation: fadeInUp 0.9s var(--bounce) 0.5s both;
         }
-        section > p { color: var(--muted); margin-bottom: 16px; }
-
-        /* ── Feature grid ────────────────────────── */
-        .feature-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-            gap: 6px;
+        .terminal-wrapper:hover {
+            transform: perspective(1200px) rotateX(0deg);
         }
-        .feature-item {
-            padding: 12px 16px;
-            border-radius: 8px;
-            font-size: 0.88rem;
-            color: var(--muted);
+        .terminal {
+            background: linear-gradient(180deg, #0a0f1a 0%, #0d1424 100%);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow:
+                0 0 0 1px rgba(87, 166, 255, 0.05),
+                0 20px 60px rgba(0,0,0,0.5),
+                0 0 80px rgba(87, 166, 255, 0.03);
+            transition: all var(--transition);
+        }
+        .terminal:hover {
+            border-color: rgba(87, 166, 255, 0.25);
+            box-shadow:
+                0 0 0 1px rgba(87, 166, 255, 0.1),
+                0 20px 80px rgba(0,0,0,0.6),
+                0 0 100px rgba(87, 166, 255, 0.05);
+        }
+        .terminal .titlebar {
+            padding: 12px 18px;
             display: flex;
             align-items: center;
-            gap: 10px;
-            transition: background .15s, color .15s;
+            gap: 8px;
+            border-bottom: 1px solid var(--border);
+            user-select: none;
         }
-        .feature-item:hover {
-            background: var(--surface);
-            color: var(--text);
-        }
-        .feature-item .icon {
-            width: 6px;
-            height: 6px;
+        .terminal .titlebar .dot {
+            width: 10px; height: 10px;
             border-radius: 50%;
-            background: var(--green);
-            flex-shrink: 0;
+            transition: opacity .2s;
+        }
+        .terminal:hover .titlebar .dot { opacity: .9; }
+        .terminal .titlebar .dot.r { background: #ff5f57; }
+        .terminal .titlebar .dot.y { background: #ffbd2e; }
+        .terminal .titlebar .dot.g { background: #28c840; }
+        .terminal .titlebar .title-text {
+            margin-left: 8px;
+            font-size: 0.75rem;
+            color: var(--muted);
+            font-family: var(--mono);
+        }
+        .terminal .terminal-body {
+            padding: 20px 24px;
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            line-height: 1.75;
+            overflow-x: auto;
+            min-height: 240px;
+            color: #c9d1d9;
+        }
+        .terminal .terminal-body .line { white-space: pre; min-height: 1.35em; }
+        .terminal .terminal-body .prompt { color: var(--green); }
+        .terminal .terminal-body .cmd { color: var(--accent); }
+        .terminal .terminal-body .comment { color: #4a5568; font-style: italic; }
+        .terminal .terminal-body .output { color: var(--text-secondary); }
+        .terminal .terminal-body .output.header { color: var(--muted); font-weight: 500; }
+        .terminal .terminal-body .output.sep { color: var(--border); }
+        .terminal .terminal-body .blink {
+            display: inline-block;
+            width: 8px;
+            height: 1.1em;
+            background: var(--accent);
+            animation: blink 1s step-end infinite;
+            vertical-align: text-bottom;
+            margin-left: 2px;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .terminal .terminal-body .typing {
+            display: inline;
+            border-right: 2px solid var(--accent);
+            animation: blink-cursor 0.8s step-end infinite;
+        }
+        @keyframes blink-cursor {
+            0%, 100% { border-color: var(--accent); }
+            50% { border-color: transparent; }
         }
 
-        /* ── Cards ───────────────────────────────── */
-        .cards {
+        /* ── Floating Shapes ─────────────────────────────────────── */
+        .floating-shapes { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+        .floating-shapes .shape {
+            position: absolute;
+            border-radius: 50%;
+            opacity: 0.05;
+            animation: shapeFloat 25s ease-in-out infinite;
+        }
+        .floating-shapes .shape:nth-child(1) {
+            width: 80px; height: 80px;
+            border: 1px solid var(--accent);
+            top: 15%; left: 5%;
+            animation-delay: 0s;
+            animation-duration: 30s;
+        }
+        .floating-shapes .shape:nth-child(2) {
+            width: 50px; height: 50px;
+            border: 1px solid var(--purple);
+            top: 60%; right: 8%;
+            animation-delay: -8s;
+            animation-duration: 25s;
+        }
+        .floating-shapes .shape:nth-child(3) {
+            width: 120px; height: 120px;
+            border: 1px solid var(--green);
+            bottom: 10%; left: 10%;
+            animation-delay: -16s;
+            animation-duration: 35s;
+            border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
+        }
+        .floating-shapes .shape:nth-child(4) {
+            width: 40px; height: 40px;
+            border: 1px solid var(--orange);
+            top: 30%; right: 15%;
+            animation-delay: -5s;
+            animation-duration: 20s;
+            border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
+        }
+        @keyframes shapeFloat {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(30px, -40px) rotate(90deg); }
+            50% { transform: translate(-20px, 30px) rotate(180deg); }
+            75% { transform: translate(20px, -20px) rotate(270deg); }
+        }
+
+        /* ── Sections ────────────────────────────────────────────── */
+        section {
+            position: relative;
+            z-index: 2;
+            padding: 80px 0;
+        }
+        section + section { border-top: 1px solid var(--border); }
+        .section-header {
+            text-align: center;
+            margin-bottom: 44px;
+        }
+        .section-header h2 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: var(--text);
+        }
+        .section-header .section-subtitle {
+            margin-top: 8px;
+            font-size: 0.92rem;
+            color: var(--muted);
+            max-width: 480px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* ── Reveal Animation ────────────────────────────────────── */
+        .reveal {
+            opacity: 0;
+            transform: translateY(24px);
+            transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+                        transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .reveal.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .reveal-delay-1 { transition-delay: 0.1s; }
+        .reveal-delay-2 { transition-delay: 0.2s; }
+        .reveal-delay-3 { transition-delay: 0.3s; }
+        .reveal-delay-4 { transition-delay: 0.4s; }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Feature Grid ────────────────────────────────────────── */
+        .feature-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 8px;
+        }
+        .feature-card {
+            padding: 16px 18px;
+            border-radius: var(--radius);
+            display: flex;
+            align-items: center;
             gap: 12px;
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: all var(--transition);
+            cursor: default;
+            border: 1px solid transparent;
+            position: relative;
+            overflow: hidden;
+        }
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: var(--radius);
+            opacity: 0;
+            background: linear-gradient(135deg, var(--accent-dim), transparent);
+            transition: opacity .3s;
+        }
+        .feature-card:hover {
+            background: var(--surface);
+            border-color: var(--border);
+            color: var(--text);
+            transform: translateY(-1px);
+        }
+        .feature-card:hover::before { opacity: 1; }
+        .feature-card .icon-wrap {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 0.85rem;
+            position: relative;
+            z-index: 1;
+            transition: all var(--transition);
+        }
+        .feature-card:hover .icon-wrap { transform: scale(1.1); }
+        .feature-card .icon-wrap.accent { background: var(--accent-dim); color: var(--accent); }
+        .feature-card .icon-wrap.green { background: var(--green-dim); color: var(--green); }
+        .feature-card .icon-wrap.orange { background: var(--orange-dim); color: var(--orange); }
+        .feature-card .icon-wrap.purple { background: rgba(167, 139, 250, 0.12); color: var(--purple); }
+        .feature-card .icon-wrap.red { background: rgba(241, 76, 76, 0.12); color: var(--red); }
+        .feature-card .feature-text {
+            position: relative;
+            z-index: 1;
+            line-height: 1.4;
+        }
+
+        /* ── Cards (Docs) ────────────────────────────────────────── */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+            gap: 14px;
         }
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 20px;
-            transition: border-color .2s, background .2s;
+            border-radius: var(--radius);
+            padding: 24px;
+            text-decoration: none;
+            color: inherit;
+            transition: all var(--transition);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .card::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            opacity: 0;
+            transition: opacity .3s;
         }
         .card:hover {
-            border-color: rgba(87, 166, 255, 0.25);
+            border-color: rgba(87, 166, 255, 0.2);
             background: var(--surface-hover);
+            transform: translateY(-3px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.3);
         }
+        .card:hover::after { opacity: 1; }
+        .card .card-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            margin-bottom: 4px;
+            background: var(--accent-dim);
+            color: var(--accent);
+            transition: all var(--transition);
+        }
+        .card:hover .card-icon { transform: scale(1.05); background: rgba(87, 166, 255, 0.18); }
+        .card .card-icon.green { background: var(--green-dim); color: var(--green); }
+        .card:hover .card-icon.green { background: rgba(62, 207, 142, 0.18); }
+        .card .card-icon.orange { background: var(--orange-dim); color: var(--orange); }
+        .card:hover .card-icon.orange { background: rgba(240, 168, 50, 0.18); }
+        .card .card-icon.purple { background: rgba(167, 139, 250, 0.12); color: var(--purple); }
+        .card:hover .card-icon.purple { background: rgba(167, 139, 250, 0.2); }
         .card h3 {
-            font-size: 0.95rem;
+            font-size: 1rem;
             font-weight: 600;
-            margin-bottom: 6px;
-        }
-        .card h3 a {
             color: var(--text);
-            text-decoration: none;
+            transition: color .2s;
         }
-        .card h3 a:hover { color: var(--accent); }
+        .card:hover h3 { color: var(--accent); }
         .card p {
-            font-size: 0.82rem;
+            font-size: 0.84rem;
             color: var(--muted);
             line-height: 1.55;
             margin: 0;
         }
+        .card .card-arrow {
+            margin-top: auto;
+            align-self: flex-end;
+            color: var(--muted);
+            font-size: 1.1rem;
+            transition: all var(--transition);
+        }
+        .card:hover .card-arrow {
+            color: var(--accent);
+            transform: translateX(4px);
+        }
 
-        /* ── Quick start code block ──────────────── */
-        .quick-start .code-block { margin-top: 16px; }
+        /* ── Quick Start ─────────────────────────────────────────── */
+        .quick-start .terminal {
+            margin-top: 20px;
+            transform: none;
+        }
+        .quick-start .terminal:hover { transform: none; }
 
-        /* ── Footer ──────────────────────────────── */
+        .install-row {
+            display: flex;
+            gap: 10px;
+            align-items: stretch;
+            margin-top: 20px;
+        }
+        .install-box {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px 18px;
+            font-family: var(--mono);
+            font-size: 0.82rem;
+            color: var(--text);
+            transition: border-color .2s;
+        }
+        .install-box:hover { border-color: rgba(87, 166, 255, 0.2); }
+        .install-box .cmd-text { color: var(--text-secondary); }
+        .install-box .copy-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 5px 12px;
+            font-size: 0.75rem;
+            font-family: var(--font);
+            color: var(--muted);
+            cursor: pointer;
+            transition: all .2s;
+            flex-shrink: 0;
+        }
+        .install-box .copy-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-dim);
+        }
+        .install-box .copy-btn.copied {
+            border-color: var(--green);
+            color: var(--green);
+            background: var(--green-dim);
+        }
+
+        /* ── Install Methods ─────────────────────────────────────── */
+        .install-methods {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .install-method {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px 20px;
+            transition: all var(--transition);
+        }
+        .install-method:hover {
+            border-color: rgba(87, 166, 255, 0.2);
+            background: var(--surface-hover);
+        }
+        .install-method .method-label {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+        .install-method .method-cmd {
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            color: var(--accent);
+            word-break: break-all;
+            line-height: 1.5;
+        }
+        .install-method .method-desc {
+            font-size: 0.76rem;
+            color: var(--muted);
+            margin-top: 6px;
+        }
+        .install-method .copy-mini {
+            float: right;
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 0.7rem;
+            color: var(--muted);
+            cursor: pointer;
+            transition: all .2s;
+            margin-top: -2px;
+        }
+        .install-method .copy-mini:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-dim);
+        }
+
+        /* ── Footer ──────────────────────────────────────────────── */
         footer {
+            position: relative;
+            z-index: 2;
             text-align: center;
-            padding: 36px 0;
+            padding: 40px 0;
             border-top: 1px solid var(--border);
             color: var(--muted);
             font-size: 0.82rem;
@@ -304,27 +803,60 @@
             transition: color .2s;
         }
         footer a:hover { color: var(--text); }
-        footer .sep { margin: 0 10px; color: var(--border); }
+        footer .sep { margin: 0 12px; color: var(--border); }
+        footer .footer-links { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; }
+        footer .footer-links a { font-size: 0.85rem; }
+        footer .footer-made-with { font-size: 0.75rem; opacity: 0.7; }
 
-        /* ── Responsive ──────────────────────────── */
-        @media (max-width: 640px) {
-            .hero { padding: 48px 0 32px; }
-            .hero h1 { font-size: 2rem; }
-            .hero .tagline { font-size: 1rem; }
-            .nav { flex-direction: column; gap: 12px; }
-            .nav-links { width: 100%; justify-content: center; flex-wrap: wrap; }
-            section { padding: 40px 0; }
+        /* ── Responsive ──────────────────────────────────────────── */
+        @media (max-width: 768px) {
+            .hero { padding: 64px 0 40px; }
+            .hero h1 { font-size: 2.2rem; }
+            .navbar .inner { padding-left: 20px; padding-right: 20px; }
             .container { padding: 0 20px; }
+            section { padding: 48px 0; }
+            .stats-strip { gap: 24px; flex-wrap: wrap; }
+            .stat-item .stat-value { font-size: 1.1rem; }
             .feature-grid { grid-template-columns: 1fr; }
             .cards { grid-template-columns: 1fr; }
+            .install-methods { grid-template-columns: 1fr; }
+            .install-row { flex-direction: column; }
+            .terminal .terminal-body { padding: 14px 16px; font-size: 0.72rem; }
+            .terminal-wrapper { transform: none; }
+            .terminal-wrapper:hover { transform: none; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+            #particles-canvas { display: none; }
+            .bg-canvas .gradient-orb { animation: none; opacity: 0.06; }
+            .floating-shapes .shape { animation: none; opacity: 0.03; }
+        }
+        @media (max-width: 640px) {
+            .nav-links a:not(.btn) { display: none; }
+            .hero h1 { font-size: 1.8rem; }
+            .section-header h2 { font-size: 1.4rem; }
         }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <!-- Nav -->
-    <nav class="nav">
+<!-- Animated Background -->
+<div class="bg-canvas">
+    <div class="gradient-orb"></div>
+    <div class="gradient-orb"></div>
+    <div class="gradient-orb"></div>
+    <div class="noise"></div>
+</div>
+<div class="grid-overlay"></div>
+<canvas id="particles-canvas"></canvas>
+
+<!-- Navbar -->
+<nav class="navbar" id="navbar">
+    <div class="inner">
         <a href="#" class="nav-brand">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="DOL logo">
                 <rect x="4" y="4" width="56" height="56" rx="14" stroke="#57a6ff" stroke-width="2.5"/>
@@ -332,208 +864,531 @@
                 <circle cx="44" cy="30" r="3.5" fill="#57a6ff"/>
                 <circle cx="24" cy="33" r="2" fill="#3ecf8e" opacity="0.6"/>
             </svg>
-            dol<span>.</span>
+            dol<span class="dot">.</span>
         </a>
         <div class="nav-links">
             <a href="#features">Features</a>
             <a href="#docs">Docs</a>
             <a href="#quickstart">Quick Start</a>
-            <a href="https://github.com/genc-murat/DockQL" class="btn">GitHub</a>
+            <a href="https://github.com/genc-murat/DockQL" class="btn">GitHub →</a>
         </div>
-    </nav>
+    </div>
+</nav>
 
-    <!-- Hero -->
-    <div class="hero">
-        <h1>Docker<br>Observability Language</h1>
+<!-- Hero -->
+<section class="hero" style="padding-bottom:0;border:none;">
+    <div class="floating-shapes">
+        <div class="shape"></div>
+        <div class="shape"></div>
+        <div class="shape"></div>
+        <div class="shape"></div>
+    </div>
+    <div class="container" style="position:relative;z-index:3;">
+        <div class="hero-badge">
+            <span class="pulse"></span>
+            v0.7.0 — Now with log streaming, network events &amp; more
+        </div>
+        <h1>
+            <span class="gradient-text">Docker<br>Observability Language</span>
+        </h1>
         <p class="tagline">
-            A domain-specific language and CLI tool for querying, observing, and
-            analyzing your Docker infrastructure in real time.
+            A domain-specific language and CLI tool for querying, observing, and<br>
+            analyzing your Docker infrastructure in <strong>real time</strong>.
         </p>
-        <div class="badges">
-            <img src="https://img.shields.io/badge/Rust-1.96%2B-8a95a5?logo=rust&style=for-the-badge" alt="Rust">
-            <img src="https://img.shields.io/github/v/release/genc-murat/DockQL?color=3ecf8e&logo=github&style=for-the-badge" alt="Release">
-            <img src="https://img.shields.io/github/actions/workflow/status/genc-murat/DockQL/ci.yml?branch=main&label=CI&color=57a6ff&style=for-the-badge" alt="CI">
-            <img src="https://img.shields.io/github/deployments/genc-murat/DockQL/github-pages?label=docs&logo=github&style=for-the-badge" alt="Docs">
+
+        <!-- Stats -->
+        <div class="stats-strip">
+            <div class="stat-item">
+                <span class="stat-value accent">0.7.0</span>
+                <span class="stat-label">Latest Release</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value green">100+</span>
+                <span class="stat-label">Example Queries</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value orange">SQLite</span>
+                <span class="stat-label">Telemetry Store</span>
+            </div>
         </div>
+
+        <!-- CTA -->
         <div class="cta-row">
-            <a href="https://github.com/genc-murat/DockQL" class="cta cta-primary">View on GitHub →</a>
-            <a href="#quickstart" class="cta cta-secondary">Quick Start</a>
+            <a href="https://github.com/genc-murat/DockQL" class="cta cta-primary">
+                View on GitHub
+                <span class="shine"></span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            </a>
+            <a href="#quickstart" class="cta cta-secondary">
+                Quick Start
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+            </a>
         </div>
     </div>
+</section>
 
-    <!-- Terminal mock -->
-    <div class="code-block">
-        <div class="header">
-            <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-            <span style="margin-left:6px;">dol</span>
+<!-- Terminal Mock -->
+<div class="container">
+    <div class="terminal-wrapper">
+        <div class="terminal" id="demo-terminal">
+            <div class="titlebar">
+                <span class="dot r"></span>
+                <span class="dot y"></span>
+                <span class="dot g"></span>
+                <span class="title-text">dol — interactive REPL</span>
+            </div>
+            <div class="terminal-body" id="terminal-body">
+                <div class="line"><span class="comment"># powered by DockQL · press Tab to autocomplete</span></div>
+                <div class="line"><span class="prompt">$</span> <span class="typing" id="typing-text"></span><span class="blink"></span></div>
+            </div>
         </div>
-        <pre><span class="cmt"># List running containers with high CPU</span>
-$ dol <span class="str">"observe containers | where cpu > 80% | sort cpu desc | select name, image, cpu"</span>
-
-┌──────────────┬──────────────────┬──────┐
-│ name         │ image            │ cpu  │
-├──────────────┼──────────────────┼──────┤
-│ web-01       │ nginx:1.25       │ 92.3 │
-│ api-gateway  │ envoy:1.29       │ 87.1 │
-│ worker-03    │ python:3.12      │ 81.5 │
-└──────────────┴──────────────────┴──────┘
-
-<span class="cmt"># Stream container crash events</span>
-$ dol <span class="str">"events containers where action = die | select time, container, image"</span>            <span class="cmt"># View container logs</span>
-$ dol <span class="str">"logs container my-app tail 50"</span>
-
-<span class="cmt"># Check Docker daemon connectivity</span>
-$ dol <span class="str">"ping"</span>
-
-<span class="cmt"># Query Docker Compose project containers</span>
-$ dol <span class="str">"compose myapp | where cpu > 80% | select name, cpu"</span>
-<span class="cmt"># List all Compose projects</span>
-$ dol <span class="str">"compose ls"</span>
-<span class="cmt"># Compose networks, volumes, and health</span>
-$ dol <span class="str">"compose myapp networks"</span>
-$ dol <span class="str">"compose myapp health | where health = unhealthy"</span>
-<span class="cmt"># Compose project images, stats, and ps</span>
-$ dol <span class="str">"compose myapp images"</span>
-$ dol <span class="str">"compose myapp stats | where cpu > 80%"</span>
-$ dol <span class="str">"compose myapp ps | where state = running"</span>
-<span class="cmt"># Service logs and port mappings</span>
-$ dol <span class="str">"compose myapp logs api-service tail 50"</span>
-$ dol <span class="str">"compose myapp port api-service 8080"</span>
-<span class="cmt"># Inspect Compose configuration</span>
-$ dol <span class="str">"compose myapp config services"</span>
-
-<span class="cmt"># Cross-target JOIN: containers × images</span>
-$ dol <span class="str">"observe containers join images on id = id | select c.name, i.repository"</span>
-
-<span class="cmt"># Run a query from a .dol file</span>
-$ dol <span class="op">--file</span> examples/ping.dol
-$ dol <span class="op">-f</span> examples/list_containers.dol
-
-<span class="cmt"># Light theme for terminals with light backgrounds</span>
-$ dol <span class="op">--theme</span> light <span class="str">"observe images | sort by size desc | limit 10"</span>
-
-<span class="cmt"># Set light theme permanently in config</span>
-$ dol config set theme light
-
-<span class="cmt"># Override config theme with --theme</span>
-$ dol <span class="op">--theme</span> dark <span class="op">-f</span> examples/ping.dol</pre>
     </div>
-
-    <!-- Features -->
-    <section id="features">
-        <h2>Features</h2>
-        <div class="feature-grid">
-            <div class="feature-item"><span class="icon"></span>Live container observation</div>
-            <div class="feature-item"><span class="icon"></span>Real-time Docker event streaming</div>
-            <div class="feature-item"><span class="icon"></span>Historical time-travel inspection</div>
-            <div class="feature-item"><span class="icon"></span>Alerting with duration guards</div>
-            <div class="feature-item"><span class="icon"></span>Container log retrieval (logs)</div>
-            <div class="feature-item"><span class="icon"></span>Docker daemon connectivity check (ping)</div>
-            <div class="feature-item"><span class="icon"></span>Docker Compose project queries (compose)</div>
-            <div class="feature-item"><span class="icon"></span>Compose ls — list all projects</div>
-            <div class="feature-item"><span class="icon"></span>Compose images, stats, ps, logs, port, config</div>
-            <div class="feature-item"><span class="icon"></span>Compose networks, volumes &amp; health targets</div>
-            <div class="feature-item"><span class="icon"></span>Cross-target JOIN (containers × images, networks, volumes)</div>
-            <div class="feature-item"><span class="icon"></span>Anomaly detection engine</div>
-            <div class="feature-item"><span class="icon"></span>Persistent SQLite telemetry store</div>
-            <div class="feature-item"><span class="icon"></span>Static semantic analysis &amp; type checking</div>
-            <div class="feature-item"><span class="icon"></span>Aggregate functions (sum, count, avg)</div>
-            <div class="feature-item"><span class="icon"></span>Arithmetic &amp; string functions</div>
-            <div class="feature-item"><span class="icon"></span>Date/time functions (now, date_format, date_diff, extract)</div>
-            <div class="feature-item"><span class="icon"></span>String pattern operators (starts_with &amp; ends_with)</div>
-            <div class="feature-item"><span class="icon"></span>fill pipeline node for missing values</div>
-            <div class="feature-item"><span class="icon"></span>$var field reference syntax</div>
-            <div class="feature-item"><span class="icon"></span>let pipeline node for constants &amp; parameters</div>
-            <div class="feature-item"><span class="icon"></span>If/then/else pipeline branching</div>
-            <div class="feature-item"><span class="icon"></span>Interactive REPL with tab completion</div>
-            <div class="feature-item"><span class="icon"></span>Live TUI dashboard (top &amp; multi-panel)</div>
-            <div class="feature-item"><span class="icon"></span>Configurable Docker API timeouts (with retry)</div>
-            <div class="feature-item"><span class="icon"></span>Export to InfluxDB, Loki, Prometheus</div>
-            <div class="feature-item"><span class="icon"></span>ANSI table, CSV, JSON, JSONL, JSON-Compact output</div>
-            <div class="feature-item"><span class="icon"></span>ANSI colored error messages with suggestions</div>
-        </div>
-    </section>
-
-    <!-- Documentation -->
-    <section id="docs">
-        <h2>Documentation</h2>
-        <div class="cards">
-            <div class="card">
-                <h3><a href="tutorial.html">Tutorial</a></h3>
-                <p>Step-by-step guide from installation to advanced pipelines. Start here if you're new.</p>
-            </div>
-            <div class="card">
-                <h3><a href="spec.html">Language Spec</a></h3>
-                <p>Syntax, types, operators, pipeline nodes, and reserved keywords.</p>
-            </div>
-            <div class="card">
-                <h3><a href="examples.html">Query Examples</a></h3>
-                <p>101+ categorized examples covering all query types and patterns.</p>
-            </div>
-            <div class="card">
-                <h3><a href="architecture.html">Architecture</a></h3>
-                <p>Parser, planner, executor, storage, and component relationships.</p>
-            </div>
-            <div class="card">
-                <h3><a href="analyze.html">Analysis Docs</a></h3>
-                <p>Anomaly detection engine — restart loops, CPU/memory pressure, deployment errors.</p>
-            </div>
-            <div class="card">
-                <h3><a href="storage.html">Storage Docs</a></h3>
-                <p>SQLite telemetry store schema, retention policies, and historical queries.</p>
-            </div>
-            <div class="card">
-                <h3><a href="dol/index.html">API Docs (cargo doc)</a></h3>
-                <p>Auto-generated Rust API docs for all modules — parser, eval, executor, alerts, and more.</p>
-            </div>
-        </div>
-    </section>
-
-    <!-- Quick Start -->
-    <section id="quickstart">
-        <h2>Quick Start</h2>
-        <p>Clone, build, and run your first query in under a minute.</p>
-        <div class="code-block quick-start">
-            <div class="header">
-                <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-                <span style="margin-left:6px;">terminal</span>
-            </div>
-            <pre><span class="cmt"># Clone and build</span>
-$ git clone https://github.com/genc-murat/DockQL.git
-$ cd DockQL
-$ cargo build --release
-
-<span class="cmt"># Run a query</span>
-$ ./target/release/dol <span class="str">"observe containers"</span>
-
-<span class="cmt"># Run a query from a .dol file</span>
-$ ./target/release/dol <span class="op">--file</span> examples/ping.dol
-
-<span class="cmt"># Start the interactive REPL</span>
-$ ./target/release/dol repl
-
-<span class="cmt"># Live-updating container monitor</span>
-$ ./target/release/dol top</pre>
-        </div>
-        <div class="code-block" style="margin-top:16px;">
-            <pre>cargo install dol --git https://github.com/genc-murat/DockQL</pre>
-        </div>
-        <p style="margin-top:10px;font-size:0.82rem;color:var(--muted);">
-            Pre-built binaries for Linux, macOS, and Windows on
-            <a href="https://github.com/genc-murat/DockQL/releases" style="color:var(--accent);">GitHub Releases</a>.
-        </p>
-    </section>
 </div>
 
+<!-- Features -->
+<section id="features">
+    <div class="container">
+        <div class="section-header reveal">
+            <h2>Everything you need to observe Docker</h2>
+            <p class="section-subtitle">From live streaming to historical analysis — a single query language for your containers.</p>
+        </div>
+        <div class="feature-grid">
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap accent">◉</div>
+                <span class="feature-text">Live container observation</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap green">⚡</div>
+                <span class="feature-text">Real-time event streaming</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap accent">⊞</div>
+                <span class="feature-text">Container log streaming (follow)</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap orange">◆</div>
+                <span class="feature-text">Compose events (batch) &amp; logs streaming</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap purple">◈</div>
+                <span class="feature-text">Historical time-travel inspection</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap red">▲</div>
+                <span class="feature-text">Alerting with duration guards</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap green">◀</div>
+                <span class="feature-text">Docker Compose project queries</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap accent">⊡</div>
+                <span class="feature-text">Compose networks, volumes &amp; health</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap purple">⟗</div>
+                <span class="feature-text">Cross-target JOIN (containers × images)</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap orange">◐</div>
+                <span class="feature-text">Anomaly detection engine</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap green">⬡</div>
+                <span class="feature-text">Persistent SQLite telemetry store</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap accent">◎</div>
+                <span class="feature-text">Static semantic analysis &amp; type checking</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap orange">∑</div>
+                <span class="feature-text">Aggregate functions (sum, count, avg)</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap green">ƒ</div>
+                <span class="feature-text">Arithmetic &amp; string functions</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap purple">🕐</div>
+                <span class="feature-text">Date/time functions (now, date_format)</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap accent">⋮</div>
+                <span class="feature-text">String pattern operators</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap green">⊡</div>
+                <span class="feature-text">fill pipeline node for missing values</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap orange">$</div>
+                <span class="feature-text">$var field reference syntax</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap purple">λ</div>
+                <span class="feature-text">let pipeline node for constants</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap red">?</div>
+                <span class="feature-text">If/then/else pipeline branching</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap accent">⌨</div>
+                <span class="feature-text">Interactive REPL with tab completion</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-2">
+                <div class="icon-wrap green">⬓</div>
+                <span class="feature-text">Live TUI dashboard (top &amp; multi-panel)</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap orange">↻</div>
+                <span class="feature-text">Configurable Docker API timeouts (retry)</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-3">
+                <div class="icon-wrap purple">⇥</div>
+                <span class="feature-text">Export to InfluxDB, Loki, Prometheus</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap green">⬛</div>
+                <span class="feature-text">ANSI table, CSV, JSON, JSONL output</span>
+            </div>
+            <div class="feature-card reveal reveal-delay-1">
+                <div class="icon-wrap red">⚠</div>
+                <span class="feature-text">ANSI colored errors with suggestions</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Documentation -->
+<section id="docs">
+    <div class="container">
+        <div class="section-header reveal">
+            <h2>Documentation</h2>
+            <p class="section-subtitle">Everything you need to master DOL, from beginner guides to language specs.</p>
+        </div>
+        <div class="cards">
+            <a href="tutorial.html" class="card reveal reveal-delay-1">
+                <div class="card-icon green">📘</div>
+                <h3>Tutorial</h3>
+                <p>Step-by-step guide from installation to advanced pipelines. Start here if you're new.</p>
+                <div class="card-arrow">→</div>
+            </a>
+            <a href="spec.html" class="card reveal reveal-delay-2">
+                <div class="card-icon accent">📐</div>
+                <h3>Language Spec</h3>
+                <p>Syntax, types, operators, pipeline nodes, and reserved keywords.</p>
+                <div class="card-arrow">→</div>
+            </a>
+            <a href="examples.html" class="card reveal reveal-delay-3">
+                <div class="card-icon orange">📋</div>
+                <h3>Query Examples</h3>
+                <p>101+ categorized examples covering all query types and patterns.</p>
+                <div class="card-arrow">→</div>
+            </a>
+            <a href="architecture.html" class="card reveal reveal-delay-1">
+                <div class="card-icon purple">🏗️</div>
+                <h3>Architecture</h3>
+                <p>Parser, planner, executor, storage, and component relationships.</p>
+                <div class="card-arrow">→</div>
+            </a>
+            <a href="analyze.html" class="card reveal reveal-delay-2">
+                <div class="card-icon red">📊</div>
+                <h3>Analysis Docs</h3>
+                <p>Anomaly detection engine — restart loops, CPU/memory pressure, deployment errors.</p>
+                <div class="card-arrow">→</div>
+            </a>
+            <a href="storage.html" class="card reveal reveal-delay-3">
+                <div class="card-icon green">🗄️</div>
+                <h3>Storage Docs</h3>
+                <p>SQLite telemetry store schema, retention policies, and historical queries.</p>
+                <div class="card-arrow">→</div>
+            </a>
+            <a href="dol/index.html" class="card reveal reveal-delay-1" style="grid-column: 1 / -1;">
+                <div class="card-icon accent">📚</div>
+                <h3>API Docs (cargo doc)</h3>
+                <p>Auto-generated Rust API docs for all modules — parser, eval, executor, alerts, and more.</p>
+                <div class="card-arrow">→</div>
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- Quick Start -->
+<section id="quickstart">
+    <div class="container">
+        <div class="section-header reveal">
+            <h2>Get started in seconds</h2>
+            <p class="section-subtitle">Clone, build, and run your first query — or install via your preferred method.</p>
+        </div>
+
+        <div class="install-row reveal">
+            <div class="install-box">
+                <span class="cmd-text">cargo install dol --git https://github.com/genc-murat/DockQL</span>
+                <button class="copy-btn" data-cmd="cargo install dol --git https://github.com/genc-murat/DockQL">Copy</button>
+            </div>
+        </div>
+
+        <div class="install-methods">
+            <div class="install-method reveal reveal-delay-1">
+                <button class="copy-mini" data-cmd="git clone https://github.com/genc-murat/DockQL.git && cd DockQL && cargo build --release">Copy</button>
+                <div class="method-label">Build from source</div>
+                <div class="method-cmd">git clone &amp;&amp; cargo build --release</div>
+                <div class="method-desc">Requires Rust 1.96+ and a running Docker daemon.</div>
+            </div>
+            <div class="install-method reveal reveal-delay-2">
+                <button class="copy-mini" data-cmd="curl -fsSL https://raw.githubusercontent.com/genc-murat/DockQL/main/install.sh | bash">Copy</button>
+                <div class="method-label">Install script (Linux / macOS)</div>
+                <div class="method-cmd">curl -fsSL install.sh | bash</div>
+                <div class="method-desc">Auto-detects your platform and installs the latest pre-built binary.</div>
+            </div>
+            <div class="install-method reveal reveal-delay-3">
+                <button class="copy-mini" data-cmd="brew tap genc-murat/dol && brew install dol">Copy</button>
+                <div class="method-label">Homebrew (macOS)</div>
+                <div class="method-cmd">brew install genc-murat/dol/dol</div>
+                <div class="method-desc">Available via our custom Homebrew tap.</div>
+            </div>
+        </div>
+
+        <!-- Quick start terminal -->
+        <div class="terminal quick-start reveal" style="margin-top:28px;">
+            <div class="titlebar">
+                <span class="dot r"></span>
+                <span class="dot y"></span>
+                <span class="dot g"></span>
+                <span class="title-text">terminal</span>
+            </div>
+            <div class="terminal-body">
+                <div class="line"><span class="comment"># Run a query</span></div>
+                <div class="line"><span class="prompt">$</span> <span class="cmd">dol</span> <span class="output">"observe containers"</span></div>
+                <div class="line"><span class="comment">&nbsp;</span></div>
+                <div class="line"><span class="comment"># Run a query from a .dol file</span></div>
+                <div class="line"><span class="prompt">$</span> <span class="cmd">dol</span> <span style="color:#f0a832;">--file</span> <span class="output">examples/ping.dol</span></div>
+                <div class="line"><span class="comment">&nbsp;</span></div>
+                <div class="line"><span class="comment"># Start the interactive REPL</span></div>
+                <div class="line"><span class="prompt">$</span> <span class="cmd">dol</span> <span class="output">repl</span></div>
+                <div class="line"><span class="comment">&nbsp;</span></div>
+                <div class="line"><span class="comment"># Live-updating container monitor</span></div>
+                <div class="line"><span class="prompt">$</span> <span class="cmd">dol</span> <span class="output">top</span></div>
+                <div class="line"><span class="comment">&nbsp;</span></div>
+                <div class="line"><span class="comment"># Try a DOL file with parameters</span></div>
+                <div class="line"><span class="prompt">$</span> <span class="cmd">dol</span> <span style="color:#f0a832;">-f</span> <span class="output">examples/list_containers.dol</span></div>
+            </div>
+        </div>
+
+        <p style="margin-top:16px;font-size:0.82rem;color:var(--muted);text-align:center;" class="reveal">
+            Pre-built binaries for <strong>Linux</strong>, <strong>macOS</strong>, and <strong>Windows</strong> available on
+            <a href="https://github.com/genc-murat/DockQL/releases" style="color:var(--accent);text-decoration:none;font-weight:500;">GitHub Releases →</a>
+        </p>
+    </div>
+</section>
+
+<!-- Footer -->
 <footer>
     <div class="container">
-        <a href="https://github.com/genc-murat/DockQL">GitHub</a>
-        <span class="sep">·</span>
-        <a href="https://github.com/genc-murat/DockQL/blob/main/LICENSE">MIT License</a>
-        <span class="sep">·</span>
-        <span>DOL — Docker Observability Language</span>
+        <div class="footer-links">
+            <a href="https://github.com/genc-murat/DockQL">GitHub</a>
+            <a href="https://github.com/genc-murat/DockQL/blob/main/LICENSE">MIT License</a>
+            <a href="https://github.com/genc-murat/DockQL/releases">Releases</a>
+            <a href="tutorial.html">Tutorial</a>
+            <a href="spec.html">Spec</a>
+            <a href="examples.html">Examples</a>
+        </div>
+        <div class="footer-made-with">DOL — Docker Observability Language · Built with Rust</div>
     </div>
 </footer>
 
+<script>
+/* ── Particle Canvas ───────────────────────────────────────── */
+(function() {
+    const canvas = document.getElementById('particles-canvas');
+    const ctx = canvas.getContext('2d');
+    let particles = [];
+    let animId;
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    class Particle {
+        constructor() { this.reset(); }
+        reset() {
+            this.x = Math.random() * canvas.width;
+            this.y = Math.random() * canvas.height;
+            this.size = Math.random() * 1.5 + 0.5;
+            this.speedX = (Math.random() - 0.5) * 0.3;
+            this.speedY = (Math.random() - 0.5) * 0.3;
+            this.opacity = Math.random() * 0.4 + 0.1;
+        }
+        update() {
+            this.x += this.speedX;
+            this.y += this.speedY;
+            if (this.x < 0 || this.x > canvas.width) this.speedX *= -1;
+            if (this.y < 0 || this.y > canvas.height) this.speedY *= -1;
+        }
+        draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(87, 166, 255, ${this.opacity})`;
+            ctx.fill();
+        }
+    }
+
+    const count = Math.min(60, Math.floor(canvas.width * canvas.height / 15000));
+    for (let i = 0; i < count; i++) particles.push(new Particle());
+
+    function animate() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        particles.forEach(p => { p.update(); p.draw(); });
+        // Draw connections
+        for (let i = 0; i < particles.length; i++) {
+            for (let j = i + 1; j < particles.length; j++) {
+                const dx = particles[i].x - particles[j].x;
+                const dy = particles[i].y - particles[j].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 120) {
+                    ctx.beginPath();
+                    ctx.moveTo(particles[i].x, particles[i].y);
+                    ctx.lineTo(particles[j].x, particles[j].y);
+                    ctx.strokeStyle = `rgba(87, 166, 255, ${0.06 * (1 - dist / 120)})`;
+                    ctx.stroke();
+                }
+            }
+        }
+        animId = requestAnimationFrame(animate);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            cancelAnimationFrame(animId);
+        } else {
+            animate();
+        }
+    });
+
+    animate();
+})();
+
+/* ── Navbar scroll effect ──────────────────────────────────── */
+(function() {
+    const navbar = document.getElementById('navbar');
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+        if (!ticking) {
+            requestAnimationFrame(() => {
+                navbar.classList.toggle('scrolled', window.scrollY > 20);
+                ticking = false;
+            });
+            ticking = true;
+        }
+    });
+})();
+
+/* ── Scroll Reveal ─────────────────────────────────────────── */
+(function() {
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('visible');
+            }
+        });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+})();
+
+/* ── Typewriter Terminal Effect ────────────────────────────── */
+(function() {
+    const typingEl = document.getElementById('typing-text');
+    if (!typingEl) return;
+
+    const queries = [
+        { cmd: 'observe containers | where cpu > 80% | sort cpu desc', label: 'Find high-CPU containers' },
+        { cmd: 'events containers where action = die | select time, container', label: 'Watch container crashes' },
+        { cmd: 'compose myapp | where cpu > 80% | select name, cpu', label: 'Query Compose projects' },
+        { cmd: 'logs container my-app | where message contains \"error\"', label: 'Stream error logs live' },
+        { cmd: 'compose myapp networks | where action = connect', label: 'Monitor network events' },
+        { cmd: 'observe containers join images on id = id', label: 'Cross-target JOIN query' },
+    ];
+
+    let queryIndex = 0;
+    let charIndex = 0;
+    let isDeleting = false;
+    let isPaused = false;
+
+    function type() {
+        const current = queries[queryIndex].cmd;
+        if (!isDeleting) {
+            // Typing
+            if (charIndex < current.length) {
+                typingEl.textContent = current.substring(0, charIndex + 1);
+                charIndex++;
+                setTimeout(type, 40 + Math.random() * 30);
+            } else {
+                // Pause before deleting
+                isPaused = true;
+                setTimeout(() => {
+                    isDeleting = true;
+                    isPaused = false;
+                    type();
+                }, 2500);
+            }
+        } else {
+            // Deleting
+            if (charIndex > 0) {
+                typingEl.textContent = current.substring(0, charIndex - 1);
+                charIndex--;
+                setTimeout(type, 20 + Math.random() * 15);
+            } else {
+                isDeleting = false;
+                queryIndex = (queryIndex + 1) % queries.length;
+                setTimeout(type, 400);
+            }
+        }
+    }
+    type();
+})();
+
+/* ── Copy to Clipboard ─────────────────────────────────────── */
+(function() {
+    document.querySelectorAll('[data-cmd]').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            const cmd = this.dataset.cmd;
+            try {
+                await navigator.clipboard.writeText(cmd);
+                const originalText = this.textContent;
+                this.textContent = 'Copied!';
+                this.classList.add('copied');
+                setTimeout(() => {
+                    this.textContent = originalText;
+                    this.classList.remove('copied');
+                }, 2000);
+            } catch (e) {
+                this.textContent = 'Error';
+                setTimeout(() => {
+                    this.textContent = originalText;
+                }, 2000);
+            }
+        });
+    });
+})();
+
+/* ── Smooth scroll for anchor links ────────────────────────── */
+(function() {
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                e.preventDefault();
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+    });
+})();
+</script>
 </body>
 </html>

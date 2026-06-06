@@ -39,6 +39,42 @@ pub struct DolConfig {
     pub webhook_timeout: Option<u64>,
     /// Timeout for alert container restart action. Default: 30s.
     pub restart_timeout: Option<u64>,
+
+    // ── SMTP / Email notification settings ───────────────────
+    /// SMTP server hostname for email alerts. Default: localhost.
+    pub smtp_host: Option<String>,
+    /// SMTP server port. Default: 25.
+    pub smtp_port: Option<u16>,
+    /// SMTP username (optional).
+    pub smtp_user: Option<String>,
+    /// SMTP password (optional).
+    pub smtp_pass: Option<String>,
+
+    // ── Anomaly detection thresholds ────────────────────────
+    /// CPU % above which a warning is issued. Default: 80.
+    pub analysis_high_cpu_percent: Option<f64>,
+    /// CPU % above which a critical alert is issued. Default: 95.
+    pub analysis_critical_cpu_percent: Option<f64>,
+    /// Memory usage/limit ratio above which a warning is issued. Default: 0.85.
+    pub analysis_memory_pressure_ratio: Option<f64>,
+    /// Memory usage/limit ratio above which a critical alert is issued. Default: 0.95.
+    pub analysis_critical_memory_ratio: Option<f64>,
+    /// Restart count threshold for restart loop detection. Default: 3.
+    pub analysis_restart_loop_count: Option<u64>,
+    /// Number of die events indicating deployment failure. Default: 3.
+    pub analysis_deployment_error_threshold: Option<u64>,
+    /// Memory increase % indicating a resource leak. Default: 20.
+    pub analysis_leak_memory_increase_pct: Option<f64>,
+    /// Min metric samples needed for leak detection. Default: 3.
+    pub analysis_leak_min_samples: Option<u64>,
+    /// Network I/O bytes warning threshold. Default: 1048576 (1 MB).
+    pub analysis_high_network_bytes: Option<u64>,
+    /// Network I/O bytes critical threshold. Default: 10485760 (10 MB).
+    pub analysis_critical_network_bytes: Option<u64>,
+    /// Disk I/O bytes warning threshold. Default: 10485760 (10 MB).
+    pub analysis_high_disk_bytes: Option<u64>,
+    /// Disk I/O bytes critical threshold. Default: 104857600 (100 MB).
+    pub analysis_critical_disk_bytes: Option<u64>,
 }
 
 impl DolConfig {
@@ -143,6 +179,83 @@ pub fn execute_config(action: ConfigAction) -> anyhow::Result<()> {
                 "restart-timeout" | "restart_timeout" => {
                     config.restart_timeout = Some(value.parse().map_err(|_| {
                         anyhow::anyhow!("invalid value for {key}: expected integer (seconds)")
+                    })?);
+                }
+                "smtp-host" | "smtp_host" => {
+                    config.smtp_host = Some(value.clone());
+                }
+                "smtp-port" | "smtp_port" => {
+                    config.smtp_port = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected port number")
+                    })?);
+                }
+                "smtp-user" | "smtp_user" => {
+                    config.smtp_user = Some(value.clone());
+                }
+                "smtp-pass" | "smtp_pass" => {
+                    config.smtp_pass = Some(value.clone());
+                }
+                // ── Anomaly detection threshold keys ────────────────────
+                "analysis-high-cpu-percent" | "analysis_high_cpu_percent" => {
+                    config.analysis_high_cpu_percent = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected number")
+                    })?);
+                }
+                "analysis-critical-cpu-percent" | "analysis_critical_cpu_percent" => {
+                    config.analysis_critical_cpu_percent = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected number")
+                    })?);
+                }
+                "analysis-memory-pressure-ratio" | "analysis_memory_pressure_ratio" => {
+                    config.analysis_memory_pressure_ratio = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected number")
+                    })?);
+                }
+                "analysis-critical-memory-ratio" | "analysis_critical_memory_ratio" => {
+                    config.analysis_critical_memory_ratio = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected number")
+                    })?);
+                }
+                "analysis-restart-loop-count" | "analysis_restart_loop_count" => {
+                    config.analysis_restart_loop_count = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
+                    })?);
+                }
+                "analysis-deployment-error-threshold" | "analysis_deployment_error_threshold" => {
+                    config.analysis_deployment_error_threshold =
+                        Some(value.parse().map_err(|_| {
+                            anyhow::anyhow!("invalid value for {key}: expected integer")
+                        })?);
+                }
+                "analysis-leak-memory-increase-pct" | "analysis_leak_memory_increase_pct" => {
+                    config.analysis_leak_memory_increase_pct =
+                        Some(value.parse().map_err(|_| {
+                            anyhow::anyhow!("invalid value for {key}: expected number")
+                        })?);
+                }
+                "analysis-leak-min-samples" | "analysis_leak_min_samples" => {
+                    config.analysis_leak_min_samples = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
+                    })?);
+                }
+                "analysis-high-network-bytes" | "analysis_high_network_bytes" => {
+                    config.analysis_high_network_bytes = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
+                    })?);
+                }
+                "analysis-critical-network-bytes" | "analysis_critical_network_bytes" => {
+                    config.analysis_critical_network_bytes = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
+                    })?);
+                }
+                "analysis-high-disk-bytes" | "analysis_high_disk_bytes" => {
+                    config.analysis_high_disk_bytes = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
+                    })?);
+                }
+                "analysis-critical-disk-bytes" | "analysis_critical_disk_bytes" => {
+                    config.analysis_critical_disk_bytes = Some(value.parse().map_err(|_| {
+                        anyhow::anyhow!("invalid value for {key}: expected integer")
                     })?);
                 }
                 _ => anyhow::bail!("unknown config key: {key}"),
@@ -402,6 +515,257 @@ api_timeout: 90
         assert!(
             result.is_err(),
             "expected deserialization error for negative value"
+        );
+    }
+
+    // ── SMTP config fields ────────────────────────────────────────────────
+
+    #[test]
+    fn default_smtp_fields_are_none() {
+        let config = DolConfig::default();
+        assert!(config.smtp_host.is_none());
+        assert!(config.smtp_port.is_none());
+        assert!(config.smtp_user.is_none());
+        assert!(config.smtp_pass.is_none());
+    }
+
+    #[test]
+    fn yaml_roundtrip_with_smtp() {
+        let config = DolConfig {
+            smtp_host: Some("smtp.gmail.com".to_owned()),
+            smtp_port: Some(587),
+            smtp_user: Some("user@gmail.com".to_owned()),
+            smtp_pass: Some("app-password".to_owned()),
+            ..DolConfig::default()
+        };
+        let yaml = serde_yaml::to_string(&config).expect("serialize");
+        let deserialized: DolConfig = serde_yaml::from_str(&yaml).expect("deserialize");
+        assert_eq!(deserialized.smtp_host.as_deref(), Some("smtp.gmail.com"));
+        assert_eq!(deserialized.smtp_port, Some(587));
+        assert_eq!(deserialized.smtp_user.as_deref(), Some("user@gmail.com"));
+        assert_eq!(deserialized.smtp_pass.as_deref(), Some("app-password"));
+    }
+
+    #[test]
+    fn yaml_deserialize_smtp_fields() {
+        let yaml = r#"
+smtp_host: smtp.gmail.com
+smtp_port: 587
+smtp_user: user@gmail.com
+smtp_pass: app-password
+"#;
+        let config: DolConfig = serde_yaml::from_str(yaml).expect("deserialize");
+        assert_eq!(config.smtp_host.as_deref(), Some("smtp.gmail.com"));
+        assert_eq!(config.smtp_port, Some(587));
+        assert_eq!(config.smtp_user.as_deref(), Some("user@gmail.com"));
+        assert_eq!(config.smtp_pass.as_deref(), Some("app-password"));
+    }
+
+    #[test]
+    fn yaml_deserialize_smtp_defaults_when_omitted() {
+        let yaml = "api_timeout: 30\n";
+        let config: DolConfig = serde_yaml::from_str(yaml).expect("deserialize");
+        assert!(config.smtp_host.is_none());
+        assert!(config.smtp_port.is_none());
+        assert!(config.smtp_user.is_none());
+        assert!(config.smtp_pass.is_none());
+    }
+
+    #[test]
+    fn config_set_all_smtp_keys_roundtrip_through_yaml() {
+        // Simulate: for each SMTP key, create a config with that key set,
+        // serialize to YAML, deserialize back, and verify the value is preserved.
+        // This validates that all 4 SMTP keys are properly handled by serde.
+        let cases = [
+            ("smtp_host", "smtp.gmail.com"),
+            ("smtp_port", "587"),
+            ("smtp_user", "user@gmail.com"),
+            ("smtp_pass", "app-password"),
+        ];
+
+        for &(key, value) in &cases {
+            let yaml = format!("{key}: {value}\n");
+            let config: DolConfig = serde_yaml::from_str(&yaml)
+                .unwrap_or_else(|e| panic!("failed to deserialize {key}: {e}"));
+
+            match key {
+                "smtp_host" => assert_eq!(config.smtp_host.as_deref(), Some(value)),
+                "smtp_port" => {
+                    let expected: u16 = value.parse().unwrap();
+                    assert_eq!(config.smtp_port, Some(expected));
+                }
+                "smtp_user" => assert_eq!(config.smtp_user.as_deref(), Some(value)),
+                "smtp_pass" => assert_eq!(config.smtp_pass.as_deref(), Some(value)),
+                _ => panic!("unexpected key: {key}"),
+            }
+        }
+    }
+
+    #[test]
+    fn toml_roundtrip_with_smtp() {
+        let config = DolConfig {
+            smtp_host: Some("mail.example.com".to_owned()),
+            smtp_port: Some(465),
+            ..DolConfig::default()
+        };
+        let toml_str = toml::to_string(&config).expect("serialize");
+        let deserialized: DolConfig = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(deserialized.smtp_host.as_deref(), Some("mail.example.com"));
+        assert_eq!(deserialized.smtp_port, Some(465));
+        assert!(deserialized.smtp_user.is_none());
+        assert!(deserialized.smtp_pass.is_none());
+    }
+
+    // ── Analysis threshold config fields ──────────────────────────────
+
+    #[test]
+    fn default_analysis_threshold_fields_are_none() {
+        let config = DolConfig::default();
+        assert!(config.analysis_high_cpu_percent.is_none());
+        assert!(config.analysis_critical_cpu_percent.is_none());
+        assert!(config.analysis_memory_pressure_ratio.is_none());
+        assert!(config.analysis_critical_memory_ratio.is_none());
+        assert!(config.analysis_restart_loop_count.is_none());
+        assert!(config.analysis_deployment_error_threshold.is_none());
+        assert!(config.analysis_leak_memory_increase_pct.is_none());
+        assert!(config.analysis_leak_min_samples.is_none());
+        assert!(config.analysis_high_network_bytes.is_none());
+        assert!(config.analysis_critical_network_bytes.is_none());
+        assert!(config.analysis_high_disk_bytes.is_none());
+        assert!(config.analysis_critical_disk_bytes.is_none());
+    }
+
+    #[test]
+    fn yaml_roundtrip_with_analysis_thresholds() {
+        let config = DolConfig {
+            analysis_high_cpu_percent: Some(85.0),
+            analysis_critical_cpu_percent: Some(98.0),
+            analysis_memory_pressure_ratio: Some(0.90),
+            analysis_critical_memory_ratio: Some(0.99),
+            analysis_restart_loop_count: Some(5),
+            analysis_deployment_error_threshold: Some(10),
+            analysis_leak_memory_increase_pct: Some(30.0),
+            analysis_leak_min_samples: Some(5),
+            analysis_high_network_bytes: Some(2_097_152),
+            analysis_critical_network_bytes: Some(20_971_520),
+            analysis_high_disk_bytes: Some(20_971_520),
+            analysis_critical_disk_bytes: Some(209_715_200),
+            ..DolConfig::default()
+        };
+        let yaml = serde_yaml::to_string(&config).expect("serialize");
+        let deserialized: DolConfig = serde_yaml::from_str(&yaml).expect("deserialize");
+        assert_eq!(deserialized.analysis_high_cpu_percent, Some(85.0));
+        assert_eq!(deserialized.analysis_critical_cpu_percent, Some(98.0));
+        assert_eq!(deserialized.analysis_memory_pressure_ratio, Some(0.90));
+        assert_eq!(deserialized.analysis_critical_memory_ratio, Some(0.99));
+        assert_eq!(deserialized.analysis_restart_loop_count, Some(5));
+        assert_eq!(deserialized.analysis_deployment_error_threshold, Some(10));
+        assert_eq!(deserialized.analysis_leak_memory_increase_pct, Some(30.0));
+        assert_eq!(deserialized.analysis_leak_min_samples, Some(5));
+        assert_eq!(deserialized.analysis_high_network_bytes, Some(2_097_152));
+        assert_eq!(
+            deserialized.analysis_critical_network_bytes,
+            Some(20_971_520)
+        );
+        assert_eq!(deserialized.analysis_high_disk_bytes, Some(20_971_520));
+        assert_eq!(deserialized.analysis_critical_disk_bytes, Some(209_715_200));
+    }
+
+    #[test]
+    fn yaml_deserialize_analysis_defaults_when_omitted() {
+        let yaml = "api_timeout: 30\n";
+        let config: DolConfig = serde_yaml::from_str(yaml).expect("deserialize");
+        assert!(config.analysis_high_cpu_percent.is_none());
+        assert!(config.analysis_critical_cpu_percent.is_none());
+        assert!(config.analysis_restart_loop_count.is_none());
+    }
+
+    #[test]
+    fn config_set_all_analysis_keys_roundtrip_through_yaml() {
+        let cases = [
+            ("analysis_high_cpu_percent", "85.0"),
+            ("analysis_critical_cpu_percent", "98.0"),
+            ("analysis_memory_pressure_ratio", "0.90"),
+            ("analysis_critical_memory_ratio", "0.99"),
+            ("analysis_restart_loop_count", "5"),
+            ("analysis_deployment_error_threshold", "10"),
+            ("analysis_leak_memory_increase_pct", "30.0"),
+            ("analysis_leak_min_samples", "5"),
+            ("analysis_high_network_bytes", "2097152"),
+            ("analysis_critical_network_bytes", "20971520"),
+            ("analysis_high_disk_bytes", "20971520"),
+            ("analysis_critical_disk_bytes", "209715200"),
+        ];
+
+        for &(key, value) in &cases {
+            let yaml = format!("{key}: {value}\n");
+            let config: DolConfig = serde_yaml::from_str(&yaml)
+                .unwrap_or_else(|e| panic!("failed to deserialize {key}: {e}"));
+
+            match key {
+                "analysis_high_cpu_percent" => {
+                    assert_eq!(config.analysis_high_cpu_percent, Some(85.0));
+                }
+                "analysis_critical_cpu_percent" => {
+                    assert_eq!(config.analysis_critical_cpu_percent, Some(98.0));
+                }
+                "analysis_memory_pressure_ratio" => {
+                    assert_eq!(config.analysis_memory_pressure_ratio, Some(0.90));
+                }
+                "analysis_critical_memory_ratio" => {
+                    assert_eq!(config.analysis_critical_memory_ratio, Some(0.99));
+                }
+                "analysis_restart_loop_count" => {
+                    assert_eq!(config.analysis_restart_loop_count, Some(5));
+                }
+                "analysis_deployment_error_threshold" => {
+                    assert_eq!(config.analysis_deployment_error_threshold, Some(10));
+                }
+                "analysis_leak_memory_increase_pct" => {
+                    assert_eq!(config.analysis_leak_memory_increase_pct, Some(30.0));
+                }
+                "analysis_leak_min_samples" => {
+                    assert_eq!(config.analysis_leak_min_samples, Some(5));
+                }
+                "analysis_high_network_bytes" => {
+                    assert_eq!(config.analysis_high_network_bytes, Some(2_097_152));
+                }
+                "analysis_critical_network_bytes" => {
+                    assert_eq!(config.analysis_critical_network_bytes, Some(20_971_520));
+                }
+                "analysis_high_disk_bytes" => {
+                    assert_eq!(config.analysis_high_disk_bytes, Some(20_971_520));
+                }
+                "analysis_critical_disk_bytes" => {
+                    assert_eq!(config.analysis_critical_disk_bytes, Some(209_715_200));
+                }
+                _ => panic!("unexpected key: {key}"),
+            }
+        }
+    }
+
+    #[test]
+    fn toml_roundtrip_with_analysis_thresholds() {
+        let config = DolConfig {
+            analysis_high_cpu_percent: Some(90.0),
+            analysis_restart_loop_count: Some(7),
+            ..DolConfig::default()
+        };
+        let toml_str = toml::to_string(&config).expect("serialize");
+        let deserialized: DolConfig = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(deserialized.analysis_high_cpu_percent, Some(90.0));
+        assert_eq!(deserialized.analysis_restart_loop_count, Some(7));
+        assert!(deserialized.analysis_critical_cpu_percent.is_none());
+    }
+
+    #[test]
+    fn config_set_smtp_invalid_port_rejected() {
+        // Non-integer port value should fail to deserialize for smtp_port field.
+        let yaml = "smtp_port: not_a_number\n";
+        let result: Result<DolConfig, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "expected deserialization error for invalid port"
         );
     }
 }

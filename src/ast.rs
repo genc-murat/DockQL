@@ -179,11 +179,51 @@ pub enum PipelineNode {
     },
     Fill {
         field: String,
-        default: Expression,
+        /// The default value expression (supports if/case/when like `set`).
+        default: SetValue,
+        /// Optional condition: only fill rows that match this condition.
+        condition: Option<Expression>,
     },
     Let {
         name: String,
         value: Expression,
+    },
+    /// Print debug info (row count and schema) to stderr.
+    /// Does not modify the data stream.
+    Debug,
+    /// Assert that a condition holds for every row.
+    /// If any row fails the condition, the query fails with an error.
+    /// Acts as a pass-through when all rows pass.
+    Assert(Expression),
+    /// Assign a sequential row number (1-based) to each row.
+    RowNumber {
+        /// The alias/column name for the row number.
+        alias: String,
+    },
+    /// Rank rows by a field value (ties get same rank).
+    Rank {
+        /// Field to rank by.
+        field: String,
+        /// The alias/column name for the rank.
+        alias: String,
+    },
+    /// Access the value of a field from the previous row (like SQL LAG).
+    Lag {
+        /// Field whose value from the previous row to retrieve.
+        field: String,
+        /// The alias/column name for the lag value.
+        alias: String,
+        /// How many rows to look back (default 1).
+        offset: u64,
+    },
+    /// Access the value of a field from the next row (like SQL LEAD).
+    Lead {
+        /// Field whose value from the next row to retrieve.
+        field: String,
+        /// The alias/column name for the lead value.
+        alias: String,
+        /// How many rows to look ahead (default 1).
+        offset: u64,
     },
 }
 
@@ -192,6 +232,8 @@ pub struct AggregateExpr {
     pub function: String,
     pub field: String,
     pub alias: String,
+    /// Additional arguments for aggregate functions (e.g., percentile value for `percentile`).
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -240,6 +282,17 @@ pub enum AlertAction {
     Print(String),
     Webhook(String),
     Restart(SingularTarget),
+    /// Send a formatted message to a Slack channel via Incoming Webhook.
+    Slack(String),
+    /// Send a formatted message to a Discord channel via Webhook.
+    Discord(String),
+    /// Send an email notification via SMTP.
+    Email {
+        /// Recipient email address.
+        to: String,
+        /// Email subject line.
+        subject: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

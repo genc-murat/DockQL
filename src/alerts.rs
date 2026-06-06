@@ -69,9 +69,30 @@ pub struct AlertEvent {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub enum AlertActionPlan {
-    Print { message: String },
-    Webhook { url: String, executed: bool },
-    Restart { target: String, executed: bool },
+    Print {
+        message: String,
+    },
+    Webhook {
+        url: String,
+        executed: bool,
+    },
+    Restart {
+        target: String,
+        executed: bool,
+    },
+    Slack {
+        url: String,
+        executed: bool,
+    },
+    Discord {
+        url: String,
+        executed: bool,
+    },
+    Email {
+        to: String,
+        subject: String,
+        executed: bool,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -175,6 +196,49 @@ pub fn render_alert_event(event: &AlertEvent) -> String {
                 )
             }
         }
+        AlertActionPlan::Slack { url, executed } => {
+            if *executed {
+                format!(
+                    "{} [{}]: POSTED Slack alert to {}",
+                    event.container_name, event.container_id, url
+                )
+            } else {
+                format!(
+                    "{} [{}]: FAILED to POST Slack alert to {}",
+                    event.container_name, event.container_id, url
+                )
+            }
+        }
+        AlertActionPlan::Discord { url, executed } => {
+            if *executed {
+                format!(
+                    "{} [{}]: POSTED Discord alert to {}",
+                    event.container_name, event.container_id, url
+                )
+            } else {
+                format!(
+                    "{} [{}]: FAILED to POST Discord alert to {}",
+                    event.container_name, event.container_id, url
+                )
+            }
+        }
+        AlertActionPlan::Email {
+            to,
+            subject,
+            executed,
+        } => {
+            if *executed {
+                format!(
+                    "{} [{}]: SENT email \"{}\" to {}",
+                    event.container_name, event.container_id, subject, to
+                )
+            } else {
+                format!(
+                    "{} [{}]: FAILED to send email \"{}\" to {}",
+                    event.container_name, event.container_id, subject, to
+                )
+            }
+        }
     }
 }
 
@@ -209,6 +273,28 @@ fn alert_event(rule: &AlertRule, sample: &MetricSample) -> AlertEvent {
                 executed,
             }
         }
+        AlertAction::Slack(url) => {
+            let executed = execute_slack(url, &sample_key(sample));
+            AlertActionPlan::Slack {
+                url: url.clone(),
+                executed,
+            }
+        }
+        AlertAction::Discord(url) => {
+            let executed = execute_discord(url, &sample_key(sample));
+            AlertActionPlan::Discord {
+                url: url.clone(),
+                executed,
+            }
+        }
+        AlertAction::Email { to, subject } => {
+            let executed = execute_email(to, subject, &sample_key(sample));
+            AlertActionPlan::Email {
+                to: to.clone(),
+                subject: subject.clone(),
+                executed,
+            }
+        }
     };
     let message = render_action_message(&action);
 
@@ -221,13 +307,199 @@ fn alert_event(rule: &AlertRule, sample: &MetricSample) -> AlertEvent {
 }
 
 fn execute_webhook(url: &str) -> bool {
-    async fn do_webhook(url: &str, timeout: StdDuration) -> Result<bool, String> {
+    execute_webhook_payload(url, &serde_json::json!({}))
+}
+
+fn execute_slack(url: &str, container: &str) -> bool {
+    let message = format!(
+        "[DockQL Alert] Container `{}` triggered an alert",
+        container
+    );
+    let payload = serde_json::json!({
+        "text": message,
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "DockQL Alert"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": format!("*Container:* {}", container)
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": format!("*Time:* {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))
+                    }
+                ]
+            }
+        ]
+    });
+    execute_webhook_payload(url, &payload)
+}
+
+fn execute_discord(url: &str, container: &str) -> bool {
+    let payload = serde_json::json!({
+        "content": format!("DockQL Alert for `{}`", container),
+        "embeds": [
+            {
+                "title": "DockQL Alert",
+                "description": format!("Container **{}** triggered an alert", container),
+                "color": 0xFF0000,
+                "fields": [
+                    {
+                        "name": "Container",
+                        "value": container,
+                        "inline": true
+                    },
+                    {
+                        "name": "Time",
+                        "value": chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                        "inline": true
+                    }
+                ],
+                "footer": {
+                    "text": "DockQL"
+                },
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }
+        ]
+    });
+    execute_webhook_payload(url, &payload)
+}
+
+fn execute_email(to: &str, subject: &str, container: &str) -> bool {
+    use lettre::{
+        AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+        transport::smtp::authentication::Credentials,
+    };
+
+    let body = format!(
+        "DockQL Alert\n\nContainer: {}\nSubject: {}\nTime: {}\n\nThis is an automated alert from DockQL.\n",
+        container,
+        subject,
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    );
+
+    let email = match Message::builder()
+        .from(
+            "DockQL <noreply@dockql>"
+                .parse()
+                .expect("hardcoded DockQL noreply email address"),
+        )
+        .to(to.parse().expect("invalid recipient email address"))
+        .subject(subject)
+        .body(body)
+    {
+        Ok(msg) => msg,
+        Err(e) => {
+            eprintln!("Failed to build email: {e}");
+            return false;
+        }
+    };
+
+    // Try config file first, then environment variables, then defaults
+    let cfg = crate::config::DolConfig::load();
+    let smtp_host = cfg
+        .smtp_host
+        .clone()
+        .or_else(|| std::env::var("DOCKQL_SMTP_HOST").ok())
+        .unwrap_or_else(|| "localhost".to_owned());
+    let smtp_port: u16 = cfg
+        .smtp_port
+        .or_else(|| {
+            std::env::var("DOCKQL_SMTP_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+        })
+        .unwrap_or(25);
+    let smtp_user = cfg
+        .smtp_user
+        .clone()
+        .or_else(|| std::env::var("DOCKQL_SMTP_USER").ok());
+    let smtp_pass = cfg
+        .smtp_pass
+        .clone()
+        .or_else(|| std::env::var("DOCKQL_SMTP_PASS").ok());
+
+    async fn do_email(
+        email: Message,
+        host: String,
+        port: u16,
+        user: Option<String>,
+        pass: Option<String>,
+    ) -> Result<bool, String> {
+        let creds = match (user, pass) {
+            (Some(u), Some(p)) => Some(Credentials::new(u, p)),
+            _ => None,
+        };
+
+        let mailer = match creds {
+            Some(c) => AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
+                .map_err(|e| format!("SMTP relay setup: {e}"))?
+                .port(port)
+                .credentials(c)
+                .build(),
+            None => AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
+                .map_err(|e| format!("SMTP relay setup: {e}"))?
+                .port(port)
+                .build(),
+        };
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            mailer
+                .send(email)
+                .await
+                .map_err(|e| format!("SMTP send: {e}"))?;
+            Ok(true)
+        })
+        .await
+        .map_err(|_| "SMTP send timed out".to_owned())?
+    }
+
+    match std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("Failed to create runtime for email: {e}");
+                return Ok(false);
+            }
+        };
+        rt.block_on(do_email(email, smtp_host, smtp_port, smtp_user, smtp_pass))
+    })
+    .join()
+    {
+        Ok(Ok(success)) => success,
+        Ok(Err(e)) => {
+            eprintln!("Email send failed: {e}");
+            false
+        }
+        Err(_) => {
+            eprintln!("Email thread panicked");
+            false
+        }
+    }
+}
+
+/// POST a JSON payload to a webhook URL.
+fn execute_webhook_payload(url: &str, payload: &serde_json::Value) -> bool {
+    async fn do_post(
+        url: &str,
+        payload: &serde_json::Value,
+        timeout: StdDuration,
+    ) -> Result<bool, String> {
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
             .map_err(|e| format!("reqwest client: {e}"))?;
         let resp = client
             .post(url)
+            .json(payload)
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
@@ -236,10 +508,11 @@ fn execute_webhook(url: &str) -> bool {
 
     let timeout = webhook_timeout();
     let url = url.to_owned();
+    let payload = payload.clone();
     match std::thread::spawn(move || match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt.block_on(do_webhook(&url, timeout)),
+        Ok(rt) => rt.block_on(do_post(&url, &payload, timeout)),
         Err(e) => {
-            eprintln!("Failed to create runtime for webhook: {e}");
+            eprintln!("Failed to create runtime: {e}");
             Ok(false)
         }
     })
@@ -312,6 +585,31 @@ fn render_action_message(action: &AlertActionPlan) -> String {
                 format!("restarted {target}")
             } else {
                 format!("restart FAILED for {target}")
+            }
+        }
+        AlertActionPlan::Slack { url, executed } => {
+            if *executed {
+                format!("Slack alert sent to {url}")
+            } else {
+                format!("Slack alert FAILED for {url}")
+            }
+        }
+        AlertActionPlan::Discord { url, executed } => {
+            if *executed {
+                format!("Discord alert sent to {url}")
+            } else {
+                format!("Discord alert FAILED for {url}")
+            }
+        }
+        AlertActionPlan::Email {
+            to,
+            subject,
+            executed,
+        } => {
+            if *executed {
+                format!("email \"{subject}\" sent to {to}")
+            } else {
+                format!("email \"{subject}\" FAILED for {to}")
             }
         }
     }
@@ -482,6 +780,66 @@ mod tests {
             restart_events[0].action,
             AlertActionPlan::Restart { .. }
         ));
+    }
+
+    #[test]
+    fn plans_slack_discord_email_as_actions() {
+        let slack =
+            alert_rule(r#"alert when cpu > 80% then slack "https://hooks.slack.com/services/xxx""#);
+        let discord = alert_rule(
+            r#"alert when cpu > 80% then discord "https://discord.com/api/webhooks/xxx""#,
+        );
+        let email = alert_rule(r#"alert when cpu > 80% then email "admin@example.com""#);
+        let email_with_subject =
+            alert_rule(r#"alert when cpu > 80% then email "admin@example.com" subject "High CPU""#);
+        let collector = MockMetricsCollector {
+            samples: vec![sample("api", 90.0)],
+        };
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let slack_events = rt
+            .block_on(evaluate_alert_once(&slack, &collector))
+            .expect("slack");
+        let discord_events = rt
+            .block_on(evaluate_alert_once(&discord, &collector))
+            .expect("discord");
+        let email_events = rt
+            .block_on(evaluate_alert_once(&email, &collector))
+            .expect("email");
+        let email_subject_events = rt
+            .block_on(evaluate_alert_once(&email_with_subject, &collector))
+            .expect("email with subject");
+
+        assert!(
+            matches!(slack_events[0].action, AlertActionPlan::Slack { .. }),
+            "expected Slack action"
+        );
+        assert!(
+            matches!(discord_events[0].action, AlertActionPlan::Discord { .. }),
+            "expected Discord action"
+        );
+        assert!(
+            matches!(email_events[0].action, AlertActionPlan::Email { .. }),
+            "expected Email action"
+        );
+        assert!(
+            matches!(
+                email_subject_events[0].action,
+                AlertActionPlan::Email { .. }
+            ),
+            "expected Email action with custom subject"
+        );
+
+        // Verify email with custom subject preserves the subject
+        if let AlertActionPlan::Email {
+            ref subject,
+            executed,
+            ..
+        } = email_subject_events[0].action
+        {
+            assert_eq!(subject, "High CPU");
+            assert!(!executed, "email should not actually send in tests");
+        }
     }
 
     fn alert_rule(source: &str) -> AlertRule {

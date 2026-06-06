@@ -33,6 +33,9 @@ use tokio::time::timeout;
 /// Shared type alias for the complex Docker event stream return type.
 pub type DockerEventStream = Pin<Box<dyn Stream<Item = Result<DockerEvent, DockerError>> + Send>>;
 
+/// Shared type alias for the Docker log stream return type.
+pub type DockerLogStream = Pin<Box<dyn Stream<Item = Result<String, DockerError>> + Send>>;
+
 // ── Domain types ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -144,6 +147,11 @@ pub trait DockerClient {
         id: &str,
         tail: usize,
     ) -> impl std::future::Future<Output = Result<Vec<String>, DockerError>> + Send;
+    fn container_logs_stream(
+        &self,
+        id: &str,
+        tail: usize,
+    ) -> impl std::future::Future<Output = Result<DockerLogStream, DockerError>> + Send;
     fn container_stats(
         &self,
         id: &str,
@@ -426,6 +434,36 @@ impl DockerClient for BollardDockerClient {
         Ok(lines)
     }
 
+    async fn container_logs_stream(
+        &self,
+        id: &str,
+        tail: usize,
+    ) -> Result<DockerLogStream, DockerError> {
+        let options = Some(qp::LogsOptions {
+            tail: tail.to_string(),
+            stdout: true,
+            stderr: true,
+            follow: true,
+            ..Default::default()
+        });
+        let stream = self.docker.logs(id, options);
+        use bollard::container::LogOutput as LO;
+        let mapped = stream.flat_map(|item| {
+            let items: Vec<Result<String, DockerError>> = match item {
+                Ok(LO::StdOut { message } | LO::StdErr { message }) => {
+                    String::from_utf8_lossy(&message)
+                        .lines()
+                        .map(|l| Ok(l.to_owned()))
+                        .collect()
+                }
+                Ok(_) => Vec::new(),
+                Err(e) => vec![Err(DockerError::Bollard(e))],
+            };
+            futures_util::stream::iter(items)
+        });
+        Ok(Box::pin(mapped))
+    }
+
     async fn container_stats(&self, id: &str) -> Result<MetricSample, DockerError> {
         use bollard::query_parameters::StatsOptions;
         let stream_fut = self.docker.stats(
@@ -526,6 +564,21 @@ impl DockerClient for MockDockerClient {
             .find(|c| c.id.starts_with(id) || c.name == id)
             .map_or_else(|| id.to_owned(), |c| c.id.clone());
         Ok(self.logs.get(&key).cloned().unwrap_or_default())
+    }
+
+    async fn container_logs_stream(
+        &self,
+        id: &str,
+        _tail: usize,
+    ) -> Result<DockerLogStream, DockerError> {
+        let key = self
+            .containers
+            .iter()
+            .find(|c| c.id.starts_with(id) || c.name == id)
+            .map_or_else(|| id.to_owned(), |c| c.id.clone());
+        let logs = self.logs.get(&key).cloned().unwrap_or_default();
+        let items: Vec<Result<String, DockerError>> = logs.into_iter().map(Ok).collect();
+        Ok(Box::pin(futures_util::stream::iter(items)))
     }
 
     async fn container_stats(&self, id: &str) -> Result<MetricSample, DockerError> {

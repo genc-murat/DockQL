@@ -151,6 +151,14 @@ pub struct AnalysisThresholds {
     pub resource_leak_memory_increase_pct: f64,
     /// Minimum number of metric samples needed to detect a trend.
     pub resource_leak_min_samples: u64,
+    /// Network I/O bytes above which a warning is issued (cumulative per sample).
+    pub high_network_bytes: u64,
+    /// Network I/O bytes above which a critical alert is issued.
+    pub critical_network_bytes: u64,
+    /// Disk I/O bytes above which a warning is issued (cumulative per sample).
+    pub high_disk_bytes: u64,
+    /// Disk I/O bytes above which a critical alert is issued.
+    pub critical_disk_bytes: u64,
 }
 
 impl Default for AnalysisThresholds {
@@ -164,6 +172,33 @@ impl Default for AnalysisThresholds {
             deployment_error_threshold: 3,
             resource_leak_memory_increase_pct: 20.0,
             resource_leak_min_samples: 3,
+            high_network_bytes: 1_048_576,      // 1 MB
+            critical_network_bytes: 10_485_760, // 10 MB
+            high_disk_bytes: 10_485_760,        // 10 MB
+            critical_disk_bytes: 104_857_600,   // 100 MB
+        }
+    }
+}
+
+impl AnalysisThresholds {
+    /// Build thresholds from a [`DolConfig`], falling back to defaults for unset fields.
+    #[must_use]
+    pub fn from_config(config: &crate::config::DolConfig) -> Self {
+        Self {
+            high_cpu_percent: config.analysis_high_cpu_percent.unwrap_or(80.0),
+            critical_cpu_percent: config.analysis_critical_cpu_percent.unwrap_or(95.0),
+            memory_pressure_ratio: config.analysis_memory_pressure_ratio.unwrap_or(0.85),
+            critical_memory_ratio: config.analysis_critical_memory_ratio.unwrap_or(0.95),
+            restart_loop_count: config.analysis_restart_loop_count.unwrap_or(3),
+            deployment_error_threshold: config.analysis_deployment_error_threshold.unwrap_or(3),
+            resource_leak_memory_increase_pct: config
+                .analysis_leak_memory_increase_pct
+                .unwrap_or(20.0),
+            resource_leak_min_samples: config.analysis_leak_min_samples.unwrap_or(3),
+            high_network_bytes: config.analysis_high_network_bytes.unwrap_or(1_048_576),
+            critical_network_bytes: config.analysis_critical_network_bytes.unwrap_or(10_485_760),
+            high_disk_bytes: config.analysis_high_disk_bytes.unwrap_or(10_485_760),
+            critical_disk_bytes: config.analysis_critical_disk_bytes.unwrap_or(104_857_600),
         }
     }
 }
@@ -171,6 +206,7 @@ impl Default for AnalysisThresholds {
 // ── Main analysis dispatcher ───────────────────────────────────────────────
 
 /// Execute an analysis query using live Docker data + metrics.
+/// Thresholds are loaded from the user's config file (if available), falling back to defaults.
 pub async fn execute_analyze<C, M>(
     query: &AnalyzeQuery,
     docker: &C,
@@ -180,7 +216,9 @@ where
     C: DockerClient + ?Sized,
     M: MetricsCollector + ?Sized,
 {
-    execute_analyze_with_thresholds(query, docker, metrics, &AnalysisThresholds::default()).await
+    let cfg = crate::config::DolConfig::load();
+    let thresholds = AnalysisThresholds::from_config(&cfg);
+    execute_analyze_with_thresholds(query, docker, metrics, &thresholds).await
 }
 
 /// Execute an analysis query with custom thresholds.
@@ -213,8 +251,6 @@ where
             AnalysisVerb::Find,
             Some("density"),
         ) => analyze_density(docker).await,
-        // analyze containers find leaks or drift — requires store, return error
-
         // analyze containers correlate
         (AnalysisTarget::Collection(CollectionTarget::Containers), AnalysisVerb::Correlate, _) => {
             correlate_containers(docker, metrics, thresholds).await
@@ -234,6 +270,7 @@ where
 }
 
 /// Execute an analysis query using historical data from a telemetry store.
+/// Thresholds are loaded from the user's config file (if available), falling back to defaults.
 pub fn execute_analyze_with_store<S>(
     query: &AnalyzeQuery,
     store: &S,
@@ -241,7 +278,8 @@ pub fn execute_analyze_with_store<S>(
 where
     S: TelemetryStore + ?Sized,
 {
-    let thresholds = AnalysisThresholds::default();
+    let cfg = crate::config::DolConfig::load();
+    let thresholds = AnalysisThresholds::from_config(&cfg);
 
     match (&query.target, &query.verb, query.subject.as_deref()) {
         // analyze containers find anomalies (default, from store)
@@ -524,6 +562,124 @@ pub fn detect_unhealthy_states(containers: &[Container]) -> Vec<Anomaly> {
                     format!("image={}", c.image),
                 ],
             })
+        })
+        .collect()
+}
+
+/// Detect high disk I/O (read/write) above thresholds.
+#[must_use]
+pub fn detect_high_disk_io(
+    samples: &[MetricSample],
+    high_threshold: u64,
+    critical_threshold: u64,
+) -> Vec<Anomaly> {
+    samples
+        .iter()
+        .filter_map(|s| {
+            let read = s.disk_read_bytes?;
+            let write = s.disk_write_bytes?;
+            let max_bytes = read.max(write);
+
+            if max_bytes >= critical_threshold {
+                Some(Anomaly {
+                    severity: Severity::Critical,
+                    kind: "high_disk_io".to_owned(),
+                    container: s.container_name.clone(),
+                    message: format!(
+                        "Container '{}' disk I/O at {}/{} (read/write) — critical threshold: {}",
+                        s.container_name,
+                        format_bytes(read),
+                        format_bytes(write),
+                        format_bytes(critical_threshold),
+                    ),
+                    evidence: vec![
+                        format!("disk_read={}", read),
+                        format!("disk_write={}", write),
+                        format!("max_bytes={}", max_bytes),
+                        format!("timestamp={}", s.timestamp),
+                    ],
+                })
+            } else if max_bytes >= high_threshold {
+                Some(Anomaly {
+                    severity: Severity::Warning,
+                    kind: "high_disk_io".to_owned(),
+                    container: s.container_name.clone(),
+                    message: format!(
+                        "Container '{}' disk I/O at {}/{} (read/write) — warning threshold: {}",
+                        s.container_name,
+                        format_bytes(read),
+                        format_bytes(write),
+                        format_bytes(high_threshold),
+                    ),
+                    evidence: vec![
+                        format!("disk_read={}", read),
+                        format!("disk_write={}", write),
+                        format!("max_bytes={}", max_bytes),
+                        format!("timestamp={}", s.timestamp),
+                    ],
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Detect high network I/O (RX/TX) above thresholds.
+#[must_use]
+pub fn detect_high_network_io(
+    samples: &[MetricSample],
+    high_threshold: u64,
+    critical_threshold: u64,
+) -> Vec<Anomaly> {
+    samples
+        .iter()
+        .filter_map(|s| {
+            let rx = s.network_rx_bytes?;
+            let tx = s.network_tx_bytes?;
+            let max_bytes = rx.max(tx);
+
+            if max_bytes >= critical_threshold {
+                Some(Anomaly {
+                    severity: Severity::Critical,
+                    kind: "high_network_io".to_owned(),
+                    container: s.container_name.clone(),
+                    message: format!(
+                        "Container '{}' network I/O at {}/{} (RX/TX) — critical threshold: {}",
+                        s.container_name,
+                        format_bytes(rx),
+                        format_bytes(tx),
+                        format_bytes(critical_threshold),
+                    ),
+                    evidence: vec![
+                        format!("network_rx={}", rx),
+                        format!("network_tx={}", tx),
+                        format!("max_bytes={}", max_bytes),
+                        format!("timestamp={}", s.timestamp),
+                    ],
+                })
+            } else if max_bytes >= high_threshold {
+                Some(Anomaly {
+                    severity: Severity::Warning,
+                    kind: "high_network_io".to_owned(),
+                    container: s.container_name.clone(),
+                    message: format!(
+                        "Container '{}' network I/O at {}/{} (RX/TX) — warning threshold: {}",
+                        s.container_name,
+                        format_bytes(rx),
+                        format_bytes(tx),
+                        format_bytes(high_threshold),
+                    ),
+                    evidence: vec![
+                        format!("network_rx={}", rx),
+                        format!("network_tx={}", tx),
+                        format!("max_bytes={}", max_bytes),
+                        format!("timestamp={}", s.timestamp),
+                    ],
+                })
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -1101,6 +1257,16 @@ where
         thresholds.critical_memory_ratio,
     ));
     anomalies.extend(detect_unhealthy_states(&containers));
+    anomalies.extend(detect_high_disk_io(
+        &samples,
+        thresholds.high_disk_bytes,
+        thresholds.critical_disk_bytes,
+    ));
+    anomalies.extend(detect_high_network_io(
+        &samples,
+        thresholds.high_network_bytes,
+        thresholds.critical_network_bytes,
+    ));
 
     // Sort by severity (Critical first).
     anomalies.sort_by_key(|a| std::cmp::Reverse(severity_rank(a.severity)));
@@ -1153,6 +1319,21 @@ where
         &events,
         thresholds.deployment_error_threshold,
     ));
+    anomalies.extend(detect_high_disk_io(
+        &samples,
+        thresholds.high_disk_bytes,
+        thresholds.critical_disk_bytes,
+    ));
+    anomalies.extend(detect_high_network_io(
+        &samples,
+        thresholds.high_network_bytes,
+        thresholds.critical_network_bytes,
+    ));
+    anomalies.extend(detect_resource_leaks(store, thresholds));
+    // Config drift requires snapshots — skip silently if unavailable
+    if let Ok(drift) = detect_config_drift(store) {
+        anomalies.extend(drift);
+    }
 
     anomalies.sort_by_key(|a| std::cmp::Reverse(severity_rank(a.severity)));
 
@@ -1704,6 +1885,100 @@ mod tests {
     }
 
     // ── Unhealthy state tests ──────────────────────────────────────────
+
+    // ── Disk I/O tests ─────────────────────────────────────────────
+
+    #[test]
+    fn detects_high_disk_io_warning() {
+        let samples = vec![test_sample("api", 10.0, 128, 1024)]; // default disk=0, below threshold
+        let high_samples = vec![MetricSample {
+            disk_read_bytes: Some(20_000_000), // ~19 MB, above 10 MB warning
+            disk_write_bytes: Some(5_000_000),
+            ..test_sample("api", 10.0, 128, 1024)
+        }];
+
+        let anomalies = detect_high_disk_io(&high_samples, 10_485_760, 104_857_600);
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].severity, Severity::Warning);
+        assert_eq!(anomalies[0].kind, "high_disk_io");
+        assert_eq!(anomalies[0].container, "api");
+
+        // Low I/O should produce nothing
+        let anomalies = detect_high_disk_io(&samples, 10_485_760, 104_857_600);
+        assert!(anomalies.is_empty());
+    }
+
+    #[test]
+    fn detects_critical_disk_io() {
+        let samples = vec![MetricSample {
+            disk_write_bytes: Some(200_000_000), // ~191 MB, above 100 MB critical
+            disk_read_bytes: Some(10_000_000),
+            ..test_sample("api", 10.0, 128, 1024)
+        }];
+
+        let anomalies = detect_high_disk_io(&samples, 10_485_760, 104_857_600);
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].severity, Severity::Critical);
+        assert_eq!(anomalies[0].kind, "high_disk_io");
+    }
+
+    #[test]
+    fn no_disk_io_anomaly_when_none_supplied() {
+        let samples = vec![MetricSample {
+            disk_read_bytes: None,
+            disk_write_bytes: None,
+            ..test_sample("api", 10.0, 128, 1024)
+        }];
+        let anomalies = detect_high_disk_io(&samples, 10_485_760, 104_857_600);
+        assert!(anomalies.is_empty());
+    }
+
+    // ── Network I/O tests ─────────────────────────────────────────────
+
+    #[test]
+    fn detects_high_network_io_warning() {
+        let samples = vec![test_sample("api", 10.0, 128, 1024)]; // default net=1024/2048, below threshold
+        let high_samples = vec![MetricSample {
+            network_rx_bytes: Some(5_000_000), // ~4.8 MB, above 1 MB warning
+            network_tx_bytes: Some(2_000_000),
+            ..test_sample("api", 10.0, 128, 1024)
+        }];
+
+        let anomalies = detect_high_network_io(&high_samples, 1_048_576, 10_485_760);
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].severity, Severity::Warning);
+        assert_eq!(anomalies[0].kind, "high_network_io");
+        assert_eq!(anomalies[0].container, "api");
+
+        // Low I/O should produce nothing
+        let anomalies = detect_high_network_io(&samples, 1_048_576, 10_485_760);
+        assert!(anomalies.is_empty());
+    }
+
+    #[test]
+    fn detects_critical_network_io() {
+        let samples = vec![MetricSample {
+            network_rx_bytes: Some(50_000_000), // ~47.7 MB, above 10 MB critical
+            network_tx_bytes: Some(1_000_000),
+            ..test_sample("api", 10.0, 128, 1024)
+        }];
+
+        let anomalies = detect_high_network_io(&samples, 1_048_576, 10_485_760);
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].severity, Severity::Critical);
+        assert_eq!(anomalies[0].kind, "high_network_io");
+    }
+
+    #[test]
+    fn no_network_io_anomaly_when_none_supplied() {
+        let samples = vec![MetricSample {
+            network_rx_bytes: None,
+            network_tx_bytes: None,
+            ..test_sample("api", 10.0, 128, 1024)
+        }];
+        let anomalies = detect_high_network_io(&samples, 1_048_576, 10_485_760);
+        assert!(anomalies.is_empty());
+    }
 
     #[test]
     fn detects_unhealthy_states() {
@@ -2425,6 +2700,83 @@ mod tests {
     }
 
     // ── Pre-existing tests ───────────────────────────────────────────
+
+    #[test]
+    fn find_anomalies_from_store_includes_leaks_and_drift() {
+        let mut store = crate::storage::InMemoryTelemetryStore::default();
+
+        // Write metrics with increasing memory (resource leak pattern)
+        for i in 0..5 {
+            let mem = 100_000_000 + (i * 30_000_000);
+            store
+                .write_metric(MetricSample {
+                    container_id: "leaky_id".to_string(),
+                    container_name: "leaky".to_owned(),
+                    timestamp: format!("2026-01-01T12:00:{:02}Z", i),
+                    cpu_percent: Some(50.0),
+                    memory_usage_bytes: Some(mem),
+                    memory_limit_bytes: Some(1_073_741_824),
+                    network_rx_bytes: Some(0),
+                    network_tx_bytes: Some(0),
+                    disk_read_bytes: Some(0),
+                    disk_write_bytes: Some(0),
+                })
+                .unwrap();
+        }
+
+        // Write a snapshot (for config drift baseline)
+        store
+            .write_snapshot(crate::storage::TelemetrySnapshot {
+                timestamp: "2026-01-01T12:00:00Z".to_owned(),
+                containers: vec![Container {
+                    id: "leaky_id".to_owned(),
+                    name: "leaky".to_owned(),
+                    image: "leaky:latest".to_owned(),
+                    status: "Up 5m".to_owned(),
+                    state: "running".to_owned(),
+                    ports: Vec::new(),
+                    labels: vec!["env=prod".to_owned()],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: Some(0),
+                    health: None,
+                }],
+                images: Vec::new(),
+                networks: Vec::new(),
+                volumes: Vec::new(),
+            })
+            .unwrap();
+
+        let query = AnalyzeQuery {
+            target: AnalysisTarget::Collection(CollectionTarget::Containers),
+            verb: AnalysisVerb::Find,
+            subject: Some("anomalies".to_owned()),
+            time: None,
+            pipeline: Vec::new(),
+        };
+
+        let result = execute_analyze_with_store(&query, &store).unwrap();
+
+        let kinds: Vec<String> = result
+            .rows
+            .iter()
+            .filter_map(|r| {
+                r.fields
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(
+            kinds.contains(&"resource_leak".to_owned()),
+            "find_anomalies_from_store should detect resource leaks: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"config_baseline".to_owned()),
+            "find_anomalies_from_store should detect config drift baseline: {kinds:?}"
+        );
+    }
 
     #[test]
     fn find_anomalies_from_store_detects_deployment_errors() {

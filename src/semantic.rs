@@ -320,14 +320,17 @@ impl SemanticAnalyzer {
                 // Check if function exists
                 match name.as_str() {
                     "upper" | "lower" | "trim" | "length" | "concat" | "substring" | "coalesce"
-                    | "starts_with" | "ends_with" | "replace" | "reverse" | "repeat"
-                    | "split_part" | "position" | "now" | "date_format" | "date_diff"
-                    | "extract" => {
+                    | "to_int" | "to_float" | "to_string" | "starts_with" | "ends_with"
+                    | "replace" | "reverse" | "repeat" | "split_part" | "position" | "now"
+                    | "date_format" | "date_diff" | "extract" => {
                         for arg in args {
                             self.infer_expr_type(arg)?;
                         }
                         match name.as_str() {
-                            "length" | "position" | "date_diff" | "extract" => Ok(Type::Integer),
+                            "to_float" => Ok(Type::Float),
+                            "length" | "position" | "date_diff" | "extract" | "to_int" => {
+                                Ok(Type::Integer)
+                            }
                             "starts_with" | "ends_with" => Ok(Type::Boolean),
                             _ => Ok(Type::String),
                         }
@@ -341,6 +344,45 @@ impl SemanticAnalyzer {
     fn validate_expression(&self, expr: &Expression) -> Result<(), EvalError> {
         self.infer_expr_type(expr)?;
         Ok(())
+    }
+
+    /// Infer the type produced by a SetValue expression.
+    fn validate_set_value_type(&self, value: &SetValue) -> Result<Type, EvalError> {
+        match value {
+            SetValue::Literal(v) => match v {
+                Value::String(_) | Value::Identifier(_) => Ok(Type::String),
+                Value::Integer(_) => Ok(Type::Integer),
+                Value::Float(_) => Ok(Type::Float),
+                Value::Percentage(_) => Ok(Type::Percentage),
+                Value::Boolean(_) => Ok(Type::Boolean),
+            },
+            SetValue::Expr(expr) => self.infer_expr_type(expr),
+            SetValue::Case {
+                when_clauses,
+                else_value,
+            } => {
+                for (cond, val) in when_clauses {
+                    self.validate_expression(cond)?;
+                    self.validate_expression(val)?;
+                }
+                if let Some(else_expr) = else_value {
+                    self.validate_expression(else_expr)?;
+                }
+                Ok(Type::Unknown)
+            }
+            SetValue::IfElse {
+                condition,
+                then_value,
+                else_value,
+            } => {
+                self.validate_expression(condition)?;
+                self.validate_expression(then_value)?;
+                if let Some(else_expr) = else_value {
+                    self.validate_expression(else_expr)?;
+                }
+                Ok(Type::Unknown)
+            }
+        }
     }
 
     fn apply_pipeline_node(&mut self, node: &PipelineNode) -> Result<(), EvalError> {
@@ -369,7 +411,9 @@ impl SemanticAnalyzer {
             PipelineNode::Limit(_)
             | PipelineNode::Offset(_)
             | PipelineNode::Distinct
-            | PipelineNode::Alert(_) => {}
+            | PipelineNode::Alert(_)
+            | PipelineNode::Debug
+            | PipelineNode::Assert(_) => {}
             PipelineNode::GroupBy { fields, aggregates } => {
                 let mut new_schema = BTreeMap::new();
                 for f in fields {
@@ -381,7 +425,7 @@ impl SemanticAnalyzer {
                     self.check_field_validity(&agg.field)?;
                     let ty = match agg.function.as_str() {
                         "count" => Type::Integer,
-                        "sum" | "avg" | "min" | "max" => Type::Float,
+                        "sum" | "avg" | "min" | "max" | "median" | "percentile" => Type::Float,
                         _ => Type::Unknown,
                     };
                     new_schema.insert(agg.alias.clone(), ty);
@@ -449,9 +493,28 @@ impl SemanticAnalyzer {
                 };
                 self.active_schema.insert(field.clone(), ty);
             }
-            PipelineNode::Fill { field, default } => {
-                let ty = self.infer_expr_type(default)?;
+            PipelineNode::Fill {
+                field,
+                default,
+                condition,
+            } => {
+                if let Some(cond) = condition {
+                    self.validate_expression(cond)?;
+                }
+                let ty = self.validate_set_value_type(default)?;
                 self.active_schema.insert(field.clone(), ty);
+            }
+            PipelineNode::RowNumber { alias } => {
+                self.active_schema.insert(alias.clone(), Type::Integer);
+            }
+            PipelineNode::Rank { field, alias } => {
+                self.check_field_validity(field)?;
+                self.active_schema.insert(alias.clone(), Type::Integer);
+            }
+            PipelineNode::Lag { field, alias, .. } | PipelineNode::Lead { field, alias, .. } => {
+                self.check_field_validity(field)?;
+                let ty = *self.active_schema.get(field).unwrap_or(&Type::Unknown);
+                self.active_schema.insert(alias.clone(), ty);
             }
             PipelineNode::Let { name, value } => {
                 let ty = self.infer_expr_type(value)?;

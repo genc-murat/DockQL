@@ -37,6 +37,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Row as RatatuiRow;
 use ratatui::widgets::{Block, Borders, Cell, Table};
 
+use std::sync::Arc;
+
 use crate::{
     ANSI_BG_BLACK, ANSI_BG_BLUE, ANSI_BG_CYAN, ANSI_BG_DARK_GRAY, ANSI_BG_GREEN,
     ANSI_BG_LIGHT_BLUE, ANSI_BG_LIGHT_CYAN, ANSI_BG_LIGHT_GREEN, ANSI_BG_LIGHT_MAGENTA,
@@ -54,6 +56,7 @@ use crate::{
     },
     docker::{Container, DockerClient, DockerError, Image, MetricSample, Network, Volume},
     eval::{self, EvalError},
+    events::{self, EventsError},
     json_string,
     metrics::{MetricsCollector, MetricsError, NoopMetricsCollector},
     storage::{self, TelemetryError, TelemetryStore},
@@ -80,6 +83,8 @@ pub enum ExecutorError {
     Telemetry(TelemetryError),
     #[error("{0}")]
     Analyze(AnalyzeError),
+    #[error("{0}")]
+    Events(EventsError),
     #[error("unsupported query for batch executor: {0}")]
     UnsupportedQuery(&'static str),
     #[error("unsupported pipeline node for batch executor: {0}")]
@@ -114,34 +119,51 @@ impl From<AnalyzeError> for ExecutorError {
     }
 }
 
+impl From<EventsError> for ExecutorError {
+    fn from(error: EventsError) -> Self {
+        Self::Events(error)
+    }
+}
+
 /// Maximum column width for table rendering. Values longer than this are truncated.
 const MAX_COL_WIDTH: usize = 30;
 
-pub async fn execute<C>(query: &Query, docker: &C) -> Result<ExecutionResult, ExecutorError>
+pub async fn execute<C>(query: &Query, docker: Arc<C>) -> Result<ExecutionResult, ExecutorError>
 where
-    C: DockerClient + ?Sized,
+    C: DockerClient + Send + Sync + 'static,
 {
     execute_with_metrics(query, docker, &NoopMetricsCollector).await
 }
 
 pub async fn execute_with_metrics<C, M>(
     query: &Query,
-    docker: &C,
+    docker: Arc<C>,
     metrics: &M,
 ) -> Result<ExecutionResult, ExecutorError>
 where
-    C: DockerClient + ?Sized,
+    C: DockerClient + Send + Sync + 'static,
     M: MetricsCollector + ?Sized,
 {
     crate::semantic::validate_semantics(query)?;
     match query {
-        Query::Observe(query) => execute_observe(query, docker, metrics).await,
-        Query::Events(_) => Err(ExecutorError::UnsupportedQuery("events")),
+        Query::Observe(query) => execute_observe(query, docker.as_ref(), metrics).await,
+        Query::Events(query) => {
+            let source = events::BollardEventSource::new(docker);
+            events::collect_events(query, &source)
+                .await
+                .map_err(Into::into)
+        }
         Query::Inspect(_) => Err(ExecutorError::UnsupportedQuery("inspect")),
-        Query::Compose(query) => execute_compose(query, docker, metrics).await,
-        Query::Logs(query) => execute_logs(query, docker).await,
-        Query::Ping => execute_ping(docker).await,
-        Query::Analyze(query) => analyze::execute_analyze(query, docker, metrics)
+        Query::Compose(query) => {
+            if query.target == crate::ast::ComposeTarget::Events {
+                compose_events(query, &docker).await
+            } else {
+                execute_compose(query, docker.as_ref(), metrics).await
+            }
+        }
+        Query::Logs(query) => execute_logs(query, docker.as_ref()).await,
+        Query::Ping => execute_ping(docker.as_ref()).await,
+        Query::Analyze(query) => analyze::execute_analyze(query, docker.as_ref(), metrics)
             .await
             .map_err(ExecutorError::Analyze),
         Query::Alert(_) => Err(ExecutorError::UnsupportedQuery("alert")),
@@ -912,6 +934,52 @@ fn extract_label_value(labels: &[String], label_key: &str) -> Option<String> {
     })
 }
 
+/// Execute a compose events query by streaming Docker events and filtering
+/// by the compose project label.
+async fn compose_events<C>(
+    query: &crate::ast::ComposeQuery,
+    docker: &std::sync::Arc<C>,
+) -> Result<ExecutionResult, ExecutorError>
+where
+    C: DockerClient + Send + Sync + 'static,
+{
+    let compose_project = query.project.clone();
+    let pipeline = query.pipeline.clone();
+
+    // Create an EventsQuery from the compose query's pipeline (no separate filter)
+    let events_query = crate::ast::EventsQuery {
+        target: CollectionTarget::Containers,
+        time: None,
+        filter: None,
+        pipeline: Vec::new(),
+    };
+
+    let source = events::BollardEventSource::new(std::sync::Arc::clone(docker));
+    let mut result = events::collect_events(&events_query, &source)
+        .await
+        .map_err(ExecutorError::from)?;
+
+    // Filter rows by compose project label
+    let label = format!("com.docker.compose.project={}", compose_project);
+    result.rows.retain(|row| {
+        row.fields
+            .get("attributes")
+            .and_then(|v| v.as_array())
+            .is_some_and(|attrs| {
+                attrs
+                    .iter()
+                    .any(|a| a.as_str().is_some_and(|s| s.contains(&label)))
+            })
+    });
+
+    // Apply the compose query's pipeline
+    for node in &pipeline {
+        result.rows = apply_pipeline_node(result.rows, node)?;
+    }
+
+    Ok(result)
+}
+
 async fn execute_compose<C, M>(
     query: &crate::ast::ComposeQuery,
     docker: &C,
@@ -1010,9 +1078,7 @@ where
                 .collect()
         }
         crate::ast::ComposeTarget::Events => {
-            return Err(ExecutorError::UnsupportedQuery(
-                "compose events requires streaming; use events pipeline",
-            ));
+            unreachable!("handled in execute_with_metrics");
         }
         crate::ast::ComposeTarget::Port => {
             return execute_compose_port(query, docker).await;
@@ -1635,13 +1701,21 @@ fn apply_pipeline_node(mut rows: Vec<Row>, node: &PipelineNode) -> Result<Vec<Ro
             }
             Ok(rows)
         }
-        PipelineNode::Fill { field, default } => {
+        PipelineNode::Fill {
+            field,
+            default,
+            condition,
+        } => {
             for row in &mut rows {
+                if let Some(cond) = condition
+                    && !eval::evaluate_expression(&row.fields, cond)? {
+                        continue;
+                    }
                 if !row.fields.contains_key(field)
                     || row.fields.get(field) == Some(&JsonValue::Null)
                     || matches!(row.fields.get(field), Some(JsonValue::String(s)) if s.is_empty())
                 {
-                    let value = eval::eval_expr(&row.fields, default)?;
+                    let value = eval::evaluate_set_value(&row.fields, default)?;
                     row.fields.insert(field.clone(), value);
                 }
             }
@@ -1651,6 +1725,125 @@ fn apply_pipeline_node(mut rows: Vec<Row>, node: &PipelineNode) -> Result<Vec<Ro
             let value = eval::eval_expr(&BTreeMap::new(), value)?;
             for row in &mut rows {
                 row.fields.insert(name.clone(), value.clone());
+            }
+            Ok(rows)
+        }
+        PipelineNode::Debug => {
+            eprintln!(
+                "[DEBUG] {} rows, schema: {:?}",
+                rows.len(),
+                if rows.is_empty() {
+                    "(empty)".to_owned()
+                } else {
+                    let keys: Vec<&str> = rows[0].fields.keys().map(|s| s.as_str()).collect();
+                    keys.join(", ")
+                }
+            );
+            Ok(rows)
+        }
+        PipelineNode::Assert(expr) => {
+            for row in &rows {
+                if !eval::evaluate_expression(&row.fields, expr)? {
+                    let details: String = row
+                        .fields
+                        .iter()
+                        .map(|(k, v)| format!("{}={}", k, eval::render_json_cell(v)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(ExecutorError::Eval(EvalError::InvalidArguments {
+                        name: format!("assertion failed for row: {}", details),
+                    }));
+                }
+            }
+            Ok(rows)
+        }
+        PipelineNode::RowNumber { alias } => {
+            for (i, row) in rows.iter_mut().enumerate() {
+                row.fields.insert(
+                    alias.clone(),
+                    JsonValue::Number(Number::from((i + 1) as u64)),
+                );
+            }
+            Ok(rows)
+        }
+        PipelineNode::Rank { field, alias } => {
+            let mut indices: Vec<usize> = (0..rows.len()).collect();
+            indices.sort_by(|&a, &b| {
+                let va = rows[a].fields.get(field);
+                let vb = rows[b].fields.get(field);
+                match (va, vb) {
+                    (Some(a_val), Some(b_val)) => match (a_val.as_f64(), b_val.as_f64()) {
+                        (Some(af), Some(bf)) => {
+                            af.partial_cmp(&bf).unwrap_or(std::cmp::Ordering::Equal)
+                        }
+                        _ => {
+                            let a_str = format!("{}", a_val);
+                            let b_str = format!("{}", b_val);
+                            a_str.cmp(&b_str)
+                        }
+                    },
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            });
+
+            let mut rank = 1u64;
+            for pos in 0..indices.len() {
+                let idx = indices[pos];
+                if pos > 0 {
+                    let prev_idx = indices[pos - 1];
+                    let prev_val = rows[prev_idx].fields.get(field);
+                    let cur_val = rows[idx].fields.get(field);
+                    if prev_val != cur_val {
+                        rank = (pos + 1) as u64;
+                    }
+                }
+                rows[idx]
+                    .fields
+                    .insert(alias.clone(), JsonValue::Number(Number::from(rank)));
+            }
+            Ok(rows)
+        }
+        PipelineNode::Lag {
+            field,
+            alias,
+            offset,
+        } => {
+            let offset = *offset as usize;
+            for i in 0..rows.len() {
+                if i >= offset {
+                    let prev_val = rows[i - offset]
+                        .fields
+                        .get(field)
+                        .cloned()
+                        .unwrap_or(JsonValue::Null);
+                    rows[i].fields.insert(alias.clone(), prev_val);
+                } else {
+                    rows[i].fields.insert(alias.clone(), JsonValue::Null);
+                }
+            }
+            Ok(rows)
+        }
+        PipelineNode::Lead {
+            field,
+            alias,
+            offset,
+        } => {
+            let offset = *offset as usize;
+            let len = rows.len();
+            for i in 0..len {
+                let lead_idx = i + offset;
+                if lead_idx < len {
+                    let next_val = rows[lead_idx]
+                        .fields
+                        .get(field)
+                        .cloned()
+                        .unwrap_or(JsonValue::Null);
+                    rows[i].fields.insert(alias.clone(), next_val);
+                } else {
+                    rows[i].fields.insert(alias.clone(), JsonValue::Null);
+                }
             }
             Ok(rows)
         }
@@ -2393,7 +2586,7 @@ fn group_rows(rows: Vec<Row>, group_fields: &[String], aggregates: &[AggregateEx
 mod tests {
     use crate::{
         ast::{ComposeTarget, ConfigTarget, Query},
-        docker::MockDockerClient,
+        docker::{DockerEvent, MockDockerClient},
         metrics::MockMetricsCollector,
         parser,
     };
@@ -2410,7 +2603,7 @@ mod tests {
         let parsed = parser::parse("observe containers").expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2427,7 +2620,7 @@ mod tests {
             parser::parse("observe containers where state = running").expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
@@ -2446,7 +2639,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
@@ -2495,7 +2688,11 @@ mod tests {
             .expect("query should parse");
 
         let result = rt()
-            .block_on(execute_with_metrics(&parsed.query, &client, &metrics))
+            .block_on(execute_with_metrics(
+                &parsed.query,
+                Arc::new(client),
+                &metrics,
+            ))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
@@ -2513,7 +2710,7 @@ mod tests {
             parser::parse("observe images | select repository, tag").expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 1);
@@ -2532,7 +2729,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2585,7 +2782,11 @@ mod tests {
             .expect("query should parse");
 
         let result = rt()
-            .block_on(execute_with_metrics(&parsed.query, &client, &metrics))
+            .block_on(execute_with_metrics(
+                &parsed.query,
+                Arc::new(client),
+                &metrics,
+            ))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2612,7 +2813,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2639,7 +2840,7 @@ mod tests {
             .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2666,7 +2867,7 @@ mod tests {
             parser::parse("observe containers | group by state").expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2690,7 +2891,9 @@ mod tests {
         let parsed =
             parser::parse("observe containers | select missing").expect("query should parse");
 
-        let error = rt().block_on(execute(&parsed.query, &client)).unwrap_err();
+        let error = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .unwrap_err();
 
         assert!(matches!(
             error,
@@ -2704,7 +2907,9 @@ mod tests {
         let parsed =
             parser::parse("observe containers | where state > 50").expect("query should parse");
 
-        let error = rt().block_on(execute(&parsed.query, &client)).unwrap_err();
+        let error = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .unwrap_err();
 
         assert!(matches!(
             error,
@@ -2734,7 +2939,7 @@ mod tests {
             .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2752,7 +2957,7 @@ mod tests {
         ).expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2774,7 +2979,7 @@ mod tests {
         ).expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -2793,7 +2998,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         // Only myapp containers should be returned
         assert_eq!(result.rows.len(), 2);
@@ -2813,7 +3018,7 @@ mod tests {
         let parsed = parser::parse("compose myapp | select name, state, compose_project")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -2830,7 +3035,7 @@ mod tests {
         let parsed = parser::parse("compose myapp services | select name, service")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         let api = result
@@ -2858,7 +3063,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose nonexistent").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
@@ -2986,7 +3191,7 @@ mod tests {
         let parsed =
             parser::parse("compose myapp | where state = \"running\"").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -2999,7 +3204,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | sort by name asc").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
@@ -3017,7 +3222,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | limit 1").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
     }
@@ -3028,7 +3233,7 @@ mod tests {
         let parsed =
             parser::parse("compose myapp | select name, image").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -3044,7 +3249,7 @@ mod tests {
         let parsed = parser::parse("compose myapp | group by state with count(id) as cnt")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         let running_row = result
@@ -3081,7 +3286,7 @@ mod tests {
         let parsed = parser::parse("compose lonely services | select name, service")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].fields["service"], JsonValue::Null);
@@ -3092,7 +3297,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp | select name").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         let names: Vec<&str> = result
             .rows
@@ -3110,7 +3315,7 @@ mod tests {
         let parsed = parser::parse("compose myapp | sort by name asc | offset 1 | limit 1")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -3125,7 +3330,7 @@ mod tests {
         let parsed =
             parser::parse("compose myapp | select state | distinct").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -3297,7 +3502,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp networks").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         let names: Vec<&str> = result
@@ -3316,7 +3521,7 @@ mod tests {
         let parsed = parser::parse("compose myapp networks | select name, driver")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -3331,7 +3536,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose nonexistent networks").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
@@ -3341,7 +3546,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp volumes").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -3356,7 +3561,7 @@ mod tests {
         let parsed = parser::parse("compose myapp volumes | select name, driver")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -3375,7 +3580,7 @@ mod tests {
         let parsed = parser::parse("compose myapp health | select name, service, health")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         let api = result
@@ -3404,7 +3609,7 @@ mod tests {
         let parsed = parser::parse("compose myapp health | where health = \"unhealthy\"")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -3666,7 +3871,7 @@ mod tests {
         )
         .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -3700,7 +3905,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         // Both rows pass through (matched: priority set; unmatched: unchanged)
@@ -3734,7 +3939,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -3767,7 +3972,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -3800,7 +4005,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -3832,7 +4037,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -3862,7 +4067,7 @@ mod tests {
         .expect("query should parse");
 
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
 
         assert_eq!(result.rows.len(), 2);
@@ -4008,7 +4213,7 @@ mod tests {
         };
         let parsed = parser::parse("logs container api tail 10").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 3);
         assert_eq!(
@@ -4030,7 +4235,7 @@ mod tests {
         let client = mock_client();
         let parsed = parser::parse("logs container worker").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
@@ -4040,7 +4245,7 @@ mod tests {
         let client = mock_client();
         let parsed = parser::parse("ping").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -4084,7 +4289,7 @@ mod tests {
         let parsed =
             parser::parse("observe containers join images on id = id").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -4125,7 +4330,7 @@ mod tests {
         let parsed = parser::parse("observe containers join networks on name = name")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
@@ -4138,7 +4343,7 @@ mod tests {
         )
         .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -4154,7 +4359,7 @@ mod tests {
             parser::parse("observe containers join images on id = id | select c.name, i.name")
                 .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -4170,7 +4375,7 @@ mod tests {
         let parsed = parser::parse("observe containers join volumes on state = scope")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
@@ -4180,7 +4385,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose ls").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         let row = &result.rows[0];
@@ -4202,7 +4407,7 @@ mod tests {
         let parsed = parser::parse("compose ls | where containers > 0 | sort by project asc")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -4254,7 +4459,7 @@ mod tests {
         };
         let parsed = parser::parse("compose ls").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -4268,7 +4473,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp images").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert!(!result.rows.is_empty());
     }
@@ -4279,7 +4484,7 @@ mod tests {
         let parsed = parser::parse("compose myapp stats | select name, service")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -4294,7 +4499,7 @@ mod tests {
         let parsed =
             parser::parse("compose myapp ps | select name, service").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -4309,7 +4514,7 @@ mod tests {
         let parsed = parser::parse("compose myapp ps | where service = \"api-service\"")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -4328,7 +4533,7 @@ mod tests {
         let parsed =
             parser::parse("compose myapp logs api-service tail 10").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         assert_eq!(
@@ -4358,7 +4563,7 @@ mod tests {
         )
         .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert!(
@@ -4375,7 +4580,7 @@ mod tests {
         let parsed =
             parser::parse("compose myapp port api-service 8080").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -4389,7 +4594,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp config services").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -4404,7 +4609,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp config networks").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 2);
         for row in &result.rows {
@@ -4418,7 +4623,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp config volumes").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert!(result.rows[0].fields.contains_key("name"));
@@ -4430,7 +4635,7 @@ mod tests {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp config").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert!(result.rows.len() >= 5);
     }
@@ -4441,7 +4646,7 @@ mod tests {
         let parsed = parser::parse("compose myapp config services | where image = \"api:latest\"")
             .expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
@@ -4706,11 +4911,80 @@ mod tests {
     }
 
     #[test]
-    fn compose_events_returns_error() {
+    fn compose_events_returns_empty_when_no_events() {
         let client = compose_mock_client();
         let parsed = parser::parse("compose myapp events").expect("query should parse");
-        let result = rt().block_on(execute(&parsed.query, &client));
-        assert!(result.is_err());
+        let result = rt().block_on(execute(&parsed.query, Arc::new(client)));
+        let result = result.expect("compose events should succeed");
+        assert!(result.rows.is_empty(), "no events expected on mock client");
+    }
+
+    #[test]
+    fn compose_events_filters_by_project_and_pipeline() {
+        let client = MockDockerClient {
+            events: vec![
+                // Matching event A — compose myapp, start action (should be filtered out by pipeline)
+                DockerEvent {
+                    time: "2026-06-01T10:00:00Z".to_owned(),
+                    event_type: "container".to_owned(),
+                    action: "start".to_owned(),
+                    actor_id: "abc".to_owned(),
+                    container: Some("api".to_owned()),
+                    image: Some("api:latest".to_owned()),
+                    attributes: vec![
+                        ("com.docker.compose.project".to_owned(), "myapp".to_owned()),
+                        ("com.docker.compose.service".to_owned(), "api".to_owned()),
+                    ],
+                },
+                // Matching event B — compose myapp, die action (should pass)
+                DockerEvent {
+                    time: "2026-06-01T10:01:00Z".to_owned(),
+                    event_type: "container".to_owned(),
+                    action: "die".to_owned(),
+                    actor_id: "abc".to_owned(),
+                    container: Some("api".to_owned()),
+                    image: Some("api:latest".to_owned()),
+                    attributes: vec![("com.docker.compose.project".to_owned(), "myapp".to_owned())],
+                },
+                // Non-matching — different compose project
+                DockerEvent {
+                    time: "2026-06-01T10:02:00Z".to_owned(),
+                    event_type: "container".to_owned(),
+                    action: "die".to_owned(),
+                    actor_id: "xyz".to_owned(),
+                    container: Some("other".to_owned()),
+                    image: Some("other:latest".to_owned()),
+                    attributes: vec![(
+                        "com.docker.compose.project".to_owned(),
+                        "other-app".to_owned(),
+                    )],
+                },
+                // Non-matching — no compose project at all
+                DockerEvent {
+                    time: "2026-06-01T10:03:00Z".to_owned(),
+                    event_type: "container".to_owned(),
+                    action: "kill".to_owned(),
+                    actor_id: "def".to_owned(),
+                    container: Some("standalone".to_owned()),
+                    image: Some("standalone:latest".to_owned()),
+                    attributes: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        };
+        let parsed = parser::parse(
+            "compose myapp events | where action = \"die\" | select time, container, action",
+        )
+        .expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .expect("compose events should succeed");
+
+        // Only the matching myapp 'die' event should pass both the
+        // compose project filter AND the pipeline where filter
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].fields["container"], serde_json::json!("api"));
+        assert_eq!(result.rows[0].fields["action"], serde_json::json!("die"));
     }
 
     #[test]
@@ -4718,7 +4992,7 @@ mod tests {
         let client = MockDockerClient::default();
         let parsed = parser::parse("compose ls").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
     }
@@ -4729,8 +5003,322 @@ mod tests {
         let parsed =
             parser::parse("compose myapp port nonexistent 9999").expect("query should parse");
         let result = rt()
-            .block_on(execute(&parsed.query, &client))
+            .block_on(execute(&parsed.query, Arc::new(client)))
             .expect("query should execute");
         assert_eq!(result.rows.len(), 0);
+    }
+    #[test]
+    fn test_row_number() {
+        let client = mock_client();
+        let parsed = parser::parse(r#"observe containers | row_number as rn | select name, rn"#)
+            .expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].fields["rn"],
+            JsonValue::Number(Number::from(1))
+        );
+        assert_eq!(
+            result.rows[1].fields["rn"],
+            JsonValue::Number(Number::from(2))
+        );
+    }
+
+    #[test]
+    fn test_rank_field() {
+        let client = mock_client();
+        let parsed =
+            parser::parse(r#"observe containers | rank(state) as rank | select name, state, rank"#)
+                .expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        let exited_rank = result
+            .rows
+            .iter()
+            .find(|r| r.fields.get("state") == Some(&JsonValue::String("exited".to_owned())))
+            .and_then(|r| r.fields.get("rank"))
+            .cloned();
+        let running_rank = result
+            .rows
+            .iter()
+            .find(|r| r.fields.get("state") == Some(&JsonValue::String("running".to_owned())))
+            .and_then(|r| r.fields.get("rank"))
+            .cloned();
+        assert_eq!(exited_rank, Some(JsonValue::Number(Number::from(1))));
+        assert_eq!(running_rank, Some(JsonValue::Number(Number::from(2))));
+    }
+
+    #[test]
+    fn test_lag_field() {
+        let client = mock_client();
+        let parsed = parser::parse(
+            r#"observe containers | sort by name | lag(name, 1) as prev_name | select name, prev_name"#,
+        )
+        .expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0].fields["prev_name"], JsonValue::Null);
+        let first_name = result.rows[0].fields["name"].clone();
+        assert_eq!(result.rows[1].fields["prev_name"], first_name);
+    }
+
+    #[test]
+    fn test_lead_field() {
+        let client = mock_client();
+        let parsed = parser::parse(
+            r#"observe containers | sort by name | lead(name, 1) as next_name | select name, next_name"#,
+        )
+        .expect("query should parse");
+        let result = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .expect("query should execute");
+        assert_eq!(result.rows.len(), 2);
+        let second_name = result.rows[1].fields["name"].clone();
+        assert_eq!(result.rows[0].fields["next_name"], second_name);
+        assert_eq!(result.rows[1].fields["next_name"], JsonValue::Null);
+    }
+
+    #[test]
+    fn filter_display_columns_hides_all_null_columns() {
+        // Columns: name (non-empty), state (non-empty), meta (all Null),
+        // tags (empty arrays), count (numbers), empty_str (empty strings),
+        // obj has one non-empty row.
+        let rows = vec![
+            Row::from_fields([
+                ("name", json_string("api")),
+                ("state", json_string("running")),
+                ("meta", JsonValue::Null),
+                ("tags", JsonValue::Array(vec![])),
+                ("count", JsonValue::Number(Number::from(3))),
+                ("empty_str", JsonValue::String(String::new())),
+                ("obj", serde_json::json!({"x": true})),
+            ]),
+            Row::from_fields([
+                ("name", json_string("worker")),
+                ("state", json_string("exited")),
+                ("meta", JsonValue::Null),
+                ("tags", JsonValue::Array(vec![])),
+                ("count", JsonValue::Number(Number::from(1))),
+                ("empty_str", JsonValue::String(String::new())),
+                ("obj", serde_json::json!({})),
+            ]),
+        ];
+        let result = ExecutionResult { rows };
+        let columns = filter_display_columns(&result);
+
+        assert!(columns.contains(&"name".to_owned()), "name should be kept");
+        assert!(
+            columns.contains(&"state".to_owned()),
+            "state should be kept"
+        );
+        assert!(
+            columns.contains(&"count".to_owned()),
+            "count (number) should be kept"
+        );
+        assert!(
+            columns.contains(&"obj".to_owned()),
+            "obj (one row non-empty) should be kept"
+        );
+
+        assert!(
+            !columns.contains(&"meta".to_owned()),
+            "meta (all Null) should be hidden"
+        );
+        assert!(
+            !columns.contains(&"tags".to_owned()),
+            "tags (all empty arrays) should be hidden"
+        );
+        assert!(
+            !columns.contains(&"empty_str".to_owned()),
+            "empty_str (all empty strings) should be hidden"
+        );
+    }
+
+    #[test]
+    fn observe_containers_tree_shakes_empty_columns() {
+        let client = MockDockerClient {
+            containers: vec![
+                Container {
+                    id: "c1".to_owned(),
+                    name: "alpha".to_owned(),
+                    image: "nginx:latest".to_owned(),
+                    status: "Up 1 hour".to_owned(),
+                    state: "running".to_owned(),
+                    ports: vec!["80/tcp".to_owned()],
+                    labels: vec![],
+                    created_at: Some("2026-01-01".to_owned()),
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: None,
+                    health: None,
+                },
+                Container {
+                    id: "c2".to_owned(),
+                    name: "beta".to_owned(),
+                    image: "redis:7".to_owned(),
+                    status: "Exited 0".to_owned(),
+                    state: "exited".to_owned(),
+                    ports: vec![],
+                    labels: vec![],
+                    created_at: None,
+                    started_at: None,
+                    finished_at: None,
+                    restart_count: None,
+                    health: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let parsed = parser::parse("observe containers").expect("query should parse");
+
+        let result = rt()
+            .block_on(execute(&parsed.query, Arc::new(client)))
+            .expect("query should execute");
+
+        let columns = filter_display_columns(&result);
+
+        assert!(columns.contains(&"id".to_owned()), "id should be kept");
+        assert!(columns.contains(&"name".to_owned()), "name should be kept");
+        assert!(
+            columns.contains(&"image".to_owned()),
+            "image should be kept"
+        );
+        assert!(
+            columns.contains(&"status".to_owned()),
+            "status should be kept"
+        );
+        assert!(
+            columns.contains(&"state".to_owned()),
+            "state should be kept"
+        );
+        assert!(
+            columns.contains(&"ports".to_owned()),
+            "ports should be kept"
+        );
+        assert!(
+            !columns.contains(&"labels".to_owned()),
+            "labels (all empty arrays) should be hidden"
+        );
+        assert!(
+            columns.contains(&"created_at".to_owned()),
+            "created_at has one value, should be kept"
+        );
+
+        assert!(
+            !columns.contains(&"started_at".to_owned()),
+            "started_at (all Null) should be hidden"
+        );
+        assert!(
+            !columns.contains(&"finished_at".to_owned()),
+            "finished_at (all Null) should be hidden"
+        );
+        assert!(
+            !columns.contains(&"restart_count".to_owned()),
+            "restart_count (all Null) should be hidden"
+        );
+        assert!(
+            !columns.contains(&"health".to_owned()),
+            "health (all Null) should be hidden"
+        );
+        assert!(
+            !columns.contains(&"cpu".to_owned()),
+            "cpu (all Null, no metrics) should be hidden"
+        );
+        assert!(
+            !columns.contains(&"memory".to_owned()),
+            "memory (all Null, no metrics) should be hidden"
+        );
+
+        let rendered = render_table_colored(&result);
+        assert!(
+            rendered.contains("alpha"),
+            "rendered output should include alpha"
+        );
+        assert!(
+            rendered.contains("beta"),
+            "rendered output should include beta"
+        );
+        assert!(
+            !rendered.contains("finished_at"),
+            "rendered output should not contain finished_at"
+        );
+        assert!(
+            !rendered.contains("started_at"),
+            "rendered output should not contain started_at"
+        );
+    }
+
+    #[test]
+    fn render_table_colored_tree_shakes_empty_columns() {
+        let result = ExecutionResult {
+            rows: vec![
+                Row::from_fields([
+                    ("name", json_string("alpha")),
+                    ("state", json_string("running")),
+                    ("finished_at", JsonValue::Null),
+                ]),
+                Row::from_fields([
+                    ("name", json_string("beta")),
+                    ("state", json_string("exited")),
+                    ("finished_at", JsonValue::Null),
+                ]),
+            ],
+        };
+
+        // Colored path should hide all-Null columns
+        let output = render_table_colored(&result);
+
+        // Kept columns should appear in output
+        assert!(
+            output.contains("alpha"),
+            "alpha should be in colored output"
+        );
+        assert!(output.contains("beta"), "beta should be in colored output");
+
+        // Hidden column names should NOT appear
+        assert!(
+            !output.contains("finished_at"),
+            "finished_at should be hidden in colored output"
+        );
+    }
+
+    #[test]
+    fn render_table_ratatui_tree_shakes_empty_columns() {
+        let result = ExecutionResult {
+            rows: vec![
+                Row::from_fields([
+                    ("name", json_string("alpha")),
+                    ("state", json_string("running")),
+                    ("finished_at", JsonValue::Null),
+                ]),
+                Row::from_fields([
+                    ("name", json_string("beta")),
+                    ("state", json_string("exited")),
+                    ("finished_at", JsonValue::Null),
+                ]),
+            ],
+        };
+
+        // Ratatui path should also hide all-Null columns
+        let output = render_table_ratatui(&result);
+
+        // Kept columns should appear as UPPERCASE headers in ratatui output
+        assert!(
+            output.contains("alpha"),
+            "alpha should be in ratatui output"
+        );
+        assert!(output.contains("beta"), "beta should be in ratatui output");
+
+        // Hidden column names (uppercased in ratatui) should NOT appear
+        assert!(
+            !output.contains("finished_at"),
+            "finished_at should be hidden in ratatui output"
+        );
     }
 }

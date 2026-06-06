@@ -102,6 +102,20 @@ pub enum PlanStep {
         field: String,
         value: crate::ast::SetValue,
     },
+    Debug,
+    Assert(crate::ast::Expression),
+    RowNumber(String),
+    Rank(String),
+    Lag {
+        field: String,
+        alias: String,
+        offset: u64,
+    },
+    Lead {
+        field: String,
+        alias: String,
+        offset: u64,
+    },
 }
 
 impl fmt::Display for LogicalPlan {
@@ -181,6 +195,7 @@ impl fmt::Display for LogicalPlan {
 impl fmt::Display for PlanStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Debug => write!(f, "Debug"),
             Self::Fetch(target) => write!(f, "Fetch({target:?})"),
             Self::Filter(_) => write!(f, "Filter(<expression>)"),
             Self::In { field, values } => {
@@ -192,6 +207,7 @@ impl fmt::Display for PlanStep {
             Self::Select(fields) => write!(f, "Select({})", fields.join(", ")),
             Self::GroupBy(fields) => write!(f, "GroupBy({})", fields.join(", ")),
             Self::SortBy { field, direction } => write!(f, "SortBy({field}, {direction:?})"),
+            Self::Assert(_) => write!(f, "Assert(<condition>)"),
             Self::Limit(n) => write!(f, "Limit({n})"),
             Self::Alert(msg) => write!(f, "Alert(\"{msg}\")"),
             Self::If {
@@ -218,6 +234,22 @@ impl fmt::Display for PlanStep {
                     write!(f, "]")?;
                 }
                 write!(f, ")")
+            }
+            Self::RowNumber(alias) => write!(f, "RowNumber({alias})"),
+            Self::Rank(field) => write!(f, "Rank({field})"),
+            Self::Lag {
+                field,
+                alias,
+                offset,
+            } => {
+                write!(f, "Lag({field}, {alias}, offset={offset})")
+            }
+            Self::Lead {
+                field,
+                alias,
+                offset,
+            } => {
+                write!(f, "Lead({field}, {alias}, offset={offset})")
             }
             Self::Set { field, value: _ } => write!(f, "Set({field}, <value>)"),
         }
@@ -380,15 +412,41 @@ fn node_to_step(node: &PipelineNode) -> PlanStep {
             field: field.clone(),
             value: value.clone(),
         },
-        PipelineNode::Fill { field, default } => PlanStep::Set {
+        PipelineNode::Fill {
+            field,
+            default,
+            condition: _condition,
+        } => PlanStep::Set {
             field: field.clone(),
-            value: crate::ast::SetValue::Expr(default.clone()),
+            value: default.clone(),
+        },
+        PipelineNode::RowNumber { alias } => PlanStep::RowNumber(alias.clone()),
+        PipelineNode::Rank { field, alias: _ } => PlanStep::Rank(field.clone()),
+        PipelineNode::Lag {
+            field,
+            alias,
+            offset,
+        } => PlanStep::Lag {
+            field: field.clone(),
+            alias: alias.clone(),
+            offset: *offset,
+        },
+        PipelineNode::Lead {
+            field,
+            alias,
+            offset,
+        } => PlanStep::Lead {
+            field: field.clone(),
+            alias: alias.clone(),
+            offset: *offset,
         },
         PipelineNode::Let { name, value } => PlanStep::Set {
             field: name.clone(),
             value: crate::ast::SetValue::Expr(value.clone()),
         },
         PipelineNode::Having(expr) => PlanStep::Filter(expr.clone()),
+        PipelineNode::Debug => PlanStep::Debug,
+        PipelineNode::Assert(expr) => PlanStep::Assert(expr.clone()),
         PipelineNode::Distinct => PlanStep::Select(vec!["*".to_owned()]),
     }
 }
@@ -600,5 +658,52 @@ mod tests {
         let s = format!("{p}");
         assert!(s.contains("JOIN"));
         assert!(s.contains("Images"));
+    }
+
+    #[test]
+    fn plans_logs_query() {
+        let Query::Logs(q) =
+            parser::parse("logs container my-api tail 200 | where message contains \"error\" | select line, message | limit 10")
+                .unwrap()
+                .query
+        else {
+            panic!("expected logs");
+        };
+        let p = plan_logs(&q);
+        if let LogicalPlan::Logs(lp) = p {
+            assert_eq!(lp.container, "my-api");
+            assert_eq!(lp.tail, Some(200));
+            assert_eq!(lp.steps.len(), 3);
+            // Steps: Filter (where), Select, Limit
+            assert!(matches!(lp.steps[0], PlanStep::Filter(_)));
+            assert!(matches!(lp.steps[1], PlanStep::Select(_)));
+            assert!(matches!(lp.steps[2], PlanStep::Limit(10)));
+        } else {
+            panic!("expected LogsPlan, got {p:?}");
+        }
+    }
+
+    #[test]
+    fn logs_plan_display() {
+        let q = parser::parse("logs container my-api tail 50").unwrap();
+        let p = plan(&q.query);
+        let s = format!("{p}");
+        assert!(s.contains("my-api"));
+        assert!(s.contains("tail: Some(50)"));
+    }
+
+    #[test]
+    fn plans_logs_no_tail() {
+        let Query::Logs(q) = parser::parse("logs container my-api").unwrap().query else {
+            panic!("expected logs");
+        };
+        let p = plan_logs(&q);
+        if let LogicalPlan::Logs(lp) = p {
+            assert_eq!(lp.container, "my-api");
+            assert_eq!(lp.tail, None);
+            assert!(lp.steps.is_empty());
+        } else {
+            panic!("expected LogsPlan, got {p:?}");
+        }
     }
 }
