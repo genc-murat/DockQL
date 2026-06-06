@@ -1708,9 +1708,10 @@ fn apply_pipeline_node(mut rows: Vec<Row>, node: &PipelineNode) -> Result<Vec<Ro
         } => {
             for row in &mut rows {
                 if let Some(cond) = condition
-                    && !eval::evaluate_expression(&row.fields, cond)? {
-                        continue;
-                    }
+                    && !eval::evaluate_expression(&row.fields, cond)?
+                {
+                    continue;
+                }
                 if !row.fields.contains_key(field)
                     || row.fields.get(field) == Some(&JsonValue::Null)
                     || matches!(row.fields.get(field), Some(JsonValue::String(s)) if s.is_empty())
