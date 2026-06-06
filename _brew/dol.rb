@@ -20,7 +20,7 @@ class Dol < Formula
     url "https://github.com/genc-murat/DockQL/archive/refs/tags/v0.7.0.tar.gz"
     # SHA256 will be updated after tag is pushed — run:
     #   curl -fsSL https://github.com/genc-murat/DockQL/archive/refs/tags/v0.7.0.tar.gz | shasum -a 256
-    sha256 "UPDATE_AFTER_TAG_PUSH"
+    sha256 "a61f1f43bbb427f99f758b07351e2861e5f88ee4053b10faa326bc34a1d19ed6"
   end
 
   depends_on "rust" => :build
